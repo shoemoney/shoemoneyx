@@ -1,0 +1,53 @@
+*.log
+.DS_Store
+.env
+.env.backup
+.env.production
+.fuse_hidden*
+.phpactor.json
+.phpunit.result.cache
+/.codex
+/.cursor/
+/.idea
+/.nova
+/.phpunit.cache
+/.vscode
+/.zed
+/auth.json
+/node_modules
+/public/build
+/public/fonts-manifest.dev.json
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/vendor
+_ide_helper.php
+Homestead.json
+Homestead.yaml
+Thumbs.db
+/.patches
+dump.rdb
+
+# workflow agent worktrees
+.claude/worktrees/
+
+
+# Font Awesome Pro tarballs packed from a licensed install (never commit)
+.fa-pro/
+
+# browser-check artefacts
+.playwright-mcp/
+/*.png
+*.sync-conflict-*
+.opencode/ralph-loop.local.md
+
+# arena sprite raw renders (paid, large)
+/storage/arena-renders/
+
+# TradingView Charting Library is licensed per-user and cannot be redistributed. Apply at tradingview.com/charting-library-docs and drop your copy here.
+/public/charting_library
+/public/datafeeds
+
+# research data stays local
+/research/

@@ -1,0 +1,11 @@
+# Shared site chrome
+
+Picaso designed the Nanites command-deck treatment in `SITE-CHROME-DESIGN.md`; Taytay implemented the Laravel layout and functional page integration.
+
+`resources/views/components/site/` owns the document, header and footer. Navigation comes from `config/site.php`. Links render on the server and remain usable without JavaScript. `resources/js/siteShell.js` enhances those links with Vue Router, current-page state and an accessible mobile menu. It publishes the existing status poll into the header/footer; it does not add another poll or expose credentials. The public home page publishes its existing market-source state and accounting note. Experimental galleries keep their own presentation.
+
+Dashboard, Chart, Desk, Positions, Backtests, Optimizer, Arena and Settings share black panels, blue navigation and focus treatments, readable typography and responsive controls. Existing actions, API authorization, trading modes and data calculations are preserved. Long event messages wrap; wide tables and heatmaps scroll locally; the farm process list has a bounded scroll region. The existing robot and Arena graphics remain intact. Shared decorative animation pauses in hidden tabs and has a static reduced-motion treatment.
+
+Validation included 13 focused Laravel shell/auth tests (154 assertions), 19 frontend tests and successful local/Wick production builds. Browser review used actual desk data through a temporary loopback proxy accepting GET/HEAD only. All eight working pages were checked at desktop and 390px width. Checks covered active navigation, detail paths, mobile Menu/Escape/focus, settings filtering, positions/fills, chart symbol/timeframe controls, chart cleanup after navigation and home integration. Chart panes are black; labels inside chart renderers were adjusted separately from page CSS. The installed TradingView library rejected `paneProperties.backgroundType`; that unsupported option was removed while keeping its supported black-background override.
+
+No trading actions or settings saves were performed during visual review. Reduced-motion rules were inspected in code; the operating system's motion preference was not changed. The existing large-bundle advisory remains; no frame-rate measurement is claimed.

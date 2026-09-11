@@ -1,0 +1,101 @@
+{
+  "/": {
+    "title": "ShoeMoneyX | AI Trading Intelligence Demo",
+    "heading": "Every market. One mind.",
+    "description": "Explore ShoeMoneyX: an interactive AI trading demo with an animated ShoeGPT robot, crypto market views, charts and strategy research. All data is simulated.",
+    "summary": "ShoeMoneyX brings crypto markets, trading activity and strategy research into one visual workspace. Meet the animated ShoeGPT robot and explore the interactive public demo.",
+    "details": [
+      "The homepage connects an animated robot to a simulated market universe, with coin icons, changing illustrative prices and an activity feed.",
+      "Profit and loss, win rates, positions and throughput are simulated presentation data, not actual trading results.",
+      "Use the navigation to explore the dashboard, charts, desk, positions, backtests, optimizer and arena."
+    ]
+  },
+  "/dashboard": {
+    "title": "Trading Dashboard Demo | ShoeMoneyX",
+    "heading": "Your trading workspace at a glance",
+    "description": "Explore the ShoeMoneyX dashboard demo: simulated account equity, market activity, positions and AI desk status in a reactive blue-and-black workspace.",
+    "summary": "The dashboard brings account status, market activity and position summaries together in one place. Explore how the workspace presents a trading account using synthetic demo data.",
+    "details": [
+      "View illustrative equity, cash, exposure and position summaries.",
+      "Explore activity and status panels without connecting an exchange account.",
+      "Account values are simulated and are not evidence of investment performance."
+    ]
+  },
+  "/chart": {
+    "title": "Crypto Charts Demo | ShoeMoneyX",
+    "heading": "Explore markets from every angle",
+    "description": "Explore interactive crypto charts in the ShoeMoneyX demo, with 15-second, 1-minute and 5-minute views, robot effects and clearly labeled simulated prices.",
+    "summary": "Explore interactive crypto charts with 15-second, 1-minute and 5-minute intervals. The blue visual effects and ShoeGPT robot frame the chart while you inspect synthetic market history.",
+    "details": [
+      "Change markets and chart intervals to explore the chart interface.",
+      "The public demo generates bounded synthetic candle histories; displayed prices are not live exchange quotes.",
+      "Chart overlays and visual effects illustrate the experience rather than making trading recommendations."
+    ]
+  },
+  "/desk": {
+    "title": "AI Trading Desk Demo | ShoeMoneyX",
+    "heading": "Follow the decision pipeline",
+    "description": "Explore the ShoeMoneyX AI desk demo: inspect sample scans, candidates, checks and execution activity using simulated data with no real orders.",
+    "summary": "The desk shows how market scans, candidate checks and execution activity can be organized into a decision pipeline. Inspect the sample runs and their illustrative outcomes.",
+    "details": [
+      "Review sample scan runs, candidate evaluations and activity.",
+      "The public site does not run an AI trading model, submit exchange orders or start background trading jobs.",
+      "Controls that would change a live account are unavailable in this read-only demo."
+    ]
+  },
+  "/positions": {
+    "title": "Crypto Positions Demo | ShoeMoneyX",
+    "heading": "See positions and exposure clearly",
+    "description": "Explore sample crypto positions, exposure, fills and profit-and-loss views in ShoeMoneyX. This public portfolio demo uses synthetic data throughout.",
+    "summary": "The positions view organizes sample holdings, exposure and fills so you can explore the account interface. Every position and profit-and-loss value on the public site is synthetic.",
+    "details": [
+      "Inspect illustrative position values and related trade details.",
+      "Closing positions is disabled because the public demo has no connected trading account.",
+      "Displayed balances, fills and returns do not represent real funds or executed orders."
+    ]
+  },
+  "/backtests": {
+    "title": "Strategy Backtesting Demo | ShoeMoneyX",
+    "heading": "Explore strategy research reports",
+    "description": "Browse sample strategy backtests and inspect illustrative results in ShoeMoneyX. Explore the research interface using clearly labeled simulated data.",
+    "summary": "Browse sample strategy research and explore how backtest results are presented. The public demo provides illustrative reports rather than running new historical simulations.",
+    "details": [
+      "Open saved sample backtest reports and compare the displayed research fields.",
+      "Launching new backtest jobs is disabled in the public deployment.",
+      "Sample returns and scores are synthetic and do not validate a strategy or predict future performance."
+    ]
+  },
+  "/optimizer": {
+    "title": "Strategy Optimizer Demo | ShoeMoneyX",
+    "heading": "Watch strategy research take shape",
+    "description": "Explore the ShoeMoneyX optimizer demo with sample champions, candidates and changing research events. Scores and performance data are simulated.",
+    "summary": "Explore sample champions, candidate strategies and changing research events in the optimizer workspace. The public demo illustrates the research process with generated data.",
+    "details": [
+      "Browse sample candidate and champion views.",
+      "Animated score events run locally in the browser for demonstration.",
+      "No optimizer workers or live strategy changes run on the public site."
+    ]
+  },
+  "/arena": {
+    "title": "Strategy Arena Demo | ShoeMoneyX",
+    "heading": "Step inside the strategy arena",
+    "description": "Watch sample strategies compete in the ShoeMoneyX arena demo. Explore changing scores, visual effects and research activity with simulated data.",
+    "summary": "The arena turns sample strategy comparisons into a visual experience with changing scores and research activity. Explore the presentation using synthetic demo events.",
+    "details": [
+      "View illustrative strategy comparisons and saved sample experiments.",
+      "Scores and activity are generated for the demo and are not measured live trading outcomes.",
+      "The public arena does not deploy strategies or change trading accounts."
+    ]
+  },
+  "/settings": {
+    "title": "Trading Desk Settings Demo | ShoeMoneyX",
+    "heading": "Explore the desk configuration",
+    "description": "Preview the ShoeMoneyX trading desk settings and configuration interface. The public demo is read-only and cannot save settings or place trades.",
+    "summary": "Preview the trading desk configuration interface and its available controls. The public demo keeps configuration read-only so visitors can explore without changing an account.",
+    "details": [
+      "Review sample configuration fields and desk settings.",
+      "Saving configuration and changing trading modes are disabled.",
+      "No exchange credentials are required to explore the public demo."
+    ]
+  }
+}

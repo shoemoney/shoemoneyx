@@ -1,0 +1,91 @@
+// Tree-shaken Font Awesome Pro (same pattern as airank): only the icons registered here are bundled, and existing
+// <i class="fa-solid fa-x"> markup keeps working through dom.watch. autoReplaceSvg 'nest' keeps Vue's <i> node in
+// place. Adding an icon? Use it in a template AND register it here, or it renders as nothing.
+import { config, library, dom } from "@fortawesome/fontawesome-svg-core";
+import "@fortawesome/fontawesome-svg-core/styles.css";
+import {
+    faBars,
+    faChartLine,
+    faChartCandlestick,
+    faLayerGroup,
+    faClockRotateLeft,
+    faSliders,
+    faBrainCircuit,
+    faMicrochipAi,
+    faCircleNodes,
+    faWavePulse,
+    faArrowUpRight,
+    faArrowRight,
+    faPause,
+    faPlay,
+    faMagnifyingGlass,
+    faXmark,
+    faTerminal,
+    faGlobe,
+    faGrid2,
+    faCrosshairs,
+    faCircleCheck,
+    faChevronRight,
+    faArrowTrendDown,
+    faArrowTrendUp,
+    faBolt,
+    faChartScatter,
+    faFireFlameCurved,
+    faFlagCheckered,
+    faPlug,
+    faSatelliteDish,
+    faServer,
+    faShieldHalved,
+    faSwords,
+    faTriangleExclamation,
+    faTrophy,
+    faVolumeHigh,
+    faVolumeXmark,
+} from "@fortawesome/pro-solid-svg-icons";
+
+config.autoReplaceSvg = "nest";
+library.add(
+    faBars,
+    faChartLine,
+    faChartCandlestick,
+    faLayerGroup,
+    faClockRotateLeft,
+    faSliders,
+);
+library.add(
+    faBrainCircuit,
+    faMicrochipAi,
+    faCircleNodes,
+    faWavePulse,
+    faArrowUpRight,
+    faArrowRight,
+    faPause,
+    faPlay,
+    faMagnifyingGlass,
+    faXmark,
+    faTerminal,
+    faGlobe,
+    faGrid2,
+    faCrosshairs,
+    faCircleCheck,
+    faChevronRight,
+);
+config.observeMutations = true;
+library.add(
+    faArrowTrendDown,
+    faArrowTrendUp,
+    faBolt,
+    faChartScatter,
+    faFireFlameCurved,
+    faFlagCheckered,
+    faPlug,
+    faSatelliteDish,
+    faServer,
+    faShieldHalved,
+    faSwords,
+    faTriangleExclamation,
+    faTrophy,
+    faVolumeHigh,
+    faVolumeXmark,
+);
+dom.watch();

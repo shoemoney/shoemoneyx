@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+@import './site-chrome.css';
+@import './page-experience.css';
+
+.smx-page-context { margin: 24px auto 0; padding: 28px clamp(20px, 4vw, 56px); max-width: 1800px; color: #b5cfe0; background: #030a11; border-top: 1px solid #17364d; font: 16px/1.7 ui-sans-serif, system-ui, sans-serif; }
+.smx-page-context[hidden] { display: none; }
+.smx-context-label { color: #70cdff; font-size: 12px; font-weight: 700; letter-spacing: .15em; }
+.smx-page-context h2 { color: #e8f4ff; font-size: 24px; margin: 8px 0; }
+.smx-page-context p { max-width: 980px; }
+.smx-page-context .smx-context-note { color: #8eb6d1; font-size: 14px; margin-top: 12px; }
+.smx-page-context a { color: #70cdff; text-underline-offset: 4px; text-decoration: underline; }
+
+@theme {
+    --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    --color-up: #22c55e;
+    --color-down: #ef4444;
+    --color-accent: #f59e0b;
+}
+
+html, body, #app { height: 100%; }
+
+.card { @apply rounded-lg border border-zinc-800 bg-zinc-900/70 p-4; }
+.tile { @apply rounded-lg border border-zinc-800 bg-zinc-900/70 px-4 py-3; }
+.btn { @apply inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition; }
+.btn-primary { @apply border-amber-500/40 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30; }
+.btn-danger { @apply border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/30; }
+.btn-ok { @apply border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/30; }
+.badge { @apply inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide; }
+table.grid { @apply w-full text-xs; }
+table.grid th { @apply text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 py-1.5 pr-3 border-b border-zinc-800; }
+table.grid td { @apply py-1.5 pr-3 border-b border-zinc-800/60 align-top; }
+table.grid tr:hover td { @apply bg-zinc-800/30; }
+.num { @apply font-mono tabular-nums; }
+input, select { @apply rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-amber-500/60; }
+
+@keyframes flash-up { from { background-color: rgba(16, 185, 129, .2); } to { background-color: transparent; } }
+@keyframes flash-down { from { background-color: rgba(239, 68, 68, .2); } to { background-color: transparent; } }
+.flash-up { animation: flash-up .6s ease-out; }
+.flash-down { animation: flash-down .6s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+    .flash-up, .flash-down { animation: none; background-color: transparent; }
+}
+
+.smx-demo-banner{display:flex;align-items:center;justify-content:center;gap:1rem;padding:12px 20px;background:#06121e;color:#b5d5ed;border-bottom:1px solid #24516d;font:14px/1.5 ui-sans-serif,system-ui,sans-serif}.smx-demo-banner strong{color:#70cdff;letter-spacing:.12em;white-space:nowrap}.smx-demo-banner span{font-size:14px}@media(max-width:600px){.smx-demo-banner{flex-direction:column;gap:3px;text-align:center;padding:10px 16px}}

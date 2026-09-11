@@ -1,0 +1,275 @@
+/* The eight interior chapters share the front page's black, titanium and blue world. */
+.smx-experience.smx-page-heading {
+    --chapter-x: 0;
+    --chapter-y: 0;
+    --chapter-light-x: 65%;
+    --chapter-light-y: 35%;
+    position: relative;
+    isolation: isolate;
+    flex: 1 0 100%;
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    min-height: 298px;
+    margin: 0;
+    padding: 36px 38px 32px;
+    border: 1px solid #20455e;
+    border-radius: 20px 20px 5px 5px;
+    /* Cropping must not create a scroll container when the effects button receives focus. */
+    overflow: clip;
+    color: #e7f5ff;
+    background: #02060a;
+    box-shadow: inset 0 1px 0 #99ddff21, 0 18px 50px #0005;
+    animation: smx-chapter-arrival 900ms cubic-bezier(.2,.75,.2,1) both;
+    /* Keep a stable containing/compositing layer when entrance motion is paused.
+       The portrait owns its perspective; WebGL does not need a 3D header plane. */
+    transform: translate3d(0, 0, 0);
+    transform-style: flat;
+}
+.smx-page-toolbar:has(> .smx-experience),
+.dc-command-heading:has(> .smx-experience) { flex-wrap: wrap; }
+.smx-positions > .smx-experience + .mw-control-rail { margin-top: 20px; }
+.smx-experience__mesh,
+.smx-experience__light,
+.smx-experience__rail,
+.smx-experience__edge { position: absolute; pointer-events: none; }
+.smx-experience__mesh {
+    inset: 0;
+    z-index: -2;
+    background-image: linear-gradient(#2773a510 1px, transparent 1px), linear-gradient(90deg, #2773a510 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: linear-gradient(90deg, #0003, #000 80%);
+}
+.smx-experience__light {
+    inset: 0;
+    z-index: -1;
+    background: radial-gradient(ellipse 45% 130% at var(--chapter-light-x) var(--chapter-light-y), #158af51c, transparent 75%), linear-gradient(110deg, #03080c 35%, #07182788 70%, #020408);
+    transition: opacity .8s;
+}
+.smx-experience__rail {
+    left: 0; top: 18%; bottom: 18%; width: 2px;
+    background: linear-gradient(transparent, #77d5ff, transparent);
+    box-shadow: 0 0 16px #24a2ff7a;
+}
+.smx-experience__rail span { display: block; height: 30%; background: #ceeeff; animation: smx-chapter-rail 7s ease-in-out infinite; }
+.smx-experience__copy { position: relative; z-index: 4; max-width: 60%; }
+.smx-experience__eyebrow {
+    display: flex; align-items: center; gap: 10px;
+    font: 500 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: .08em; text-transform: uppercase; color: #75caff;
+    margin: 0 0 16px;
+}
+.smx-experience__eyebrow > span {
+    width: 16px; height: 16px; flex: 0 0 16px;
+    border: 1px solid #53b9ff;
+    box-shadow: inset 0 0 8px #318dcc61, 0 0 12px #1298ff30;
+    transform: rotate(45deg); position: relative;
+}
+.smx-experience__eyebrow > span::after { content: ""; position: absolute; inset: 5px; background: #a4deff; }
+.smx-experience.smx-page-heading h1,
+.dc-dashboard .smx-experience.smx-page-heading h1 {
+    margin: 0; max-width: 100%;
+    font-size: clamp(36px, 4.4vw, 66px);
+    line-height: 1.04; font-weight: 600; letter-spacing: -.055em;
+    color: #e9f6ff; text-wrap: balance;
+    text-shadow: 0 2px 0 #385775, 0 12px 40px #007eff2c;
+    animation: smx-chapter-title 1100ms cubic-bezier(.16,.8,.2,1) both;
+}
+.smx-experience .smx-experience__description {
+    max-width: 44ch; margin: 18px 0 0;
+    font-size: 16px; line-height: 1.65; color: #aec6d9;
+    text-wrap: pretty;
+}
+.smx-experience__signature {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+    margin-top: 24px; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #c3d6e4;
+}
+.smx-experience__chapter { color: #68beff; white-space: nowrap; }
+.smx-experience__rule { height: 1px; width: 28px; background: #35678a; }
+.smx-experience__signals { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; font-size: 14px; }
+.smx-experience__signals > span { border: 1px solid #366380; padding: 4px 8px; color: #b7dcf6; border-radius: 3px; background: #030b12bf; }
+.smx-experience__motion {
+    position: absolute; z-index: 7; bottom: 14px; right: 18px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 8px 10px; min-height: 36px; border: 1px solid #375b73; border-radius: 4px;
+    font: 14px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #bed9ed; background: #02070ce6; backdrop-filter: blur(8px);
+    cursor: pointer; transition: color .2s, border-color .2s, box-shadow .2s;
+}
+.smx-experience__motion svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.smx-experience__motion:hover { color: #f3fbff; border-color: #65c5ff; box-shadow: 0 0 22px #148dff24; }
+.smx-experience__motion:focus-visible { outline: 2px solid #84d6ff; outline-offset: 4px; }
+.smx-experience__motion:disabled { cursor: default; color: #91aec2; }
+.smx-experience__edge { bottom: 0; left: 4%; right: 4%; height: 2px; display: flex; justify-content: space-between; }
+.smx-experience__edge > span { width: 12%; background: linear-gradient(90deg, transparent, #3fbcff, transparent); box-shadow: 0 -2px 14px #087cf766; }
+.smx-experience__edge > span:nth-child(2) { width: 38%; }
+
+/* Layered photographic armor remains recognizable; GPU lines provide true depth. */
+.smx-chapter-scene {
+    position: absolute; pointer-events: none; z-index: 1;
+    width: 49%; max-width: 650px; height: 100%; top: 0; right: -1%;
+    isolation: isolate; perspective: 800px;
+    transform: translate(calc(var(--chapter-x) * -3px), calc(var(--chapter-y) * -2px));
+    transition: transform 700ms cubic-bezier(.2,.7,.2,1);
+    mask-image: linear-gradient(90deg, transparent, #000 10%, #000 98%, transparent);
+}
+.smx-chapter-scene__aura { position: absolute; inset: -12% -20% -40%; background: radial-gradient(ellipse at 50% 44%, #2b98ff40, #06467612 36%, transparent 68%); animation: smx-chapter-aura 9s ease-in-out infinite; }
+.smx-chapter-scene__gpu { position: absolute; inset: -17% -15% -22%; z-index: 1; opacity: .86; }
+.smx-chapter-scene__gpu canvas { display: block; width: 100%; height: 100%; }
+.smx-chapter-scene__armillary { position: absolute; inset: 2% 1% -24%; opacity: .75; transform: rotate(-15deg); }
+.smx-chapter-scene__armillary > span { position: absolute; inset: 8%; border: 1px solid #328ec960; border-radius: 50%; box-shadow: 0 0 14px #0a7fff11; }
+.smx-chapter-scene__armillary > span:nth-child(2) { inset: 18% -5%; transform: rotateX(64deg); border-color: #4cbdff99; }
+.smx-chapter-scene__armillary > span:nth-child(3) { inset: 10% 5%; transform: rotateY(66deg); border-color: #499bd54d; }
+.smx-chapter-scene[data-renderer="webgl"] .smx-chapter-scene__armillary { opacity: .3; }
+.smx-chapter-scene__portrait {
+    position: absolute; z-index: 3; top: 12px; left: 50%; width: 76%; max-width: 455px;
+    aspect-ratio: 1397 / 1126;
+    transform: translateX(-50%) rotateY(calc(var(--chapter-x) * 5deg)) rotateX(calc(var(--chapter-y) * -2deg));
+    transform-origin: 50% 62%; transition: transform 900ms cubic-bezier(.15,.7,.2,1);
+    filter: drop-shadow(0 0 12px #469def28);
+    mask-image: linear-gradient(#000 0%, #000 70%, transparent 100%);
+    animation: smx-chapter-materialize 1400ms cubic-bezier(.14,.8,.2,1) both;
+}
+.smx-chapter-scene__portrait > img { display: block; width: 100%; height: auto; max-width: none; filter: saturate(.84) contrast(1.04); }
+.smx-chapter-scene__eye {
+    position: absolute; left: 50%; top: 17%; width: 4.6%; aspect-ratio: 1; transform: translate(-50%, -50%);
+    border-radius: 50%; background: radial-gradient(circle, #d8f7ff 4%, #64d2ff85 22%, #1078ff50 45%, transparent 72%);
+    box-shadow: 0 0 12px #1684ff85; animation: smx-chapter-eye 9s ease-in-out infinite;
+}
+.smx-chapter-scene__eye > span { position: absolute; left: -160%; right: -160%; top: 48%; height: 1px; background: linear-gradient(90deg, transparent, #c4f2ff, transparent); }
+.smx-chapter-scene__visor { position: absolute; width: 14%; height: 7%; top: 13.5%; left: 43%; background: radial-gradient(ellipse, #00aaff35, transparent 72%); border-radius: 40%; mix-blend-mode: screen; }
+.smx-chapter-scene__scan {
+    position: absolute; left: 12%; right: 12%; height: 1px; top: 18%; opacity: 0;
+    background: linear-gradient(90deg, transparent, #7de1ffbd, transparent); box-shadow: 0 -4px 16px #64cfff8f;
+    animation: smx-chapter-armor-scan 11s ease-in-out infinite;
+}
+.smx-chapter-scene__chest { position: absolute; top: 43%; left: 41%; width: 21%; height: 18%; border-radius: 45%; background: radial-gradient(ellipse, #35b5ff24, transparent 72%); animation: smx-chapter-aura 7s ease-in-out infinite; mix-blend-mode: screen; }
+.smx-chapter-scene__circuit { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; stroke: #2171a74f; stroke-width: 1; }
+.smx-chapter-scene__circuit circle { fill: #58b6ff; stroke: none; opacity: .6; }
+.smx-chapter-scene__flow { stroke: #69c7ff; stroke-dasharray: 2 23; stroke-width: 1.5; animation: smx-chapter-circuit 12s linear infinite; }
+.smx-chapter-scene__code { position: absolute; z-index: 0; top: 12%; right: 7%; font-size: 110px; color: #369ee914; transform: rotate(-8deg); }
+.smx-chapter-scene__beams { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; overflow: visible; mix-blend-mode: screen; opacity: .7; }
+.smx-chapter-scene__beam { fill: #76cfff; opacity: 0; animation: smx-chapter-beam 12s ease-in-out infinite; }
+.smx-chapter-scene__beam--2 { animation-delay: -8s; }
+.smx-chapter-scene__beam--3 { animation-delay: -4s; }
+.smx-chapter-scene__objects { position: absolute; inset: 0; z-index: 5; }
+.smx-chapter-scene__object {
+    display: flex; align-items: center; justify-content: center;
+    position: absolute; width: 46px; height: 46px; margin: -23px;
+    border: 1px solid #4eafe5b3; border-radius: 50%;
+    color: #9cd7ff; background: radial-gradient(circle at 35% 25%, #184d72, #061323 70%);
+    box-shadow: inset 0 0 12px #76ceff26, 0 0 24px #007cff28;
+    animation: smx-chapter-object 12s ease-in-out infinite;
+    animation-delay: var(--object-phase);
+}
+.smx-chapter-scene__object > img { width: 30px; height: 30px; border-radius: 50%; }
+.smx-chapter-scene__object > i { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; font-size: 23px; }
+.smx-chapter-scene__object--1 { left: 15%; top: 41%; }
+.smx-chapter-scene__object--2 { left: 86%; top: 22%; }
+.smx-chapter-scene__object--3 { left: 89%; top: 72%; }
+.smx-chapter-scene__object-ring { position: absolute; inset: -7px; border: 1px dashed #3b93cc70; border-radius: 50%; animation: smx-chapter-orbit 22s linear infinite; }
+.smx-chapter-scene__horizon { position: absolute; left: -10%; right: -10%; bottom: -4px; height: 40%; z-index: 4; background: linear-gradient(transparent, #02060af5 90%); }
+.smx-chapter-scene__horizon::after { content: ""; position: absolute; left: 16%; right: 16%; bottom: 14px; height: 2px; background: linear-gradient(90deg, transparent, #2c9eff8a, transparent); box-shadow: 0 0 20px 4px #006eff30; transform: perspective(130px) rotateX(70deg); }
+.smx-chapter-scene__reticle { position: absolute; inset: 7% 8% 14% 7%; z-index: 2; transform: translate(calc(var(--chapter-x) * 7px), calc(var(--chapter-y) * 4px)); transition: transform .7s; }
+.smx-chapter-scene__reticle > span { position: absolute; width: 13px; height: 13px; border-color: #59baf06b; border-style: solid; }
+.smx-chapter-scene__reticle > span:nth-child(1) { left: 0; top: 0; border-width: 1px 0 0 1px; }
+.smx-chapter-scene__reticle > span:nth-child(2) { right: 0; top: 0; border-width: 1px 1px 0 0; }
+.smx-chapter-scene__reticle > span:nth-child(3) { right: 0; bottom: 0; border-width: 0 1px 1px 0; }
+.smx-chapter-scene__reticle > span:nth-child(4) { left: 0; bottom: 0; border-width: 0 0 1px 1px; }
+
+/* Each chapter carries a different sculptural temperament. */
+.smx-experience[data-chapter="positions"] .smx-chapter-scene__armillary { transform: rotate(18deg); }
+.smx-experience[data-chapter="desk"] .smx-chapter-scene__circuit { stroke-width: 1.5; opacity: 1; }
+.smx-experience[data-chapter="desk"] .smx-chapter-scene__flow { animation-duration: 7s; stroke-dasharray: 1 12; }
+.smx-experience[data-chapter="chart"] .smx-experience__mesh { background-size: 30px 30px; }
+.smx-experience[data-chapter="chart"] .smx-chapter-scene__armillary { transform: rotate(-26deg); }
+.smx-experience[data-chapter="backtests"] .smx-chapter-scene__object-ring { animation-direction: reverse; border-style: double; }
+.smx-experience[data-chapter="backtests"] .smx-chapter-scene__flow { animation-direction: reverse; }
+.smx-experience[data-chapter="arena"] .smx-chapter-scene__reticle { inset: 12% 8% 18%; }
+.smx-experience[data-chapter="arena"] .smx-chapter-scene__object { border-radius: 12px; transform: rotate(-5deg); }
+.smx-experience[data-chapter="arena"] .smx-chapter-scene__object-ring { border-radius: 16px; animation-duration: 30s; }
+.smx-experience[data-chapter="optimizer"] .smx-chapter-scene__armillary { transform: rotate(60deg); }
+.smx-experience[data-chapter="optimizer"] .smx-chapter-scene__object-ring { border-style: dotted; animation-duration: 12s; }
+.smx-experience[data-chapter="settings"] .smx-chapter-scene__reticle { inset: 7% 12% 20%; }
+.smx-experience[data-chapter="settings"] .smx-chapter-scene__object { border-radius: 9px; }
+.smx-experience[data-chapter="settings"] .smx-chapter-scene__object-ring { border-radius: 12px; animation-duration: 36s; }
+.smx-experience:is(:hover, :focus-within) .smx-chapter-scene__eye { box-shadow: 0 0 17px 3px #2ca6ffb5; }
+.smx-experience:is(:hover, :focus-within) .smx-experience__edge { filter: brightness(1.5); }
+
+@keyframes smx-chapter-arrival { from { opacity: 0; transform: translate3d(0, 10px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+@keyframes smx-chapter-title { from { opacity: .2; transform: translateY(9px); filter: blur(5px); letter-spacing: -.025em; } to { opacity: 1; transform: translateY(0); filter: blur(0); letter-spacing: -.055em; } }
+@keyframes smx-chapter-materialize { from { opacity: 0; filter: drop-shadow(0 0 25px #168cff) brightness(1.7); clip-path: inset(0 0 100%); } 70% { opacity: 1; } to { opacity: 1; filter: drop-shadow(0 0 12px #469def28); clip-path: inset(0); } }
+@keyframes smx-chapter-rail { 0%,100% { transform: translateY(0); opacity: .2; } 50% { transform: translateY(180%); opacity: .8; } }
+@keyframes smx-chapter-aura { 0%,100% { opacity: .65; } 50% { opacity: 1; } }
+@keyframes smx-chapter-eye { 0%,100% { opacity: .55; transform: translate(-50%,-50%) scale(.86); } 18%,42%,72% { opacity: 1; transform: translate(-50%,-50%) scale(1.14); } }
+@keyframes smx-chapter-armor-scan { 0%,12% { opacity: 0; top: 18%; } 18% { opacity: .7; } 42% { opacity: 0; top: 78%; } 100% { opacity: 0; top: 78%; } }
+@keyframes smx-chapter-circuit { to { stroke-dashoffset: -100; } }
+@keyframes smx-chapter-beam { 0%,3%,29%,100% { opacity: 0; } 12%,20% { opacity: .13; } }
+@keyframes smx-chapter-object { 0%,100% { translate: 0 0; box-shadow: inset 0 0 12px #76ceff26, 0 0 24px #007cff28; } 35% { translate: 0 -5px; box-shadow: inset 0 0 12px #76ceff4d, 0 0 30px #229fff73; } 68% { translate: 2px 3px; } }
+@keyframes smx-chapter-orbit { to { rotate: 360deg; } }
+
+.smx-experience--still,
+.smx-experience--still * { animation-play-state: paused !important; }
+.smx-experience.smx-experience--still .smx-experience__copy h1,
+.smx-experience--still .smx-chapter-scene__portrait,
+.smx-experience.smx-experience--still { animation: none; }
+.smx-experience--still .smx-chapter-scene,
+.smx-experience--still .smx-chapter-scene__reticle { transform: translate3d(0, 0, 0); transition: none; }
+.smx-experience--still .smx-chapter-scene__portrait { transform: translateX(-50%); transition: none; }
+.smx-experience--still .smx-chapter-scene__beam { opacity: 0; }
+.smx-experience--still .smx-chapter-scene__eye { opacity: .85; }
+
+@media (min-width: 1500px) {
+    .smx-experience.smx-page-heading { min-height: 310px; }
+    .smx-chapter-scene__portrait { top: 7px; width: 71%; }
+}
+@media (max-width: 1050px) {
+    .smx-experience.smx-page-heading { min-height: 290px; padding: 28px; }
+    .smx-experience__copy { max-width: 58%; }
+    .smx-experience__description { font-size: 15px; }
+    .smx-experience__signature { gap: 8px; margin-top: 19px; }
+    .smx-experience__signature > .smx-experience__rule { display: none; }
+    .smx-experience__signature > span:last-child { flex-basis: 100%; }
+    .smx-chapter-scene { width: 49%; right: -3%; }
+    .smx-chapter-scene__portrait { top: 28px; width: 100%; }
+    .smx-chapter-scene__object { width: 38px; height: 38px; margin: -19px; }
+    .smx-chapter-scene__object > img { width: 27px; height: 27px; }
+}
+@media (max-width: 700px) {
+    .smx-app .smx-workspace .smx-page :is(input, select, textarea) { font-size: 16px; }
+    .smx-experience.smx-page-heading { min-height: 270px; padding: 22px 20px 54px; border-radius: 13px 13px 4px 4px; }
+    .smx-experience__copy { max-width: 70%; }
+    .smx-experience__eyebrow { font-size: 14px; letter-spacing: .01em; gap: 7px; margin-bottom: 14px; }
+    .smx-experience__eyebrow > span { width: 12px; height: 12px; flex-basis: 12px; }
+    .smx-experience__eyebrow > span::after { inset: 3px; }
+    .smx-experience.smx-page-heading h1,
+    .dc-dashboard .smx-experience.smx-page-heading h1 { font-size: clamp(30px, 6.2vw, 42px); }
+    .smx-experience__description { margin-top: 14px; font-size: 14px; line-height: 1.55; max-width: 33ch; }
+    .smx-experience__signature { margin-top: 18px; gap: 5px; }
+    .smx-experience__signature > span:last-child { display: none; }
+    .smx-chapter-scene { width: 58%; right: -9%; opacity: .86; }
+    .smx-chapter-scene__portrait { width: 135%; top: 60px; left: 50%; }
+    .smx-chapter-scene__object--1 { left: 38%; top: 64%; }
+    .smx-chapter-scene__object--2 { display: none; }
+    .smx-chapter-scene__object--3 { display: none; }
+    .smx-chapter-scene__beams { display: none; }
+    .smx-chapter-scene__reticle { opacity: .5; }
+    .smx-chapter-scene__code { font-size: 80px; right: 20%; }
+    .smx-experience__motion { bottom: 12px; right: 14px; min-height: 36px; padding: 7px 9px; }
+}
+@media (max-width: 420px) {
+    .smx-experience.smx-page-heading { padding-left: 16px; padding-right: 16px; min-height: 278px; }
+    .smx-experience__copy { max-width: 70%; }
+    .smx-chapter-scene { right: -10%; opacity: .76; }
+    .smx-chapter-scene__portrait { top: 74px; }
+    .smx-chapter-scene__object--1 { left: 46%; top: 68%; }
+    .smx-experience__signature { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .smx-experience.smx-page-heading,
+    .smx-experience *,
+    .smx-experience *::before,
+    .smx-experience *::after { animation: none !important; transition: none !important; }
+    .smx-chapter-scene__beam { opacity: 0; }
+}

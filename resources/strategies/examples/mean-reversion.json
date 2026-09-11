@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "key": "mean-reversion-h1",
+  "base": "custom",
+  "suggest": { "products": ["BTC-USD", "ETH-USD"], "days": 30, "cash": 1000 },
+  "meta": {
+    "name": "Mean Reversion H1",
+    "description": "Buys H1-oversold dips in a ranging regime during the US/EU session overlap, sized small and stopped on a volume collapse.",
+    "tags": ["mean-reversion", "h1"],
+    "timeframe": "1h",
+    "assets": ["BTC-USD", "ETH-USD"]
+  },
+  "params": {
+    "rsi_entry": { "type": "number", "default": 35, "min": 10, "max": 50, "step": 1 },
+    "allow_shorts": { "type": "bool", "default": false }
+  },
+  "setup": {
+    "rules": [
+      { "field": "extra.indicators.atr14", "op": ">", "value": 0 },
+      { "field": "time.hour_utc", "op": "between", "value": [12, 20] }
+    ]
+  },
+  "trigger": {
+    "max_candidates": 5,
+    "rules": [
+      { "field": "indicators.rsi14", "op": "<", "value": 35 },
+      { "field": "volume_surge_h1", "op": ">", "value": 1.5 }
+    ]
+  },
+  "entry": {
+    "side": "long",
+    "sizing": { "kelly_fraction": 0.25, "max_pct_book": 6.0 },
+    "confirm": [
+      { "field": "spread_bps", "op": "<=", "value": 15, "reason": "spread too wide" }
+    ]
+  },
+  "management": {
+    "adds": [],
+    "trailing": null,
+    "partials": []
+  },
+  "exit": {
+    "stop": {
+      "rules": [
+        { "field": "volume_ratio_6h", "op": "<", "value": 0.2, "action": "close" }
+      ]
+    },
+    "take_profit": { "rules": [] },
+    "time_stop": { "hours": 48 }
+  },
+  "risk": {
+    "max_positions": 3,
+    "daily_loss_cap_pct": 5,
+    "leverage_cap": 1
+  }
+}

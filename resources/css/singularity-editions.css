@@ -1,0 +1,87 @@
+.dx.dx-singularity-edition .dx-core-caption {
+    width: 40%;
+    pointer-events: auto;
+    opacity: 1;
+    z-index: 5;
+}
+.dx.dx-singularity-edition .dx-core-caption > strong {
+    font-size: clamp(22px, 2.15vw, 32px);
+    letter-spacing: 0.06em;
+    line-height: 1.15;
+}
+.dx.dx-singularity-edition .dx-core-caption > small {
+    max-width: 350px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #adc7e3;
+}
+.dx-robot-replay {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    margin-top: 12px;
+    padding: 8px 15px;
+    border: 1px solid #438bc569;
+    color: #b5dfff;
+    background: #051322e8;
+    font: 12px var(--mono);
+    cursor: pointer;
+    pointer-events: auto;
+}
+.dx-robot-replay:hover {
+    background: #0a2740;
+    border-color: #82caff;
+}
+.dx-robot-replay:focus-visible {
+    outline: 2px solid #b9e5ff;
+    outline-offset: 4px;
+}
+@media (min-width: 981px) {
+    .dx.dx-singularity-edition .dx-core-caption {
+        top: 46%;
+    }
+    .dx.dx-singularity-edition .dx-top-signal {
+        top: 74px;
+    }
+}
+@media (max-width: 980px) {
+    .dx.dx-singularity-edition .dx-core-caption {
+        width: min(540px, calc(100% - 36px));
+        top: 115px;
+        bottom: auto;
+        transform: translateX(-50%);
+    }
+    .dx.dx-singularity-edition .dx-stage {
+        height: 760px;
+        min-height: 760px;
+    }
+    .dx.dx-singularity-edition .dx-stage-telemetry {
+        bottom: 24px;
+    }
+}
+@media (max-width: 600px) {
+    .dx.dx-singularity-edition .dx-stage {
+        height: 650px;
+        min-height: 650px;
+    }
+    .dx.dx-singularity-edition .dx-core-caption {
+        top: 114px;
+    }
+    .dx.dx-singularity-edition .dx-core-caption > strong {
+        font-size: 25px;
+    }
+    .dx.dx-singularity-edition .dx-core-caption > small {
+        font-size: 13px;
+    }
+}
+@media (max-width: 370px) {
+    .dx.dx-singularity-edition .dx-stage {
+        height: 610px;
+        min-height: 610px;
+    }
+    .dx.dx-singularity-edition .dx-core-caption > strong {
+        font-size: 22px;
+    }
+}

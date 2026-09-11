@@ -1,0 +1,843 @@
+/* Exact ShoeMoney artwork, surrounded by a separate, theme-specific light stage. */
+.brand-insignia {
+    --brand-default-size: 56px;
+    --brand-accent: #1bbcf4;
+    --brand-second: #889dff;
+    --brand-tilt-x: 0deg;
+    --brand-tilt-y: 0deg;
+    --brand-light-x: 50%;
+    --brand-light-y: 50%;
+    position: relative;
+    display: inline-flex;
+    width: var(--brand-size, var(--brand-default-size));
+    height: var(--brand-size, var(--brand-default-size));
+    aspect-ratio: 1;
+    flex: 0 0 auto;
+    isolation: isolate;
+    mix-blend-mode: screen;
+    vertical-align: middle;
+    overflow: visible;
+    perspective: 700px;
+    color: var(--brand-accent);
+}
+.brand-insignia--placement-hero {
+    --brand-default-size: clamp(142px, 17vw, 228px);
+}
+.brand-insignia--placement-core {
+    --brand-default-size: 112px;
+}
+.brand-insignia--placement-gallery {
+    --brand-default-size: 196px;
+}
+.brand-insignia > * {
+    position: absolute;
+    pointer-events: none;
+    box-sizing: border-box;
+}
+.brand-insignia__bluefield {
+    inset: -22%;
+    z-index: 0;
+    border-radius: 44%;
+    -webkit-mask-image: radial-gradient(
+        ellipse at center,
+        #000 18%,
+        #000c 43%,
+        transparent 69%
+    );
+    mask-image: radial-gradient(
+        ellipse at center,
+        #000 18%,
+        #000c 43%,
+        transparent 69%
+    );
+    filter: blur(5px);
+    background:
+        radial-gradient(ellipse at 35% 44%, #12b9f54f, transparent 55%),
+        radial-gradient(ellipse at 67% 61%, #1657ed5c, transparent 60%);
+    opacity: 0.92;
+    animation: brand-aura-breathe 6.5s ease-in-out infinite alternate-reverse;
+}
+.brand-insignia__aura {
+    inset: -15%;
+    z-index: 0;
+    border-radius: 50%;
+    background: radial-gradient(
+        ellipse at var(--brand-light-x) var(--brand-light-y),
+        color-mix(in srgb, var(--brand-accent) 35%, transparent),
+        transparent 64%
+    );
+    opacity: 0.72;
+    transform: scale(0.95);
+    animation: brand-aura-breathe 5s ease-in-out infinite alternate;
+    transition: opacity 0.4s ease;
+}
+.brand-insignia__plinth {
+    inset: 13% 8% 3%;
+    z-index: 0;
+    border: 1px solid color-mix(in srgb, var(--brand-accent) 40%, transparent);
+    background:
+        radial-gradient(
+            ellipse at 18% 10%,
+            color-mix(in srgb, var(--brand-accent) 18%, transparent),
+            transparent 70%
+        ),
+        linear-gradient(145deg, #1ebdf536, #1b55ee52 60%, #15bbed18);
+    clip-path: polygon(
+        17% 0,
+        83% 0,
+        100% 28%,
+        91% 69%,
+        50% 100%,
+        9% 69%,
+        0 28%
+    );
+    transform: translateY(5%) scale(1.12);
+    opacity: 0.7;
+}
+.brand-insignia__orbit {
+    z-index: 1;
+    inset: 1%;
+    border: 1px solid color-mix(in srgb, var(--brand-accent) 68%, transparent);
+    border-radius: 50%;
+    box-shadow:
+        0 0 14px color-mix(in srgb, var(--brand-accent) 17%, transparent),
+        inset 0 0 14px color-mix(in srgb, var(--brand-accent) 12%, transparent);
+    animation: brand-orbit 18s linear infinite;
+}
+.brand-insignia__orbit i {
+    position: absolute;
+    width: 5%;
+    height: 5%;
+    top: 12%;
+    left: 12%;
+    border-radius: 50%;
+    background: var(--brand-accent);
+    box-shadow: 0 0 12px 2px
+        color-mix(in srgb, var(--brand-accent) 70%, transparent);
+}
+.brand-insignia__orbit--two {
+    inset: -6% 10%;
+    border-color: color-mix(in srgb, var(--brand-second) 38%, transparent);
+    transform: rotate(38deg);
+    animation: brand-orbit-oblique 23s linear infinite reverse;
+}
+.brand-insignia__orbit--two i {
+    background: var(--brand-second);
+    width: 3.5%;
+    height: 3.5%;
+}
+.brand-insignia__fins {
+    inset: -4%;
+    z-index: 1;
+    animation: brand-orbit 38s linear infinite;
+}
+.brand-insignia__fins i {
+    position: absolute;
+    left: 49%;
+    top: 0;
+    width: 2%;
+    height: 11%;
+    transform-origin: 50% 455%;
+    transform: rotate(calc(var(--brand-n) * 30deg));
+    background: linear-gradient(var(--brand-accent), transparent);
+    opacity: var(--brand-alpha);
+}
+.brand-insignia__traces {
+    z-index: 2;
+    inset: -8%;
+    width: 116%;
+    height: 116%;
+    overflow: visible;
+    filter: drop-shadow(
+        0 0 3px color-mix(in srgb, var(--brand-accent) 50%, transparent)
+    );
+}
+.brand-insignia__trace-base {
+    stroke: var(--brand-accent);
+    stroke-width: 1;
+    opacity: 0.6;
+}
+.brand-insignia__trace-flow {
+    stroke: var(--brand-second);
+    stroke-width: 1.8;
+    stroke-dasharray: 6 14;
+    stroke-linecap: round;
+    opacity: 0.8;
+    animation: brand-trace 8s linear infinite;
+}
+.brand-insignia__trace-brand {
+    stroke: #49c8ff;
+    stroke-width: 2.1;
+    stroke-dasharray: 3 21;
+    stroke-linecap: round;
+    stroke-dashoffset: -8;
+    opacity: 0.92;
+    animation: brand-trace 9s linear infinite reverse;
+}
+.brand-insignia__nodes {
+    fill: var(--brand-second);
+    opacity: 0.8;
+    transform-origin: center;
+    animation: brand-node-breathe 3.5s ease-in-out infinite alternate;
+}
+.brand-insignia__emblem {
+    z-index: 4;
+    inset: 6%;
+    transform: rotateX(var(--brand-tilt-x)) rotateY(var(--brand-tilt-y));
+    transform-style: preserve-3d;
+    transition: transform 0.22s ease-out;
+    animation: brand-emblem-float 6s ease-in-out infinite;
+}
+.brand-insignia .brand-insignia__image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    object-fit: contain;
+    aspect-ratio: 1;
+    opacity: 1;
+    filter: none;
+    mix-blend-mode: normal;
+    transform: none;
+    transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+    user-select: none;
+    -webkit-user-drag: none;
+}
+.brand-insignia__scan {
+    z-index: 3;
+    inset: 0 -5%;
+    border-radius: 50%;
+    background: linear-gradient(
+        transparent 47%,
+        color-mix(in srgb, var(--brand-second) 55%, transparent) 49.5%,
+        transparent 52%
+    );
+    opacity: 0.3;
+    animation: brand-scan 6s ease-in-out infinite;
+}
+.brand-insignia__echo {
+    z-index: 1;
+    inset: -4%;
+    border: 2px solid var(--brand-second);
+    border-radius: 50%;
+    box-shadow: 0 0 24px
+        color-mix(in srgb, var(--brand-accent) 32%, transparent);
+    opacity: 0;
+}
+.brand-insignia__spark {
+    z-index: 5;
+    width: 15%;
+    height: 15%;
+    background: conic-gradient(
+        from 45deg,
+        transparent 0 24%,
+        var(--brand-second) 25%,
+        transparent 26% 49%,
+        var(--brand-second) 50%,
+        transparent 51% 74%,
+        var(--brand-second) 75%,
+        transparent 76%
+    );
+    opacity: 0.65;
+    animation: brand-spark 4s ease-in-out infinite alternate;
+}
+.brand-insignia__spark--one {
+    left: -2%;
+    top: 25%;
+}
+.brand-insignia__spark--two {
+    right: 1%;
+    bottom: 17%;
+    width: 10%;
+    height: 10%;
+    animation-delay: -2s;
+}
+.brand-insignia:hover .brand-insignia__aura,
+a:is(:hover, :focus-visible) .brand-insignia__aura {
+    opacity: 1;
+}
+.brand-insignia:hover .brand-insignia__trace-base,
+a:is(:hover, :focus-visible) .brand-insignia__trace-base {
+    stroke-width: 1.8;
+    opacity: 1;
+}
+.brand-insignia:hover .brand-insignia__plinth,
+a:is(:hover, :focus-visible) .brand-insignia__plinth {
+    opacity: 1;
+}
+.brand-insignia:not(.brand-insignia--still):hover .brand-insignia__image,
+a:is(:hover, :focus-visible)
+    .brand-insignia:not(.brand-insignia--still)
+    .brand-insignia__image {
+    transform: translateY(-3%) scale(1.04);
+}
+a:active .brand-insignia:not(.brand-insignia--still) .brand-insignia__image {
+    transform: scale(0.98);
+}
+
+/* Each world gets a different surrounding structure; the blue image is constant. */
+.brand-insignia--pulse .brand-insignia__orbit {
+    transform: scaleY(0.7);
+    animation: brand-rail-orbit 16s linear infinite;
+}
+.brand-insignia--pulse .brand-insignia__orbit--two {
+    display: none;
+}
+.brand-insignia--pulse .brand-insignia__fins {
+    animation-duration: 30s;
+}
+.brand-insignia--pulse .brand-insignia__fins i {
+    width: 3%;
+    height: 17%;
+    transform-origin: 50% 295%;
+    opacity: 0.55;
+}
+.brand-insignia--neural .brand-insignia__orbit {
+    border-style: dashed;
+    border-radius: 40% 60% 48% 52%;
+}
+.brand-insignia--neural .brand-insignia__fins i {
+    width: 1px;
+    height: 24%;
+    transform-origin: 50% 208%;
+    opacity: 0.6;
+}
+.brand-insignia--neural .brand-insignia__trace-flow {
+    stroke-dasharray: 3 10;
+    animation-duration: 4s;
+}
+.brand-insignia--terminal .brand-insignia__orbit {
+    border-radius: 1px;
+    inset: 5%;
+    border-style: dashed;
+    animation: none;
+    transform: none;
+}
+.brand-insignia--terminal .brand-insignia__orbit--two {
+    inset: -3% 14%;
+    opacity: 0.3;
+}
+.brand-insignia--terminal .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--terminal .brand-insignia__aura {
+    border-radius: 0;
+    opacity: 0.4;
+}
+.brand-insignia--terminal .brand-insignia__trace-flow {
+    stroke-dasharray: 2 12;
+    animation-timing-function: steps(12);
+}
+.brand-insignia--terminal .brand-insignia__scan {
+    border-radius: 0;
+    opacity: 0.6;
+}
+.brand-insignia--orbit .brand-insignia__orbit {
+    inset: -9% 4%;
+    border-width: 2px;
+    animation: brand-orbit-oblique 16s linear infinite;
+}
+.brand-insignia--orbit .brand-insignia__orbit--two {
+    inset: 6% -17%;
+    animation-direction: reverse;
+    animation-duration: 24s;
+}
+.brand-insignia--orbit .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--prism .brand-insignia__orbit {
+    border-radius: 8%;
+    inset: -1%;
+    transform: rotate(18deg);
+    animation: brand-prism-rock 10s ease-in-out infinite alternate;
+    border-color: #c1eb658f;
+}
+.brand-insignia--prism .brand-insignia__orbit--two {
+    border-color: #54baff8f;
+    transform: rotate(-14deg);
+    animation-direction: alternate-reverse;
+}
+.brand-insignia--prism .brand-insignia__plinth {
+    background: linear-gradient(
+        135deg,
+        #c1eb6518,
+        #1259a549 40%,
+        #07214938 70%
+    );
+    opacity: 1;
+}
+.brand-insignia--prism .brand-insignia__aura {
+    background: radial-gradient(ellipse, #9ed83729, transparent 63%);
+}
+.brand-insignia--prism .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--prism .brand-insignia__traces {
+    filter: drop-shadow(0 0 3px #42a6ff66);
+}
+.brand-insignia--supernova .brand-insignia__fins i {
+    width: 4%;
+    height: 27%;
+    transform-origin: 50% 185%;
+    opacity: 0.6;
+    clip-path: polygon(0 0, 100% 30%, 15% 100%);
+}
+.brand-insignia--supernova .brand-insignia__aura {
+    inset: -32%;
+    background: radial-gradient(
+        ellipse,
+        #ff984749,
+        #ff541420 33%,
+        transparent 64%
+    );
+}
+.brand-insignia--supernova .brand-insignia__orbit {
+    border-width: 2px;
+    border-style: dotted;
+}
+.brand-insignia--neon .brand-insignia__orbit {
+    border-radius: 15%;
+    inset: 0;
+    transform: rotate(45deg);
+    animation: brand-neon-portal 8s ease-in-out infinite alternate;
+    box-shadow:
+        0 0 13px #ed45ce35,
+        inset 0 0 13px #ed45ce24;
+}
+.brand-insignia--neon .brand-insignia__orbit--two {
+    inset: -4% 10%;
+    animation-direction: alternate-reverse;
+    border-color: #34e9f0aa;
+}
+.brand-insignia--neon .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--reactor .brand-insignia__fins i {
+    width: 6%;
+    height: 17%;
+    background: linear-gradient(
+        45deg,
+        transparent 10%,
+        var(--brand-accent) 12%,
+        #b975182e
+    );
+    transform-origin: 50% 295%;
+    opacity: 0.75;
+}
+.brand-insignia--reactor .brand-insignia__orbit {
+    inset: -1%;
+    border-width: 3px;
+    border-style: dashed;
+}
+.brand-insignia--reactor .brand-insignia__orbit--two {
+    inset: 7%;
+    border-width: 1px;
+}
+.brand-insignia--liquid .brand-insignia__orbit {
+    border-radius: 40% 60% 64% 36% / 48% 41% 59% 52%;
+    border-width: 2px;
+    animation: brand-liquid-morph 9s ease-in-out infinite alternate;
+}
+.brand-insignia--liquid .brand-insignia__orbit--two {
+    inset: -10% 3%;
+    animation-direction: alternate-reverse;
+}
+.brand-insignia--liquid .brand-insignia__aura {
+    background: radial-gradient(
+        ellipse at var(--brand-light-x) var(--brand-light-y),
+        #59e7d146,
+        #468aff18 45%,
+        transparent 66%
+    );
+}
+.brand-insignia--liquid .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--citadel .brand-insignia__orbit {
+    border-radius: 0;
+    inset: 9%;
+    transform: rotate(45deg);
+    animation: none;
+    border-color: #8ba85677;
+}
+.brand-insignia--citadel .brand-insignia__orbit--two {
+    inset: 9%;
+    transform: rotate(45deg) translate(7%, 7%);
+    border-color: #71b4ff88;
+}
+.brand-insignia--citadel .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--citadel .brand-insignia__trace-base {
+    stroke-width: 1.5;
+}
+.brand-insignia--citadel .brand-insignia__plinth {
+    transform: translateY(13%) scale(1.25);
+}
+.brand-insignia--redline .brand-insignia__orbit {
+    border-radius: 1%;
+    inset: 8% -4%;
+    transform: skew(-15deg);
+    animation: none;
+    border-left-width: 4px;
+    border-right-width: 4px;
+}
+.brand-insignia--redline .brand-insignia__orbit--two {
+    inset: 0 11%;
+    opacity: 0.3;
+}
+.brand-insignia--redline .brand-insignia__fins {
+    inset: 16% -14%;
+    transform: skew(-15deg);
+    animation: none;
+}
+.brand-insignia--redline .brand-insignia__fins i {
+    left: calc(var(--brand-side) * 100%);
+    top: calc(var(--brand-row) * 17%);
+    width: 20%;
+    height: 2%;
+    transform: none;
+    background: linear-gradient(90deg, transparent, var(--brand-accent));
+    opacity: 0.6;
+}
+.brand-insignia--synapse .brand-insignia__orbit {
+    border-style: dotted;
+    border-radius: 35% 65%;
+}
+.brand-insignia--synapse .brand-insignia__fins i {
+    width: 1px;
+    height: 27%;
+    transform-origin: 50% 185%;
+    opacity: 0.7;
+}
+.brand-insignia--synapse .brand-insignia__trace-flow {
+    stroke-width: 2.5;
+    stroke-dasharray: 1 9;
+    animation-duration: 4.5s;
+}
+.brand-insignia--spectrum .brand-insignia__orbit {
+    border-radius: 6%;
+    transform: rotate(28deg);
+    animation: brand-prism-rock 12s ease-in-out infinite alternate;
+    border-color: #77b6ff94;
+}
+.brand-insignia--spectrum .brand-insignia__orbit--two {
+    transform: rotate(-20deg);
+    border-color: #ff76c98f;
+    animation-direction: alternate-reverse;
+}
+.brand-insignia--spectrum .brand-insignia__aura {
+    background:
+        radial-gradient(ellipse at 38% 44%, #367de63e, transparent 56%),
+        radial-gradient(ellipse at 62% 58%, #be3a812e, transparent 58%);
+    inset: -12%;
+    border-radius: 50%;
+    -webkit-mask-image: radial-gradient(
+        ellipse at center,
+        #000 25%,
+        transparent 69%
+    );
+    mask-image: radial-gradient(ellipse at center, #000 25%, transparent 69%);
+}
+.brand-insignia--spectrum .brand-insignia__fins i {
+    background: linear-gradient(#77b6ff, #ff76c9);
+    width: 5%;
+    height: 15%;
+    transform-origin: 50% 335%;
+    opacity: 0.48;
+}
+.brand-insignia--spectrum .brand-insignia__traces {
+    filter: drop-shadow(0 0 3px #77b6ff66);
+}
+.brand-insignia--horizon .brand-insignia__orbit {
+    inset: 22% -20%;
+    transform: rotate(-24deg);
+    animation: brand-lens-rock 15s ease-in-out infinite alternate;
+    border-width: 2px;
+    box-shadow: 0 0 14px #fbc38a50;
+}
+.brand-insignia--horizon .brand-insignia__orbit--two {
+    inset: 8% -4%;
+    animation-direction: alternate-reverse;
+    opacity: 0.55;
+}
+.brand-insignia--horizon .brand-insignia__aura {
+    background: radial-gradient(
+        ellipse,
+        #17b8ee2d,
+        #ff9b342b 36%,
+        transparent 66%
+    );
+}
+.brand-insignia--horizon .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--overdrive .brand-insignia__orbit {
+    border-radius: 0;
+    inset: 0;
+    transform: none;
+    animation: none;
+    border-style: dashed;
+}
+.brand-insignia--overdrive .brand-insignia__orbit--two {
+    inset: 11% -8%;
+    opacity: 0.4;
+}
+.brand-insignia--overdrive .brand-insignia__fins i {
+    width: 4%;
+    height: 8%;
+    transform-origin: 50% 625%;
+    opacity: 0.7;
+    background: var(--brand-accent);
+}
+.brand-insignia--overdrive .brand-insignia__fins {
+    animation-duration: 30s;
+    animation-timing-function: steps(24);
+}
+.brand-insignia--pulse-blue .brand-insignia__orbit {
+    border-width: 2px;
+    border-color: #17b8ee9c;
+    inset: -3%;
+}
+.brand-insignia--pulse-blue .brand-insignia__orbit--two {
+    inset: -9% 10%;
+    border-color: #8fdaff66;
+}
+.brand-insignia--pulse-blue .brand-insignia__aura {
+    background: radial-gradient(
+        ellipse,
+        #0ebdf568,
+        #0084eb20 43%,
+        transparent 66%
+    );
+}
+.brand-insignia--pulse-blue .brand-insignia__trace-base {
+    stroke-width: 1.8;
+}
+.brand-insignia--theme-gallery .brand-insignia__orbit {
+    inset: 0 -5%;
+    transform: rotateX(55deg);
+    animation: brand-gallery-orbit 18s linear infinite;
+}
+.brand-insignia--theme-gallery .brand-insignia__orbit--two {
+    inset: -4% 8%;
+    animation-direction: reverse;
+}
+.brand-insignia--theme-gallery .brand-insignia__fins {
+    display: none;
+}
+.brand-insignia--theme-gallery .brand-insignia__plinth {
+    transform: translateY(14%) scale(1.23);
+    opacity: 0.85;
+}
+.brand-insignia .brand-insignia__orbit--two {
+    border-color: #4dbfff96;
+    box-shadow:
+        0 0 16px #1385f42f,
+        inset 0 0 11px #1b75fa26;
+}
+
+/* Blue editions inherit their family's sculpture; only its light changes. */
+.brand-insignia--colorway-blue .brand-insignia__aura {
+    background: radial-gradient(
+        ellipse,
+        #55b5ff49,
+        #175df22d 35%,
+        transparent 65%
+    );
+}
+.brand-insignia--colorway-blue .brand-insignia__plinth {
+    background: linear-gradient(145deg, #73cdff32, #1757ef49 60%, #143b8618);
+    border-color: #55b5ff6e;
+}
+.brand-insignia--colorway-blue .brand-insignia__orbit {
+    box-shadow:
+        0 0 16px #429cff59,
+        inset 0 0 11px #1352d626;
+}
+.brand-insignia--colorway-blue .brand-insignia__orbit--two {
+    border-color: #8dd7ff8a;
+}
+.brand-insignia--colorway-blue .brand-insignia__orbit--two i,
+.brand-insignia--colorway-blue .brand-insignia__nodes {
+    background: #8dd7ff;
+    fill: #8dd7ff;
+}
+.brand-insignia--colorway-blue .brand-insignia__trace-flow {
+    stroke: #8dd7ff;
+}
+.brand-insignia--colorway-blue .brand-insignia__spark {
+    background: conic-gradient(
+        from 45deg,
+        transparent 0 24%,
+        #a4e2ff 25%,
+        transparent 26% 49%,
+        #a4e2ff 50%,
+        transparent 51% 74%,
+        #a4e2ff 75%,
+        transparent 76%
+    );
+}
+
+/* Small mastheads retain the exact mark and a clear, restrained silhouette. */
+.brand-insignia--masthead .brand-insignia__emblem {
+    inset: 0;
+    animation: none;
+}
+.brand-insignia--masthead .brand-insignia__traces {
+    inset: -5%;
+    width: 110%;
+    height: 110%;
+    opacity: 0.75;
+}
+.brand-insignia--masthead .brand-insignia__aura {
+    inset: -18%;
+    opacity: 0.55;
+}
+.brand-insignia--masthead .brand-insignia__fins,
+.brand-insignia--masthead .brand-insignia__orbit--two,
+.brand-insignia--masthead .brand-insignia__scan,
+.brand-insignia--masthead .brand-insignia__spark {
+    display: none;
+}
+.brand-insignia--masthead .brand-insignia__orbit {
+    border-width: 1px;
+    opacity: 0.35;
+}
+.brand-insignia--still *,
+.brand-insignia--still *::before,
+.brand-insignia--still *::after {
+    animation-play-state: paused !important;
+    transition: none !important;
+}
+.brand-insignia--still .brand-insignia__emblem {
+    animation: none;
+    transform: none;
+}
+.brand-insignia--still .brand-insignia__echo {
+    display: none;
+}
+
+@keyframes brand-orbit {
+    to {
+        transform: rotate(360deg);
+    }
+}
+@keyframes brand-orbit-oblique {
+    from {
+        transform: rotate(20deg) scaleY(0.7);
+    }
+    to {
+        transform: rotate(380deg) scaleY(0.7);
+    }
+}
+@keyframes brand-rail-orbit {
+    from {
+        transform: scaleY(0.72) rotate(0);
+    }
+    to {
+        transform: scaleY(0.72) rotate(360deg);
+    }
+}
+@keyframes brand-aura-breathe {
+    to {
+        transform: scale(1.08);
+    }
+}
+@keyframes brand-node-breathe {
+    to {
+        opacity: 0.35;
+    }
+}
+@keyframes brand-emblem-float {
+    0%,
+    100% {
+        transform: translateY(0) rotateX(var(--brand-tilt-x))
+            rotateY(var(--brand-tilt-y));
+    }
+    50% {
+        transform: translateY(-2.5%) rotateX(var(--brand-tilt-x))
+            rotateY(var(--brand-tilt-y));
+    }
+}
+@keyframes brand-trace {
+    to {
+        stroke-dashoffset: -100;
+    }
+}
+@keyframes brand-scan {
+    0%,
+    100% {
+        transform: translateY(-18%) scaleX(0.8);
+        opacity: 0.12;
+    }
+    50% {
+        transform: translateY(24%) scaleX(1.1);
+        opacity: 0.45;
+    }
+}
+@keyframes brand-spark {
+    to {
+        opacity: 0.2;
+        transform: scale(0.6) rotate(20deg);
+    }
+}
+@keyframes brand-prism-rock {
+    from {
+        transform: rotate(10deg);
+    }
+    to {
+        transform: rotate(30deg);
+    }
+}
+@keyframes brand-neon-portal {
+    from {
+        transform: rotate(38deg) scale(0.97);
+    }
+    to {
+        transform: rotate(48deg) scale(1.04);
+    }
+}
+@keyframes brand-liquid-morph {
+    from {
+        border-radius: 40% 60% 64% 36% / 48% 41% 59% 52%;
+        transform: rotate(-10deg);
+    }
+    to {
+        border-radius: 58% 42% 39% 61% / 35% 57% 43% 65%;
+        transform: rotate(20deg);
+    }
+}
+@keyframes brand-lens-rock {
+    from {
+        transform: rotate(-28deg) scaleY(0.84);
+    }
+    to {
+        transform: rotate(-17deg) scaleY(1);
+    }
+}
+@keyframes brand-gallery-orbit {
+    from {
+        transform: rotateX(55deg) rotate(0);
+    }
+    to {
+        transform: rotateX(55deg) rotate(360deg);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .brand-insignia *,
+    .brand-insignia *::before,
+    .brand-insignia *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+    .brand-insignia__emblem {
+        transform: none !important;
+    }
+    .brand-insignia .brand-insignia__image {
+        transform: none !important;
+    }
+    .brand-insignia__echo {
+        display: none;
+    }
+}

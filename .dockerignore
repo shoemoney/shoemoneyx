@@ -1,0 +1,13 @@
+node_modules
+feeder/node_modules
+vendor
+storage/logs/*
+storage/framework/cache/*
+.env
+.env.*
+.patches
+public/build
+.git
+tests
+*.md
+dump.rdb

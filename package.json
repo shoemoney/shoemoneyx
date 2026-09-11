@@ -1,0 +1,39 @@
+{
+    "$schema": "https://www.schemastore.org/package.json",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "vite build",
+        "dev": "vite",
+        "test:feeder": "node --test feeder/feed.test.mjs"
+    },
+    "devDependencies": {
+        "@tailwindcss/vite": "^4.0.0",
+        "concurrently": "^10.0.3",
+        "laravel-vite-plugin": "^3.1",
+        "tailwindcss": "^4.0.0",
+        "vite": "^8.0.0"
+    },
+    "optionalDependencies": {
+        "@laravel/multiplex": "^0.4.1"
+    },
+    "dependencies": {
+        "@fortawesome/fontawesome-common-types": "file:.fa-pro/fortawesome-fontawesome-common-types-7.3.1.tgz",
+        "@fortawesome/fontawesome-svg-core": "file:.fa-pro/fortawesome-fontawesome-svg-core-7.3.1.tgz",
+        "@fortawesome/pro-regular-svg-icons": "file:.fa-pro/fortawesome-pro-regular-svg-icons-7.3.1.tgz",
+        "@fortawesome/pro-solid-svg-icons": "file:.fa-pro/fortawesome-pro-solid-svg-icons-7.3.1.tgz",
+        "@vitejs/plugin-vue": "^6.0.8",
+        "cryptocurrency-icons": "^0.18.1",
+        "dotenv": "^17.4.2",
+        "echarts": "^6.1.0",
+        "ioredis": "^6.0.0",
+        "laravel-echo": "^2.4.0",
+        "mysql2": "^3.24.3",
+        "pusher-js": "^8.6.0",
+        "three": "^0.185.1",
+        "vue": "^3.5.42",
+        "vue-echarts": "^8.2.0",
+        "vue-router": "^5.3.1",
+        "ws": "^8.21.3"
+    }
+}

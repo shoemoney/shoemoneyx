@@ -1,0 +1,83 @@
+{
+    "_about": "Mean Reversion (was WS9). Pair with --mutate so rounds climb from the champion. Format: key => list of scalar values; every key starts with 'mr.'; this _about key is stripped on load.",
+    "mr.timeframe": [
+        "15s",
+        "30s",
+        "45s",
+        "1m",
+        "2m",
+        "3m",
+        "5m",
+        "15m"
+    ],
+    "mr.lookback": [
+        20,
+        40,
+        60,
+        120,
+        240
+    ],
+    "mr.entry_z": [
+        1.5,
+        2,
+        2.5,
+        3
+    ],
+    "mr.exit_z": [
+        0,
+        0.3,
+        0.5,
+        1
+    ],
+    "mr.stop_z": [
+        3,
+        3.5,
+        4,
+        5
+    ],
+    "mr.max_hold_bars": [
+        30,
+        60,
+        120,
+        240,
+        480
+    ],
+    "mr.qty_pct": [
+        5,
+        10,
+        15,
+        25
+    ],
+    "mr.leverage": [
+        1,
+        1.5,
+        2,
+        3
+    ],
+    "mr.trend_ma": [
+        0,
+        20,
+        50,
+        100
+    ],
+    "mr.vol_min_pct": [
+        0,
+        0.02,
+        0.05
+    ],
+    "mr.tsl_pct": [
+        0,
+        0.3,
+        0.5,
+        1
+    ],
+    "mr.cooldown_bars": [
+        0,
+        5,
+        15
+    ],
+    "mr.band": [
+        "zscore",
+        "bollinger"
+    ]
+}

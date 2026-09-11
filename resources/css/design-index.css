@@ -1,0 +1,886 @@
+.design-index {
+    --di-bg: #000;
+    --di-panel: #121419;
+    --di-ink: #f3f7ff;
+    --di-muted: #b4bdcc;
+    --di-line: #282a30;
+    --di-orange: #51c8ff;
+    --di-mono: "IBM Plex Mono", monospace;
+    min-height: 100vh;
+    overflow-x: clip;
+    background: var(--di-bg);
+    color: var(--di-ink);
+    font:
+        14px "Outfit",
+        sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background-image: radial-gradient(
+        ellipse at 70% 0,
+        #1884ee12,
+        transparent 28%
+    );
+}
+.design-index *,
+.design-index *::before,
+.design-index *::after {
+    box-sizing: border-box;
+}
+.design-index a {
+    color: inherit;
+    text-decoration: none;
+}
+.design-index h1,
+.design-index h2,
+.design-index p {
+    margin: 0;
+}
+.design-index button {
+    font: inherit;
+    cursor: pointer;
+}
+.design-index a:focus-visible,
+.design-index button:focus-visible {
+    outline: 2px solid var(--di-orange);
+    outline-offset: 5px;
+}
+.di-skip {
+    position: fixed;
+    z-index: 30;
+    top: -80px;
+    left: 16px;
+    background: var(--di-orange);
+    color: var(--di-bg) !important;
+    padding: 12px 18px;
+}
+.di-skip:focus {
+    top: 16px;
+}
+.di-shell {
+    width: min(1584px, 100%);
+    padding: 0 40px;
+    margin: auto;
+}
+.di-header {
+    height: 88px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    border-bottom: 1px solid var(--di-line);
+}
+.di-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.di-brand-insignia {
+    --brand-size: 50px;
+    flex-shrink: 0;
+}
+.di-brand strong {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.9px;
+}
+.di-brand strong > span {
+    color: var(--di-orange);
+}
+.di-brand > small {
+    font: 8px var(--di-mono);
+    letter-spacing: 1.5px;
+    color: var(--di-muted);
+    border-left: 1px solid var(--di-line);
+    padding-left: 17px;
+    margin-left: 10px;
+}
+.di-desk-link {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    font-size: 11px;
+    border: 1px solid #383a40;
+    padding: 10px 14px;
+    transition:
+        border-color 0.2s,
+        background 0.2s;
+}
+.di-desk-link:hover {
+    border-color: var(--di-orange);
+    background: #279fef0c;
+}
+.di-intro {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 30px;
+    padding: 46px 0 38px;
+}
+.di-eyebrow {
+    font: 9px var(--di-mono);
+    letter-spacing: 1px;
+    color: var(--di-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.di-eyebrow > i {
+    width: 5px;
+    height: 5px;
+    background: var(--di-orange);
+    border-radius: 50%;
+    box-shadow: 0 0 10px #37bcff77;
+}
+.di-intro h1 {
+    font-size: clamp(33px, 3.7vw, 55px);
+    line-height: 1.1;
+    letter-spacing: -2px;
+    font-weight: 500;
+    margin-top: 15px;
+}
+.di-intro h1 em {
+    color: var(--di-orange);
+    font-style: normal;
+}
+.di-intro p {
+    color: var(--di-muted);
+    font-size: 12px;
+    margin-top: 13px;
+    line-height: 1.6;
+}
+.di-collection-mark {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    text-align: right;
+    padding-left: 20px;
+    flex-shrink: 0;
+}
+.di-hero-insignia {
+    --brand-size: 146px;
+}
+.di-collection-count > span,
+.di-collection-count > small {
+    display: block;
+    font: 7px var(--di-mono);
+    letter-spacing: 1px;
+    color: var(--di-muted);
+}
+.di-collection-mark strong {
+    display: block;
+    font:
+        300 63px/1.2 "Barlow Condensed",
+        sans-serif;
+    letter-spacing: 1px;
+}
+.di-collection-mark strong > span {
+    color: #505158;
+    padding-inline: 8px;
+}
+.di-collection-count > small {
+    letter-spacing: 1.8px;
+    font-size: 6px;
+}
+.di-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    border-bottom: 1px solid var(--di-line);
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+}
+.di-toolbar nav {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.di-toolbar button {
+    border: 1px solid transparent;
+    color: #b4b5bc;
+    background: transparent;
+    padding: 9px 13px;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    border-radius: 3px;
+    transition:
+        background 0.2s,
+        color 0.2s;
+}
+.di-toolbar button > span {
+    font: 8px var(--di-mono);
+    opacity: 0.6;
+}
+.di-toolbar button:hover {
+    color: var(--di-ink);
+    background: #17191e;
+}
+.di-toolbar button[aria-pressed="true"] {
+    color: var(--di-ink);
+    background: #202229;
+    border-color: #34363f;
+}
+.di-toolbar button[aria-pressed="true"] > span {
+    color: var(--di-orange);
+    opacity: 1;
+}
+.di-demo-note {
+    color: var(--di-muted);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font: 7px var(--di-mono);
+    letter-spacing: 0.6px;
+    white-space: nowrap;
+}
+.di-demo-note > i,
+.di-demo-note > svg {
+    color: var(--di-orange);
+    font-size: 12px;
+}
+.di-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 28px 22px;
+}
+.di-edition-links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 24px;
+}
+.di-edition-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin: -7px 0 22px;
+    font: 8px var(--di-mono);
+    color: var(--di-orange);
+    letter-spacing: 0.6px;
+}
+.di-edition-bar > span {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+.di-edition-bar b {
+    font-weight: 400;
+    color: var(--di-muted);
+    margin-left: 5px;
+}
+.di-edition-bar button {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: transparent;
+    border: 0;
+    padding: 8px 0 8px 12px;
+    font-size: 10px;
+    color: var(--di-ink);
+}
+.di-edition-bar button > span {
+    color: var(--di-orange);
+    font-size: 16px;
+}
+.di-edition-bar button:hover {
+    color: var(--di-orange);
+}
+.design-index .di-new-design {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    color: #62c9ef;
+    padding-block: 7px;
+}
+.di-new-design > span {
+    border: 1px solid #217697;
+    background: #082634;
+    padding: 3px 5px;
+    font-size: 7px;
+}
+.design-index .di-new-design:hover {
+    color: #c8f2ff;
+}
+.di-brand-treatment {
+    color: #9ca9bc;
+    font: 9px var(--di-mono);
+    padding: 11px 0 0 26px;
+}
+.di-brand-treatment > span {
+    color: var(--card-accent);
+    font-size: 7px;
+    letter-spacing: 1px;
+    margin-right: 8px;
+}
+.di-enhancements {
+    list-style: decimal;
+    margin: 14px 0 0 26px;
+    padding: 12px 0 0 20px;
+    border-top: 1px solid var(--di-line);
+    color: #b7b8bf;
+    font-size: 11px;
+    line-height: 1.85;
+}
+.di-enhancements li::marker {
+    color: var(--card-accent);
+    font: 8px var(--di-mono);
+}
+@media (max-width: 800px) {
+    .di-edition-bar b {
+        display: none;
+    }
+}
+@media (max-width: 520px) {
+    .di-edition-bar {
+        gap: 8px;
+        letter-spacing: 0;
+        font-size: 7px;
+        margin-bottom: 16px;
+    }
+    .di-edition-bar > span {
+        gap: 5px;
+    }
+    .di-edition-bar button {
+        font-size: 9px;
+        gap: 8px;
+        padding-left: 0;
+    }
+}
+.di-card {
+    min-width: 0;
+    display: block;
+    padding-bottom: 19px;
+    border-bottom: 1px solid var(--di-line);
+    position: relative;
+    animation: di-arrive 0.45s min(calc(var(--card-order) * 0.025s), 0.2s) both
+        ease-out;
+}
+.di-thumbnail {
+    position: relative;
+    aspect-ratio: 8 / 5;
+    overflow: hidden;
+    background: var(--di-panel);
+    border: 1px solid #33353b;
+    border-radius: 5px;
+    transition:
+        border-color 0.25s,
+        box-shadow 0.25s;
+    isolation: isolate;
+}
+.di-thumbnail > img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+    object-position: top center;
+    transition:
+        transform 0.55s cubic-bezier(0.2, 0.65, 0.3, 1),
+        filter 0.4s;
+}
+.di-thumbnail::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 1px solid #ffffff08;
+    pointer-events: none;
+    z-index: 2;
+    border-radius: 4px;
+}
+.di-preview-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    padding: 6px 8px;
+    font: 6px var(--di-mono);
+    letter-spacing: 0.6px;
+    background: #080a0fe6;
+    color: #dededb;
+    border: 1px solid #ffffff22;
+    backdrop-filter: blur(6px);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition:
+        transform 0.2s,
+        opacity 0.2s;
+}
+.di-preview-badge > i,
+.di-preview-badge > svg {
+    color: var(--card-accent);
+}
+.di-open-overlay {
+    position: absolute;
+    inset: auto 12px 12px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #111319eb;
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--card-accent) 35%, #282a30);
+    font-size: 12px;
+    color: var(--di-ink);
+    transform: translateY(12px);
+    opacity: 0;
+    transition:
+        transform 0.25s,
+        opacity 0.25s;
+}
+.di-open-overlay > i,
+.di-open-overlay > svg {
+    color: var(--card-accent);
+}
+.di-card-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-top: 15px;
+}
+.di-number {
+    font: 10px var(--di-mono);
+    color: var(--card-accent);
+    align-self: flex-start;
+    margin-top: 6px;
+}
+.di-card-info h2 {
+    font-size: 22px;
+    line-height: 1.1;
+    font-weight: 500;
+    letter-spacing: -0.5px;
+}
+.di-card-info p {
+    font: 8px var(--di-mono);
+    color: var(--di-muted);
+    margin-top: 6px;
+}
+.di-card-arrow {
+    width: 31px;
+    height: 31px;
+    display: grid;
+    place-items: center;
+    color: #c2c2c6;
+    border: 1px solid #31333a;
+    border-radius: 50%;
+    margin-left: auto;
+    font-size: 13px;
+    transition:
+        color 0.2s,
+        border-color 0.2s,
+        background 0.2s,
+        transform 0.2s;
+}
+.di-description {
+    padding-left: 26px;
+    padding-top: 11px;
+    font-size: 11px;
+    color: #a2a3aa;
+    line-height: 1.5;
+}
+.di-card:hover .di-thumbnail,
+.di-card:focus-visible .di-thumbnail {
+    border-color: var(--card-accent);
+    box-shadow: 0 0 26px color-mix(in srgb, var(--card-accent) 12%, transparent);
+}
+.di-card:hover .di-thumbnail > img,
+.di-card:focus-visible .di-thumbnail > img {
+    transform: scale(1.04);
+    filter: brightness(0.82);
+}
+.di-card:hover .di-preview-badge,
+.di-card:hover .di-open-overlay,
+.di-card:focus-visible .di-preview-badge,
+.di-card:focus-visible .di-open-overlay {
+    opacity: 1;
+    transform: none;
+}
+.di-card:hover .di-card-arrow {
+    color: #101114;
+    background: var(--card-accent);
+    border-color: var(--card-accent);
+    transform: rotate(5deg);
+}
+.di-result-count {
+    text-align: center;
+    font: 9px var(--di-mono);
+    color: var(--di-muted);
+    padding: 25px 0 33px;
+}
+.di-footer {
+    border-top: 1px solid var(--di-line);
+    padding: 23px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    color: var(--di-muted);
+    font: 8px var(--di-mono);
+}
+.di-footer > span {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+.di-footer b {
+    color: var(--di-ink);
+    font:
+        700 12px "Outfit",
+        sans-serif;
+}
+.di-footer a {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.di-footer a:hover {
+    color: var(--di-orange);
+}
+@keyframes di-arrive {
+    from {
+        opacity: 0;
+        transform: translateY(9px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+@media (max-width: 1050px) {
+    .di-hero-insignia {
+        --brand-size: 112px;
+    }
+    .di-collection-mark {
+        gap: 12px;
+    }
+    .di-shell {
+        padding-inline: 26px;
+    }
+    .di-brand > small {
+        display: none;
+    }
+    .di-grid {
+        gap: 26px 16px;
+    }
+    .di-description {
+        font-size: 10px;
+    }
+    .di-card-info h2 {
+        font-size: 20px;
+    }
+    .di-intro h1 {
+        font-size: 41px;
+    }
+    .di-collection-mark strong {
+        font-size: 55px;
+    }
+    .di-demo-note {
+        font-size: 6px;
+        letter-spacing: 0.3px;
+    }
+}
+@media (max-width: 800px) {
+    .di-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .di-shell {
+        padding-inline: 20px;
+    }
+    .di-intro {
+        padding-block: 35px 30px;
+    }
+    .di-collection-mark {
+        display: none;
+    }
+    .di-toolbar {
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .di-toolbar button {
+        padding-inline: 12px;
+    }
+    .di-description {
+        font-size: 11px;
+    }
+    .di-card-info h2 {
+        font-size: 22px;
+    }
+}
+@media (max-width: 520px) {
+    .di-shell {
+        padding-inline: 16px;
+    }
+    .di-header {
+        height: 74px;
+        gap: 12px;
+    }
+    .di-brand strong {
+        font-size: 19px;
+    }
+    .di-brand {
+        gap: 7px;
+    }
+    .di-brand-insignia {
+        --brand-size: 38px;
+    }
+    .di-desk-link {
+        font-size: 9px;
+        gap: 8px;
+        padding: 8px;
+    }
+    .di-intro {
+        padding-block: 30px 25px;
+    }
+    .di-eyebrow {
+        font-size: 7px;
+        letter-spacing: 0.3px;
+    }
+    .di-intro h1 {
+        font-size: 34px;
+        letter-spacing: -1.3px;
+        margin-top: 13px;
+    }
+    .di-intro p {
+        font-size: 11px;
+        max-width: 280px;
+        margin-top: 10px;
+    }
+    .di-toolbar {
+        padding-bottom: 13px;
+        margin-bottom: 20px;
+    }
+    .di-toolbar nav {
+        gap: 2px;
+        width: 100%;
+        justify-content: space-between;
+    }
+    .di-toolbar button {
+        font-size: 10px;
+        padding: 9px 8px;
+        gap: 8px;
+    }
+    .di-toolbar button > span {
+        font-size: 8px;
+    }
+    .di-grid {
+        grid-template-columns: 1fr;
+        gap: 22px;
+    }
+    .di-thumbnail {
+        border-radius: 5px;
+    }
+    .di-description {
+        padding-top: 9px;
+    }
+    .di-card {
+        padding-bottom: 17px;
+    }
+    .di-card-info {
+        padding-top: 13px;
+    }
+    .di-card-info h2 {
+        font-size: 23px;
+    }
+    .di-footer > span > span {
+        display: none;
+    }
+    .di-demo-note {
+        display: flex;
+        font-size: 6px;
+    }
+    .di-toolbar {
+        flex-wrap: wrap;
+    }
+    .di-footer {
+        padding-block: 20px;
+    }
+}
+@media (max-width: 360px) {
+    .di-brand strong {
+        font-size: 16px;
+    }
+    .di-desk-link {
+        font-size: 8px;
+        padding: 6px;
+        gap: 5px;
+    }
+    .di-edition-bar {
+        gap: 10px;
+        font-size: 7px;
+    }
+    .di-edition-bar button {
+        font-size: 9px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .design-index *,
+    .design-index *::before,
+    .design-index *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
+/* Final signature pass: clear type, black surfaces, and the blue brand X. */
+.design-index .di-brand strong > span,
+.design-index .di-brand-x {
+    color: #32b9ff;
+}
+.design-index .di-brand > small {
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+.design-index .di-eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.7px;
+}
+.design-index .di-intro p {
+    font-size: 15px;
+    max-width: 560px;
+}
+.design-index .di-desk-link {
+    min-height: 44px;
+    font-size: 13px;
+}
+.design-index .di-collection-count > span {
+    font-size: 10px;
+}
+.design-index .di-collection-count > small {
+    font-size: 9px;
+    letter-spacing: 1px;
+}
+.design-index .di-toolbar button {
+    min-height: 44px;
+    font-size: 13px;
+}
+.design-index .di-toolbar button > span {
+    font-size: 11px;
+}
+.design-index .di-demo-note {
+    font-size: 10px;
+}
+.design-index .di-edition-bar {
+    font-size: 11px;
+}
+.design-index .di-edition-bar button {
+    min-height: 44px;
+    font-size: 13px;
+}
+.design-index .di-new-design > span {
+    font-size: 9px;
+}
+.design-index .di-card-info h2 {
+    font-size: 27px;
+    font-weight: 550;
+}
+.design-index .di-card-info p {
+    font-size: 11px;
+    line-height: 1.5;
+}
+.design-index .di-number {
+    font-size: 12px;
+}
+.design-index .di-description {
+    font-size: 14px;
+    color: #bdc6d5;
+}
+.design-index .di-brand-treatment {
+    font-size: 11px;
+    line-height: 1.7;
+    color: #b5c2d6;
+}
+.design-index .di-brand-treatment > span {
+    font-size: 10px;
+    letter-spacing: 0.6px;
+}
+.design-index .di-enhancements {
+    font-size: 13px;
+    color: #c7cfdd;
+}
+.design-index .di-enhancements li::marker {
+    font-size: 11px;
+}
+.design-index .di-preview-badge {
+    font-size: 10px;
+}
+.design-index .di-open-overlay {
+    font-size: 14px;
+}
+.design-index .di-result-count {
+    font-size: 12px;
+    color: #b4bdcc;
+}
+.design-index .di-footer {
+    font-size: 12px;
+}
+.design-index .di-footer > span > span {
+    font-size: 10px;
+}
+@media (max-width: 1100px) {
+    .design-index .di-collection-count {
+        display: none;
+    }
+    .design-index .di-collection-mark {
+        padding-left: 0;
+    }
+    .design-index .di-demo-note {
+        white-space: normal;
+        line-height: 1.5;
+    }
+}
+@media (max-width: 520px) {
+    .design-index .di-brand strong {
+        font-size: 18px;
+    }
+    .design-index .di-desk-link {
+        font-size: 11px;
+        gap: 6px;
+        padding: 8px;
+    }
+    .design-index .di-eyebrow {
+        font-size: 10px;
+    }
+    .design-index .di-intro p {
+        font-size: 14px;
+    }
+    .design-index .di-toolbar nav {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        gap: 5px;
+    }
+    .design-index .di-toolbar button {
+        padding-inline: 10px;
+        font-size: 12px;
+    }
+    .design-index .di-toolbar button > span {
+        font-size: 10px;
+    }
+    .design-index .di-edition-bar {
+        flex-wrap: wrap;
+        gap: 3px 12px;
+        font-size: 11px;
+    }
+    .design-index .di-edition-bar button {
+        padding-left: 0;
+        font-size: 12px;
+    }
+    .design-index .di-card-info h2 {
+        font-size: 26px;
+    }
+    .design-index .di-description {
+        font-size: 14px;
+    }
+}
+@media (max-width: 360px) {
+    .design-index .di-brand strong {
+        font-size: 16px;
+    }
+    .design-index .di-desk-link {
+        font-size: 10px;
+    }
+    .design-index .di-brand-insignia {
+        --brand-size: 34px;
+    }
+}

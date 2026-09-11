@@ -1,0 +1,14 @@
+[Unit]
+Description=shoemoneyx desk watchdog (pings the desk host, alerts via Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/shoemoneyx-watchdog.env
+ExecStart=/usr/local/bin/shoemoneyx-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

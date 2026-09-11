@@ -1,0 +1,42 @@
+# Sweep farm node. Point REDIS_HOST / DB_HOST at the desk host (the machine running MariaDB + Redis).
+#   docker compose up -d worker            # this box joins the backtests queue with all its cores
+#   WORKERS=4 docker compose up -d worker   # or cap it (Pis)
+# Roles feeder/desk are for the desk host itself, if you'd rather run them containerised.
+services:
+  worker:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      ROLE: worker
+      WORKERS: ${WORKERS:-0}
+      REDIS_CLIENT: predis
+      APP_ENV: production
+      APP_KEY: ${APP_KEY}
+      APP_NAME: shoemoneyx
+      REDIS_HOST: ${REDIS_HOST:-desk}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PREFIX: shoemoneyx-
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      DB_CONNECTION: mysql
+      DB_HOST: ${DB_HOST:-desk}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_DATABASE: shoemoneyx
+      DB_USERNAME: ${DB_USERNAME:-shoemoneyx}
+      DB_PASSWORD: ${DB_PASSWORD:-shoemoneyx}
+      LOG_CHANNEL: stderr
+  feeder:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: .
+    restart: unless-stopped
+    profiles: [desk]
+    environment:
+      ROLE: feeder
+      APP_NAME: shoemoneyx
+      REDIS_HOST: ${REDIS_HOST:-desk}
+      REDIS_PREFIX: shoemoneyx-
+      DB_HOST: ${DB_HOST:-desk}
+      DB_DATABASE: shoemoneyx
+      DB_USERNAME: ${DB_USERNAME:-shoemoneyx}
+      DB_PASSWORD: ${DB_PASSWORD:-shoemoneyx}

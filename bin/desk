@@ -1,0 +1,84 @@
+#!/usr/bin/env zsh
+# shoemoneyx desk helper — zsh. Usage: bin/desk <command>
+#   up        start redis/mysql (brew) if needed, run desk:run in the foreground
+#   dev       vite dev server + php artisan serve + desk:run, side by side (zsh jobs)
+#   bg        run everything detached: web, queue worker, websocket feeder, desk loop
+#   pm2       pm2-managed: bin/desk pm2 start|stop|restart|logs|status  (npm i -g pm2; pm2 startup once for boot)
+#   feed      run the Coinbase websocket feeder in the foreground
+#   stop      ask the loop to stop cleanly
+#   status    desk:ctl status
+#   cycle     one cycle now
+#   risk      one RISK sweep now
+#   report    today's report (add --send for Telegram)
+#   backtest  desk:backtest "$@"
+#   reset     wipe the paper book
+#   worker N  start N backtest queue workers here (sweep farm node)
+#   sweep     desk:sweep "$@"  (add --queue to use the farm)
+#   image     build the multi-arch docker image (bin/desk image --push publishes to ghcr.io)
+#   push      commit everything + push to GitHub (bin/desk push "message")
+#   setup     first-time install (composer, npm, key, migrate, sync, backfill)
+set -euo pipefail
+cd "${0:a:h}/.."
+
+art() { php artisan "$@" }
+
+case "${1:-help}" in
+  setup)
+    [[ -f .env ]] || cp .env.example .env
+    composer install --no-interaction
+    grep -q '^APP_KEY=base64' .env || art key:generate
+    npm install --include=dev --no-audit --no-fund
+    npm run build
+    art migrate --force
+    art market:sync-products
+    art market:sync-candles --hours=72
+    art market:backfill --days=30
+    echo "\n✅ setup done. Next: bin/desk dev   (then open http://localhost:8000)"
+    ;;
+  up)
+    pgrep -x redis-server >/dev/null || (brew services start redis >/dev/null 2>&1 || redis-server --daemonize yes)
+    art desk:run
+    ;;
+  dev)
+    pgrep -x redis-server >/dev/null || (brew services start redis >/dev/null 2>&1 || redis-server --daemonize yes)
+    trap 'kill 0' EXIT INT TERM
+    npm run dev &
+    art serve --port="${PORT:-8000}" &
+    art queue:work --tries=1 --timeout=3600 &
+    node feeder/feed.mjs &
+    art desk:run
+    ;;
+  pm2)      case "${2:-start}" in
+              start)   pgrep -x redis-server >/dev/null || (brew services start redis >/dev/null 2>&1 || redis-server --daemonize yes); pm2 start ecosystem.config.cjs && pm2 save ;;
+              stop)    pm2 stop ecosystem.config.cjs ;;
+              restart) pm2 restart ecosystem.config.cjs ;;
+              logs)    pm2 logs --lines 50 ;;
+              *)       pm2 status ;;
+            esac ;;
+  bg)
+    pkill -f 'artisan desk:run' 2>/dev/null || true; pkill -f 'feeder/feed.mjs' 2>/dev/null || true
+    pkill -f 'artisan serve' 2>/dev/null || true; pkill -f 'artisan queue:work' 2>/dev/null || true; sleep 1
+    nohup php artisan serve --port="${PORT:-8000}" > storage/logs/serve.log 2>&1 &!
+    nohup php artisan queue:work --tries=1 --timeout=3600 > storage/logs/queue.log 2>&1 &!
+    nohup node feeder/feed.mjs > storage/logs/feeder.log 2>&1 &!
+    nohup php artisan desk:run > storage/logs/desk-run.log 2>&1 &!
+    sleep 2; pgrep -fl 'artisan serve|queue:work|feed.mjs|desk:run' | sed 's/^/  /'
+    echo "logs → storage/logs/{serve,queue,feeder,desk-run}.log · dashboard http://localhost:${PORT:-8000}"
+    ;;
+  feed)     node feeder/feed.mjs ;;
+  stop)     art desk:ctl stop; pkill -f 'feeder/feed.mjs' 2>/dev/null; pkill -f 'artisan serve' 2>/dev/null; pkill -f 'artisan queue:work' 2>/dev/null; true ;;
+  status)   art desk:ctl status ;;
+  cycle)    art desk:cycle ;;
+  risk)     art desk:risk ;;
+  report)   shift; art desk:report "$@" ;;
+  backtest) shift; art desk:backtest "$@" ;;
+  reset)    art desk:ctl paper-reset ;;
+  worker)   n="${2:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}"
+            for i in $(seq 1 "$n"); do nohup php artisan queue:work redis --queue=backtests,backtests-light --tries=1 --timeout=3600 --sleep=2 --max-jobs=200 --name="worker-$(hostname -s)-$i" > storage/logs/worker-$i.log 2>&1 &! done
+            echo "$n workers on queue=backtests → storage/logs/worker-*.log   (stop: pkill -f queue=backtests)" ;;
+  sweep)    shift; art desk:sweep "$@" ;;
+  image)    docker buildx create --use --name shoemoneyx 2>/dev/null || true
+            docker buildx build --platform linux/arm64,linux/amd64 -t ghcr.io/shoemoney/shoemoneyx:latest ${2:---load} . ;;
+  push)     shift; git add -A; git commit -qm "${1:-wip $(date +%F\ %H:%M)}" || true; git push -q origin HEAD; echo "pushed $(git rev-parse --short HEAD)" ;;
+  *)        sed -n '2,15p' "$0" ;;
+esac

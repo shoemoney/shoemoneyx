@@ -1,0 +1,231 @@
+/* Production Nanites keeps the visual field, with readable source and account context. */
+.dx {
+    color-scheme: dark;
+}
+.dx img[src^="/coin-icons/ondo.png"] {
+    background: #fff;
+    border-radius: 50%;
+}
+.dx .dx-mobile-feed-status {
+    display: none;
+}
+@media (max-width: 1020px) {
+    .dx.dx .dx-headline > .dx-mobile-feed-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+        color: #a9d7f5;
+        font: 11px/1.4 var(--mono);
+        letter-spacing: 0.02em;
+    }
+}
+.dx.dx-nanites-release .dx-core-caption > strong {
+    font-family: "Outfit", sans-serif;
+    font-size: clamp(22px, 2.1vw, 30px);
+    line-height: 1.2;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: #e4f4ff;
+    max-width: 100%;
+    text-align: center;
+    text-wrap: balance;
+}
+.dx.dx-nanites-release .dx-core-caption > small {
+    max-width: 390px;
+    width: 100%;
+    font:
+        400 13px/1.6 "Outfit",
+        sans-serif;
+    letter-spacing: 0.015em;
+    color: #bfd9ed;
+    padding: 8px 12px 0;
+    text-align: center;
+    text-wrap: pretty;
+    text-shadow:
+        0 2px 6px #000,
+        0 0 15px #000;
+}
+.dx.dx-nanites-release .dx-render-note {
+    display: none;
+}
+.dx.dx-nanites-release .dx-footer > a {
+    color: #88cfff;
+    text-decoration: none;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.dx.dx-nanites-release .dx-footer > a:hover {
+    text-decoration: underline;
+}
+.dx.dx-nanites-release .dx-stage-head .dx-dot.dx-dot-off,
+.dx.dx-front-page .dx-dot.dx-dot-off {
+    background: #77869a;
+    box-shadow: none;
+    animation: none;
+}
+.dx .dx-pipe-flow.dx-pipe-inactive::after {
+    animation: none;
+    opacity: 0;
+}
+.dx.dx-front-page .dx-agent-off {
+    opacity: 0.72;
+}
+.dx-live-context {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin: 22px 0;
+}
+.dx-live-context-card {
+    min-width: 0;
+    padding: 20px 22px 16px;
+    border: 1px solid #28557970;
+    border-radius: 12px;
+    background: linear-gradient(130deg, #06121c, #020507 65%);
+    box-shadow: inset 0 1px #70b7ff0d;
+}
+.dx-live-context-card > header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+.dx-live-context-card > header > span {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #cee6f9;
+    font: 600 12px/1.3 var(--mono);
+    letter-spacing: 0.06em;
+}
+.dx-live-context-card > header > span > :is(i, svg) {
+    color: #55baff;
+}
+.dx-live-context-card > header > small {
+    font: 11px/1.4 var(--mono);
+    color: #a7bfd4;
+}
+.dx-live-context-card > dl {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin: 0;
+}
+.dx-live-context-card > dl > div {
+    min-width: 0;
+}
+.dx-live-context-card dt {
+    margin-bottom: 7px;
+    color: #a9bfd2;
+    font:
+        12px/1.3 "Outfit",
+        sans-serif;
+}
+.dx-live-context-card dd {
+    margin: 0;
+    color: #96d6ff;
+    font: 600 clamp(16px, 1.5vw, 22px) / 1.3 var(--mono);
+    letter-spacing: -0.035em;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+}
+.dx-live-context-card > p {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 9px 16px;
+    margin: 20px 0 0;
+    padding-top: 13px;
+    border-top: 1px solid #40688930;
+    color: #a8bed0;
+    font:
+        12px/1.5 "Outfit",
+        sans-serif;
+}
+.dx-live-context-card a {
+    color: #8ed5ff;
+    white-space: nowrap;
+    text-decoration: none;
+}
+.dx-live-context-card a:hover {
+    text-decoration: underline;
+}
+.dx-live-context-card a:focus-visible,
+.dx.dx-nanites-release .dx-footer > a:focus-visible {
+    outline: 2px solid #92dbff;
+    outline-offset: 4px;
+}
+.dx-live-positions {
+    padding: 16px 0;
+    border-top: 1px solid #467aa64d;
+}
+.dx-live-positions h3 {
+    margin: 0 0 14px;
+    color: #b9dcf5;
+    font: 600 13px/1.4 var(--mono);
+}
+.dx-live-positions > div {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px 0;
+    border-bottom: 1px solid #36556f38;
+}
+.dx-live-positions strong {
+    color: #d2ecff;
+    font: 600 13px/1.4 var(--mono);
+    text-transform: uppercase;
+}
+.dx-live-positions strong small {
+    color: #a4bbd0;
+    font: 11px/1.4 var(--mono);
+}
+.dx-live-positions span {
+    color: #afc9dd;
+    font: 12px/1.5 var(--mono);
+    overflow-wrap: anywhere;
+}
+.dx.dx-front-page .dx-pnl-tag {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+}
+@media (max-width: 980px) {
+    .dx-live-context {
+        grid-template-columns: 1fr;
+    }
+    .dx-live-context-card dd {
+        font-size: 20px;
+    }
+}
+@media (max-width: 600px) {
+    .dx.dx-nanites-release .dx-core-caption > strong {
+        font-size: 24px;
+    }
+    .dx.dx-nanites-release .dx-core-caption > small {
+        font-size: 13px;
+        line-height: 1.55;
+        padding-inline: 2px;
+    }
+    .dx-live-context-card {
+        padding: 17px 15px;
+    }
+    .dx-live-context-card > dl {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+    }
+    .dx-live-context-card dd {
+        font-size: 20px;
+    }
+    .dx.dx-front-page .dx-pnl-tag {
+        font-size: 10px;
+    }
+}
+@media (max-width: 370px) {
+    .dx.dx-nanites-release .dx-core-caption > strong {
+        font-size: 22px;
+    }
+}
