@@ -63,7 +63,7 @@ The open-source desk stays one user per install. Everything social lives on the 
 - [x] Contest entry from the desk: pick a frozen version, run it in an arena seat, report fills + equity to the hub every minute (paper stays local)
 - [x] Tests with a fake hub (Http::fake) for every client call
 
-**Hub side (shoemoneyx-hub, private)** — live at https://git.shoemoney.ai/shoemoney/shoemoneyx-hub, 46 tests, `mode: reported|hosted` contests
+**Hub side (shoemoneyx-hub, private)** — deployed at https://hub.shoemoneyx.com (EC2 t3.small i-0e625f404b5fcf07e, ~$18/mo, `ops/smoke.sh` green); code at https://git.shoemoney.ai/shoemoney/shoemoneyx-hub, 46 tests, `mode: reported|hosted` contests
 - [x] Users, profiles, follow, API tokens issued to desks
 - [x] Strategy archive with versions, comments, search index, activity feed
 - [x] Contests: entry, leaderboard, frozen version, settlement
