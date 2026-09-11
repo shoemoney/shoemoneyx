@@ -80,6 +80,7 @@ INSTANCE_ID="$(aws_ ec2 run-instances \
   --subnet-id "$SUBNET_ID" \
   --security-group-ids "$SG_ID" \
   --associate-public-ip-address \
+  --metadata-options "InstanceMetadataTags=enabled,HttpTokens=required" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$SG_NAME}]" \
   --query 'Instances[0].InstanceId' --output text)"
 log "instance $INSTANCE_ID, waiting for running"

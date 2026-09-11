@@ -1,0 +1,17 @@
+[Unit]
+Description=shoemoneyx desk scheduler (schedule:work — daily report, backtest loop, strategy sync, contest reports)
+After=network-online.target mariadb.service redis-server.service shoemoneyx-first-boot.service
+Requires=shoemoneyx-first-boot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shoemoneyx
+Group=shoemoneyx
+WorkingDirectory=/opt/shoemoneyx
+ExecStart=/usr/bin/php artisan schedule:work
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

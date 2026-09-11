@@ -1,0 +1,17 @@
+[Unit]
+Description=shoemoneyx desk first-boot setup (env, DB, credentials, migrate, product sync)
+After=network-online.target mariadb.service redis-server.service
+Wants=network-online.target
+Before=shoemoneyx-desk.service shoemoneyx-queue.service shoemoneyx-schedule.service shoemoneyx-reverb.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/shoemoneyx-first-boot.sh
+# Idempotent: the script itself no-ops after its first successful run (marker file),
+# so a retry on failure is safe and a reboot never repeats DB/APP_KEY generation.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
