@@ -14,7 +14,8 @@ Order matters. Phase 0 gates everything. Check boxes as they land.
 - [x] `git log -p` grep for keys, IPs (192.168.), hostnames, personal names. Scan done: no real secrets in history, but every proprietary strategy is. Decision: publish as a NEW repo from a single squashed commit of this tree. Never push this history
 - [x] Add LICENSE (MIT or Apache-2.0, pick one), CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md
 - [x] README rewrite: community positioning, "bring your own OpenRouter key," no ShoeMoney strategy lore
-- [ ] Delete the local archive tags and bundle once everything needed is recovered
+- [x] Delete the local archive tags and bundle once everything needed is recovered
+- [x] Published: github.com/shoemoney/shoemoneyx (one squashed commit on `main`), mirrored at git.shoemoney.ai/shoemoney/shoemoneyx
 
 ## Phase 1 — Exchange modularity 🔌
 - [x] Contracts: `MarketData`, `Execution`, `Account`, `Credentials` interfaces + exchange manifest (id, name, spot/perps/ws capabilities)
@@ -76,5 +77,4 @@ The open-source desk stays one user per install. Everything social lives on the 
 - [ ] Hosted tier is paper-only at launch; live keys are self-host only
 
 ## Open questions ❓
-- Public repo name (shoemoneyx?) and org
 - Which exchanges get native adapters after Coinbase (Binance, Kraken, Bybit?)
