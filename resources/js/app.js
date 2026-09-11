@@ -22,6 +22,7 @@ const StrategyBuilder = () => import("./pages/StrategyBuilder.vue");
 const Archive = () => import("./pages/Archive.vue");
 const Exchanges = () => import("./pages/Exchanges.vue");
 const SingularityIndex = () => import("./pages/SingularityIndex.vue");
+const Onboarding = () => import("./pages/Onboarding.vue");
 
 const router = createRouter({
     history: createWebHistory(),
@@ -86,6 +87,7 @@ const router = createRouter({
         { path: "/archive", component: Archive, name: "archive" },
         { path: "/exchanges", component: Exchanges, name: "exchanges" },
         { path: "/settings", component: Settings, name: "settings" },
+        { path: "/onboarding", component: Onboarding, name: "onboarding" },
     ],
 });
 

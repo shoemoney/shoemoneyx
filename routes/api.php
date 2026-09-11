@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\HubAccountController;
 use App\Http\Controllers\Api\HubArchiveController;
 use App\Http\Controllers\Api\HubContestController;
 use App\Http\Controllers\Api\LandingController;
+use App\Http\Controllers\Api\OnboardingController;
 use App\Http\Controllers\Api\OptimizerController;
 use App\Http\Controllers\Api\PositionController;
 use App\Http\Controllers\Api\RunController;
@@ -23,11 +24,20 @@ use App\Http\Controllers\Api\StrategySyncController;
 use App\Http\Controllers\Api\UdfController;
 use App\Http\Middleware\DeskMutationThrottle;
 use App\Http\Middleware\DeskToken;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 
 // The desk is operated inside a private, firewalled network. DeskToken adds an
 // optional master-password layer on top of that access boundary (no-op when unset).
 Route::middleware(DeskToken::class)->group(function () {
+    // master-password needs a real session to authenticate the browser (mirrors DeskAuthController)
+    // — api routes carry no session by default, so start one for just these two endpoints.
+    Route::middleware([EncryptCookies::class, StartSession::class])->group(function () {
+        Route::get('/onboarding', [OnboardingController::class, 'show']);
+        Route::post('/onboarding/{step}', [OnboardingController::class, 'update']);
+    });
+
     Route::get('/landing', [LandingController::class, 'index']);
     Route::get('/status', [StatusController::class, 'index']);
     Route::get('/exchanges', [ExchangeController::class, 'index']);

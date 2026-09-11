@@ -33,6 +33,8 @@ bin/desk dev                  # vite + artisan serve + queue worker + desk:run
 open http://localhost:8000
 ```
 
+First run lands you on `/onboarding` — set a master password (or skip it for a trusted local desk), connect an OpenRouter key, pick an exchange, optionally import a community strategy, and launch in paper mode, all in under five minutes.
+
 Charts need the TradingView Charting Library, which is free but cannot be redistributed. See `public/charting_library/README.md`.
 
 ## Commands

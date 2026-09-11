@@ -4,12 +4,26 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Desk\Onboarding\OnboardingWizard;
+use App\Desk\Settings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class MasterPasswordTest extends TestCase
 {
     use RefreshDatabase;
+
+    // Master-password gating is unrelated to onboarding; mark the wizard complete so the
+    // new root redirect never intercepts these assertions.
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        app(Settings::class)->set('onboarding_state', ['steps' => array_fill_keys(
+            OnboardingWizard::ORDER,
+            ['status' => 'done'],
+        )]);
+    }
 
     public function test_pages_open_when_no_master_password(): void
     {
