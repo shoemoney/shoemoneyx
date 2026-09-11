@@ -60,6 +60,12 @@ class PostOnlyShadowTest extends TestCase
         app(Settings::class)->set('post_only.shadow', true);
     }
 
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
+
     private function seedShadow(array $overrides = []): PostOnlyShadow
     {
         $fill = Fill::create(array_merge([
@@ -231,6 +237,8 @@ class PostOnlyShadowTest extends TestCase
 
     public function test_open_short_creates_a_sell_shadow_at_best_ask(): void
     {
+        // Perps trading halts Friday 17:00-17:59 ET (CFM maintenance); pin a Wednesday so the clock can't fail this.
+        Carbon::setTestNow(Carbon::parse('2026-01-07 15:00:00', 'UTC'));
         config([
             'desk.perps.enabled' => true,
             'desk.perps.paper_margin' => false,

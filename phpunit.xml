@@ -23,6 +23,7 @@
     <php>
         <env name="APP_ENV" value="testing"/>
         <env name="DESK_STRATEGY" value="mr"/>
+        <env name="DESK_PERPS" value="false"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use Carbon\Carbon;
 use App\Desk\Data\ProductStats;
 use App\Desk\Desk;
 use App\Desk\Execution\ExecutionModeMismatchException;
@@ -57,6 +58,12 @@ class DeskExecutionBoundaryTest extends TestCase
         app('App\Desk\Settings')->set('paper.slippage_bps', 0);
         app('App\Desk\Settings')->set('fees.taker_rate', 0.0);
         app('App\Desk\Settings')->set('fees.per_contract_usd', 0);
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
     }
 
     /** A trivial fake executor for tests that only need to prove routing/mode behavior, never a real fill's arithmetic. */
@@ -262,6 +269,8 @@ class DeskExecutionBoundaryTest extends TestCase
 
     public function test_close_net_pnl_and_cash_both_reflect_entry_and_exit_fees(): void
     {
+        // Perps trading halts Friday 17:00-17:59 ET (CFM maintenance); pin a Wednesday so the clock can't fail this.
+        Carbon::setTestNow(Carbon::parse('2026-01-07 15:00:00', 'UTC'));
         // The review's own evidence: a flat $2,400 paper round trip with 0.1% entry and 0.1% exit
         // fees must leave cash at $9,995.20 (already true before this fix) AND position PnL at
         // -$4.80 (previously $0 — margin-paper fills return gross notional with fees tracked apart,
