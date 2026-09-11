@@ -71,7 +71,7 @@ The open-source desk stays one user per install. Everything social lives on the 
 
 ## Phase 5 — "Host it for you" ☁️
 - [ ] v2 hosted exchange: the hub runs its own tape + fill engine so contests are refereed centrally and feeder-less desks can paper trade on it (routes reserved in `docs/HUB_API.md`)
-- [ ] Per-customer locked-down box image (AWS AMI first), only inbound HTTPS, outbound to exchange + OpenRouter
+- [x] Per-customer locked-down box image (AWS AMI first), only inbound HTTPS, outbound to exchange + OpenRouter — `ops/image/desk.pkr.hcl`, boot-tested by `ops/image/test-boot.sh`, see `docs/HOSTED_IMAGE.md`
 - [x] Onboarding: paste OpenRouter key → paper trading in minutes
 - [ ] Billing (monthly), image maintenance/update pipeline
 - [ ] Hosted tier is paper-only at launch; live keys are self-host only

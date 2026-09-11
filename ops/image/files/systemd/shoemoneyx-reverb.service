@@ -1,0 +1,17 @@
+[Unit]
+Description=shoemoneyx desk websocket firehose (reverb:start)
+After=network-online.target mariadb.service redis-server.service shoemoneyx-first-boot.service
+Requires=shoemoneyx-first-boot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shoemoneyx
+Group=shoemoneyx
+WorkingDirectory=/opt/shoemoneyx
+ExecStart=/usr/bin/php artisan reverb:start --host=0.0.0.0 --port=8812
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
