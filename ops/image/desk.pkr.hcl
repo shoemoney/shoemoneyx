@@ -71,6 +71,12 @@ build {
   name    = "shoemoneyx-desk"
   sources = ["source.amazon-ebs.desk"]
 
+  # file provisioner requires the destination directory to already exist
+  # when the source has a trailing slash (copy contents, not the dir itself).
+  provisioner "shell" {
+    inline = ["mkdir -p /tmp/image-files"]
+  }
+
   provisioner "file" {
     source      = "ops/image/files/"
     destination = "/tmp/image-files"
