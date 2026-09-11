@@ -62,7 +62,17 @@ if [[ -z "$VPC_ID" || "$VPC_ID" == "None" ]]; then
   echo "no default VPC found in $REGION" >&2
   exit 1
 fi
-SUBNET_ID="$(aws_ ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=default-for-az,Values=true" --query 'Subnets[0].SubnetId' --output text)"
+SUPPORTED_AZS="$(aws_ ec2 describe-instance-type-offerings --location-type availability-zone \
+  --filters "Name=instance-type,Values=$INSTANCE_TYPE" --query 'InstanceTypeOfferings[].Location' --output text)"
+SUBNET_ID=""
+for az in $SUPPORTED_AZS; do
+  SUBNET_ID="$(aws_ ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=default-for-az,Values=true" "Name=availability-zone,Values=$az" --query 'Subnets[0].SubnetId' --output text)"
+  [[ -n "$SUBNET_ID" && "$SUBNET_ID" != "None" ]] && break
+done
+if [[ -z "$SUBNET_ID" || "$SUBNET_ID" == "None" ]]; then
+  echo "no default subnet found in an AZ that supports $INSTANCE_TYPE" >&2
+  exit 1
+fi
 log "VPC $VPC_ID subnet $SUBNET_ID"
 
 SG_NAME="shoemoneyx-desk-boot-test-$$-$(date +%s)"
