@@ -93,8 +93,24 @@ done
 chown "$APP_USER":"$APP_USER" "$APP_DIR/.env"
 chmod 600 "$APP_DIR/.env"
 
-log "migrate + product sync"
+log "validating .env parses before touching the database"
+if ! sudo -u "$APP_USER" php -r '
+require "'"$APP_DIR"'/vendor/autoload.php";
+try {
+    Dotenv\Dotenv::createImmutable("'"$APP_DIR"'")->load();
+} catch (\Throwable $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
+    exit(1);
+}
+'; then
+  echo "[first-boot] FATAL: generated .env failed to parse (see dotenv error above) — not touching the database" >&2
+  exit 1
+fi
+
 cd "$APP_DIR"
+sudo -u "$APP_USER" php artisan config:clear
+
+log "migrate + product sync"
 sudo -u "$APP_USER" php artisan migrate --force
 sudo -u "$APP_USER" php artisan market:sync-products || log "product sync failed, non-fatal (exchange may be unreachable); desk:run will retry hourly"
 
