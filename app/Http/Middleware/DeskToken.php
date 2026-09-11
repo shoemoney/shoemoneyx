@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Middleware;
 
+use App\Desk\Settings;
 use Closure;
 use Illuminate\Http\Request;
 
@@ -17,7 +18,7 @@ class DeskToken
 {
     public function handle(Request $request, Closure $next)
     {
-        $master = (string) config('desk.master_password');
+        $master = app(Settings::class)->masterPassword();
         if ($master === '') {
             return $next($request);
         }

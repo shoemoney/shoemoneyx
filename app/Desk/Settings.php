@@ -66,6 +66,23 @@ class Settings
         return (string) $this->get('mode', 'paper');
     }
 
+    /**
+     * The effective master password: an onboarding-set override if one exists, else
+     * MASTER_PASSWORD from .env. The single source every gate (MasterPassword, DeskToken,
+     * DeskAuthController, app.blade.php) should read instead of config('desk.master_password')
+     * directly — it is how the onboarding wizard can set a password without an env edit.
+     * Falls back to the env value on a DB failure so the page shell (public demo included)
+     * never 500s over an unreachable settings table.
+     */
+    public function masterPassword(): string
+    {
+        try {
+            return (string) $this->get('master_password', '');
+        } catch (\Throwable) {
+            return (string) config('desk.master_password', '');
+        }
+    }
+
     public function strategyKey(): string
     {
         return (string) $this->get('strategy', 'mr');
