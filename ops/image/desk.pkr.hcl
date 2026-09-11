@@ -74,12 +74,20 @@ build {
   # file provisioner requires the destination directory to already exist
   # when the source has a trailing slash (copy contents, not the dir itself).
   provisioner "shell" {
-    inline = ["mkdir -p /tmp/image-files"]
+    inline = ["mkdir -p /tmp/image-files /tmp/fa-pro"]
   }
 
   provisioner "file" {
     source      = "ops/image/files/"
     destination = "/tmp/image-files"
+  }
+
+  # Font Awesome Pro tarballs — licensed, gitignored (see .gitignore, Dockerfile), not
+  # fetchable from the git clone. Same requirement as the Docker build: run this from a
+  # checkout that already has .fa-pro/ at the repo root (same one `bin/desk image` needs).
+  provisioner "file" {
+    source      = ".fa-pro/"
+    destination = "/tmp/fa-pro"
   }
 
   provisioner "shell" {
