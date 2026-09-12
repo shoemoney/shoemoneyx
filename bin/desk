@@ -15,6 +15,7 @@
 #   worker N  start N backtest queue workers here (sweep farm node)
 #   sweep     desk:sweep "$@"  (add --queue to use the farm)
 #   image     build the multi-arch docker image (bin/desk image --push publishes to ghcr.io)
+#   compose   docker pull and go: generate .env + docker compose up -d the full desk (docker/up.sh)
 #   push      commit everything + push to GitHub (bin/desk push "message")
 #   setup     first-time install (composer, npm, key, migrate, sync, backfill)
 set -euo pipefail
@@ -79,6 +80,7 @@ case "${1:-help}" in
   sweep)    shift; art desk:sweep "$@" ;;
   image)    docker buildx create --use --name shoemoneyx 2>/dev/null || true
             docker buildx build --platform linux/arm64,linux/amd64 -t ghcr.io/shoemoney/shoemoneyx:latest ${2:---load} . ;;
+  compose)  docker/up.sh ;;
   push)     shift; git add -A; git commit -qm "${1:-wip $(date +%F\ %H:%M)}" || true; git push -q origin HEAD; echo "pushed $(git rev-parse --short HEAD)" ;;
   *)        sed -n '2,15p' "$0" ;;
 esac

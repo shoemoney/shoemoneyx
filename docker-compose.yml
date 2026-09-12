@@ -1,11 +1,29 @@
-# Sweep farm node. Point REDIS_HOST / DB_HOST at the desk host (the machine running MariaDB + Redis).
-#   docker compose up -d worker            # this box joins the backtests queue with all its cores
-#   WORKERS=4 docker compose up -d worker   # or cap it (Pis)
-# Roles feeder/desk are for the desk host itself, if you'd rather run them containerised.
+# shoemoneyx — one image, many roles (docker/entrypoint.sh has the ROLE table).
+#
+# Farm node (unchanged):     docker compose up -d worker        # joins the backtests queue
+#                            WORKERS=4 docker compose up -d worker   # or cap it (Pis)
+# Self-hosted desk (new):    docker/up.sh   (or: docker compose up -d)
+#                            brings up nginx (HTTPS on 443), web, queue, schedule, reverb, desk,
+#                            feeder, mariadb, redis — the complete desk from one image.
+#
+# Profile choice: `worker` carries `profiles: [worker]` so a bare `docker compose up -d` (the full
+# desk) does not also start a backtests-queue worker nobody asked for — but Compose still starts a
+# service named explicitly on the command line regardless of its profile, so `docker compose up -d
+# worker` on a farm box is unaffected. `feeder` used to carry `profiles: [desk]`; it's dropped
+# because feeder is now one of the default full-stack services.
+#
+# Migration gate: a one-shot `migrate` service runs `artisan migrate --force` once mariadb and
+# redis report healthy; web/queue/schedule/reverb/desk all `depends_on: migrate:
+# service_completed_successfully`. Chose a one-shot job over a `migrate:status` healthcheck on
+# `web` — a status healthcheck polls artisan forever and can flap mid-migration, where a one-shot
+# job is a single cheap go/no-go before anything else starts. (`web`'s own entrypoint re-runs
+# `migrate --force` on every start too, on top of this — idempotent, so it's just cheap insurance
+# against config/DB drift between restarts, not a second race.)
 services:
   worker:
     image: ghcr.io/shoemoney/shoemoneyx:latest
-    build: .
+    build: { context: ., target: app }
+    profiles: [worker]
     restart: unless-stopped
     environment:
       ROLE: worker
@@ -26,11 +44,11 @@ services:
       DB_USERNAME: ${DB_USERNAME:-shoemoneyx}
       DB_PASSWORD: ${DB_PASSWORD:-shoemoneyx}
       LOG_CHANNEL: stderr
+
   feeder:
     image: ghcr.io/shoemoney/shoemoneyx:latest
-    build: .
+    build: { context: ., target: app }
     restart: unless-stopped
-    profiles: [desk]
     environment:
       ROLE: feeder
       APP_NAME: shoemoneyx
@@ -40,3 +58,108 @@ services:
       DB_DATABASE: shoemoneyx
       DB_USERNAME: ${DB_USERNAME:-shoemoneyx}
       DB_PASSWORD: ${DB_PASSWORD:-shoemoneyx}
+
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+      MARIADB_DATABASE: shoemoneyx
+      MARIADB_USER: shoemoneyx
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    volumes: [mariadb-data:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  migrate:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: { context: ., target: app }
+    env_file: .env
+    environment:
+      ROLE: artisan
+    command: ["migrate", "--force"]
+    restart: "no"
+    depends_on:
+      mariadb: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  web:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: { context: ., target: app }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROLE: web
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      # /dev/tcp is a bash builtin — CMD-SHELL runs /bin/sh (dash on Debian), which doesn't have it.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/9000"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  nginx:
+    image: ghcr.io/shoemoney/shoemoneyx-nginx:latest
+    build: { context: ., target: nginx }
+    restart: unless-stopped
+    ports: ["443:443"]
+    depends_on:
+      web: { condition: service_healthy }
+
+  desk:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: { context: ., target: app }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROLE: desk
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  queue:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: { context: ., target: app }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROLE: queue
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  schedule:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: { context: ., target: app }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROLE: schedule
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  reverb:
+    image: ghcr.io/shoemoney/shoemoneyx:latest
+    build: { context: ., target: app }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROLE: reverb
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  mariadb-data:
+  redis-data:
