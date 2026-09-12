@@ -75,10 +75,10 @@ The open-source desk stays one user per install. Everything social lives on the 
 - [x] Onboarding: paste OpenRouter key → paper trading in minutes
 - [x] Billing: no hub billing. Revenue is the marked-up paid AMI listing on AWS Marketplace (user picks the paid image; 20% listing fee accepted). Decided 2026-09-11.
 - [x] Docker-first distribution (v0.1.0 published 2026-09-11, ghcr.io/shoemoney/shoemoneyx + shoemoneyx-nginx, amd64+arm64): full-stack `docker compose up` (web/nginx/desk/queue/schedule/reverb/feeder + mariadb + redis), `docker/up.sh` generates secrets once, CI on tag `vX.Y.Z` publishes multi-arch images to ghcr.io (FA Pro decrypted from `ops/ci/fa-pro.tar.gz.enc` with the `FA_PRO_KEY` secret)
-- [ ] AMI runs the published Docker image (Ubuntu + docker + compose + `docker/up.sh` at first boot) so customers update with `docker compose pull`; replaces the bare-metal provision.sh
+- [x] AMI runs the published Docker image (Ubuntu + docker + compose + `docker/up.sh` at first boot) so customers update with `docker compose pull`; replaces the bare-metal provision.sh. v0.1.2 = ami-0952211a3644f3e1b, boot-tested 2026-09-12 (egress policy re-enforced in DOCKER-USER every boot)
 - [ ] Image maintenance/update pipeline: on tag, Packer rebuilds the AMI from the tagged image, `test-boot.sh` proves it, `ops/image/releases.json` records it, and a Marketplace change set adds the version (IAM role `shoemoneyx-marketplace-ami-ingestion` exists; seller registration + first product load form are Jeremy's)
 - [x] Marketplace pricing (decided 2026-09-12): hourly, no free trial, no monthly/annual at launch; supported types t3.small (recommended), t3.medium, t3.large; software fee = 1.67x the EC2 rate so net after AWS's 20% is half the buyer's bill: t3.small $0.0347/h, t3.medium $0.0693/h, t3.large $0.1387/h. Annual prepay at 10x the monthly equivalent (2 months free) for buyers who want price security. Hosted/supported = private offer, still in the buyer's account.
-- [ ] Non-technical buyer path: first login without SSH (initial MASTER_PASSWORD = EC2 instance ID, shown as a hint on /login, forced change on first login), so the Marketplace one-click launch is truly one-click
+- [x] Non-technical buyer path: first login without SSH (bootstrap MASTER_PASSWORD = EC2 instance ID, hint on /login, onboarding refuses an empty password on exposed images). Shipped in v0.1.2.
 - [x] No hosted tier at all. Users run the paid AMI in their own AWS account with their own keys (liability decision 2026-09-11).
 
 ## Open questions ❓
