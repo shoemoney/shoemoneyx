@@ -1,0 +1,14 @@
+[
+  {
+    "version": "0.1.2",
+    "commit": "55f8674c38b2be0958c9178bdbb2cb4df8394bf9",
+    "ami_id": "ami-0952211a3644f3e1b",
+    "ami_name": "shoemoneyx-desk-0.1.2-1789195320",
+    "built_at": "2026-09-12T07:16:33Z",
+    "boot_test": {
+      "passed": true,
+      "at": "2026-09-12T07:16:34Z"
+    },
+    "marketplace": null
+  }
+]
