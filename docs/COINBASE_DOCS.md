@@ -25,7 +25,7 @@ has a **Copy page ▾** menu: *Copy page as Markdown for LLMs*, *View as Markdow
 
 Base: `https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/`
 
-### Public market data (no key) — `app/Services/Market/CoinbaseMarketData.php`, `CandleStore.php`, `TradeBackfill.php`
+### Public market data (no key) — `app/Exchange/Coinbase/CoinbaseMarketData.php`, `CandleStore.php`, `TradeBackfill.php`
 - `rest-api/public/list-public-products.md` — universe (`ProductSync`)
 - `rest-api/public/get-public-product.md`
 - `rest-api/public/get-public-product-candles.md` — native granularities only: 1m 5m 15m 30m 1H 2H 6H 1D, max 350 candles/call. 2m/3m/4m/10m and 15s/30s/45s are built locally (`Candle::DERIVED`, `Candle::FROM_TRADES`).
