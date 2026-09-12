@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# ROLE=worker  → N queue workers on QUEUES (default "backtests"; Pis: QUEUES=backtests-light) (N = WORKERS, default = cores)
-# ROLE=feeder  → Coinbase websocket feeder
-# ROLE=desk    → trading loop (desk:run)   [needs the same .env as the desk host]
-# ROLE=artisan → run any artisan command: docker run … -e ROLE=artisan shoemoneyx desk:backtest …
+# ROLE=worker   → N queue workers on QUEUES (default "backtests"; Pis: QUEUES=backtests-light) (N = WORKERS, default = cores)
+# ROLE=feeder   → Coinbase websocket feeder
+# ROLE=desk     → trading loop (desk:run)   [needs the same .env as the desk host]
+# ROLE=artisan  → run any artisan command: docker run … -e ROLE=artisan shoemoneyx desk:backtest …
+# ROLE=web      → migrate, then php-fpm in the foreground (fronted by the nginx image over 443)
+# ROLE=queue    → the desk's own default queue (distinct from the worker role's backtests queue)
+# ROLE=schedule → schedule:work (daily report, backtest loop, strategy sync, contest reports)
+# ROLE=reverb   → websocket firehose for the dashboard
 set -euo pipefail
 cd /app
 : "${ROLE:=worker}"
@@ -20,8 +24,12 @@ case "$ROLE" in
     done
     trap 'kill "${pids[@]}" 2>/dev/null; pkill -TERM -f "artisan queue:work" 2>/dev/null; wait' TERM INT
     wait ;;
-  feeder)  exec node feeder/feed.mjs ;;
-  desk)    exec php artisan desk:run ;;
-  artisan) shift 0; exec php artisan "$@" ;;
-  *)       exec "$@" ;;
+  feeder)   exec node feeder/feed.mjs ;;
+  desk)     exec php artisan desk:run ;;
+  artisan)  shift 0; exec php artisan "$@" ;;
+  web)      php artisan migrate --force; exec php-fpm -F ;;
+  queue)    exec php artisan queue:work redis --tries=1 --timeout=3600 --sleep=2 ;;
+  schedule) exec php artisan schedule:work ;;
+  reverb)   exec php artisan reverb:start --host=0.0.0.0 --port=8812 ;;
+  *)        exec "$@" ;;
 esac
