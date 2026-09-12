@@ -24,7 +24,25 @@ CHIEF                              health, heartbeats, halt switch, reports
 
 **110 exchanges out of the box.** Coinbase (spot + US perpetual futures) has a native adapter, and a generic [ccxt](https://github.com/ccxt/ccxt) adapter covers everything ccxt speaks for spot market data and orders: Binance, Kraken, Bybit, OKX, KuCoin, Bitget, Gate, HTX, MEXC, Bitfinex, Gemini, Bitstamp and the rest. Full roster in `docs/EXCHANGES.md`.
 
-## Quick start
+## Run it with Docker 🐳
+
+Zero PHP, zero Node. Docker gives you the whole desk — dashboard, trading loop, queue, scheduler, Reverb websockets, Coinbase feeder, MariaDB, Redis — behind HTTPS on one port.
+
+```bash
+git clone https://github.com/shoemoney/shoemoneyx.git && cd shoemoneyx
+docker/up.sh                  # or: bin/desk compose
+open https://localhost
+```
+
+First run generates `.env` and prints your `MASTER_PASSWORD` once — save it, it gates every page and the API. Rerunning `docker/up.sh` is a no-op except starting containers.
+
+Update to the latest image:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+## Quick start (no Docker)
 
 ```bash
 cp .env.example .env          # set DB_*, keep DESK_MODE=paper
