@@ -25,14 +25,14 @@ has a **Copy page ▾** menu: *Copy page as Markdown for LLMs*, *View as Markdow
 
 Base: `https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/`
 
-### Public market data (no key) — `app/Services/Market/CoinbaseMarketData.php`, `CandleStore.php`, `TradeBackfill.php`
+### Public market data (no key) — `app/Exchange/Coinbase/CoinbaseMarketData.php`, `app/Services/Market/CandleStore.php`, `app/Services/Market/TradeBackfill.php`
 - `rest-api/public/list-public-products.md` — universe (`ProductSync`)
 - `rest-api/public/get-public-product.md`
 - `rest-api/public/get-public-product-candles.md` — native granularities only: 1m 5m 15m 30m 1H 2H 6H 1D, max 350 candles/call. 2m/3m/4m/10m and 15s/30s/45s are built locally (`Candle::DERIVED`, `Candle::FROM_TRADES`).
 - `rest-api/public/get-public-market-trades.md` — trade tape, `start`/`end` unix seconds, `limit` ≤ 1000 — used by `market:backfill-trades` for sub-minute bars.
 - `rest-api/public/get-public-product-book.md` — spread / depth (`vet.max_spread_bps`)
 
-### Authenticated (CDP key, ES256 JWT) — `app/Services/Coinbase/*`
+### Authenticated (CDP key, ES256 JWT) — `app/Exchange/Coinbase/*`
 - `rest-api/accounts/list-accounts.md`, `get-account.md` — balances (`coinbase:account`)
 - `rest-api/fees/get-transaction-summary.md` — **your real maker/taker tier + 30-day volume. Check this before trusting `fees.taker_rate`.**
 - `rest-api/orders/create-order.md` — order_configuration: `market_market_ioc`, `limit_limit_gtc` (`post_only` flag = maker), `limit_limit_gtd`, `sor_limit_ioc`, stop/bracket types
