@@ -42,6 +42,8 @@ Update to the latest image:
 docker compose pull && docker compose up -d
 ```
 
+The published `ghcr.io` images already include Font Awesome Pro, so no Font Awesome license files are needed to run them (charts still need your own TradingView Charting Library copy — see below).
+
 ## Quick start (no Docker)
 
 ```bash
@@ -50,6 +52,8 @@ bin/desk setup                # composer, npm, key, migrate, product sync, candl
 bin/desk dev                  # vite + artisan serve + queue worker + desk:run
 open http://localhost:8000
 ```
+
+**Building from source requires Font Awesome Pro 7.3.1 tarballs:** `npm install`, `bin/desk setup`, `docker compose build`, and `bin/desk image` all need the four Font Awesome Pro npm packages (licensed, not redistributable) dropped into `.fa-pro/`. The published `ghcr.io` images are the license-free path. Fork PRs cannot build images (see `.github/workflows/image.yml`).
 
 First run lands you on `/onboarding` — set a master password (or skip it for a trusted local desk), connect an OpenRouter key, pick an exchange, optionally import a community strategy, and launch in paper mode, all in under five minutes.
 
