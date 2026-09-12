@@ -8,8 +8,9 @@ on:
 
 jobs:
   # Fails fast on a broken Dockerfile before anything gets tagged: single-arch, build only, no push.
+  # Same-repo PRs only: fork PRs can't read FA_PRO_KEY, so the decrypt step would fail for every outside contributor.
   verify:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     strategy:
       matrix:
