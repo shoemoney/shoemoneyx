@@ -1,15 +1,16 @@
 # ops/image/desk.pkr.hcl
 #
-# Builds the per-customer shoemoneyx desk AMI: Ubuntu 24.04, PHP 8.4, Node LTS,
-# Redis, local MariaDB, nginx, the app cloned + built at image time, systemd
-# units for desk:run/queue:work/schedule:work/reverb:start, and a first-boot
-# hook that generates all secrets on the box itself. See ops/image/provision.sh
-# for what actually happens and docs/HOSTED_IMAGE.md for the operator's guide.
+# Builds the per-customer shoemoneyx desk AMI: Ubuntu 24.04 running the published
+# ghcr.io/shoemoney/shoemoneyx Docker images via docker compose, a first-boot hook that pins
+# the image version and generates all secrets on the box itself by delegating to
+# docker/up.sh, and a firewall script that locks down both host and container egress. See
+# ops/image/provision.sh for what actually happens and docs/HOSTED_IMAGE.md for the
+# operator's guide.
 #
 # Run from the repo root:
 #   packer init ops/image/desk.pkr.hcl
-#   packer validate ops/image/desk.pkr.hcl
-#   packer build ops/image/desk.pkr.hcl
+#   packer validate -var version=0.1.0 ops/image/desk.pkr.hcl
+#   packer build -var version=0.1.0 ops/image/desk.pkr.hcl
 packer {
   required_plugins {
     amazon = {
@@ -17,6 +18,11 @@ packer {
       source  = "github.com/hashicorp/amazon"
     }
   }
+}
+
+variable "version" {
+  type        = string
+  description = "shoemoneyx release to bake in: the git tag (v<version>) provision.sh clones and the ghcr.io/shoemoney/shoemoneyx(-nginx):<version> images it pulls."
 }
 
 variable "region" {
@@ -38,7 +44,7 @@ source "amazon-ebs" "desk" {
   profile       = var.aws_profile
   region        = var.region
   instance_type = var.instance_type
-  ami_name      = "shoemoneyx-desk-{{timestamp}}"
+  ami_name      = "shoemoneyx-desk-${var.version}-{{timestamp}}"
   ssh_username  = "ubuntu"
 
   # Default VPC / default subnet for the region — no vpc_id/subnet_id pinned,
@@ -63,6 +69,7 @@ source "amazon-ebs" "desk" {
   tags = {
     Project = "shoemoneyx"
     Name    = "shoemoneyx-desk"
+    Version = var.version
     Built   = "{{timestamp}}"
   }
 }
@@ -74,7 +81,7 @@ build {
   # file provisioner requires the destination directory to already exist
   # when the source has a trailing slash (copy contents, not the dir itself).
   provisioner "shell" {
-    inline = ["mkdir -p /tmp/image-files /tmp/fa-pro"]
+    inline = ["mkdir -p /tmp/image-files"]
   }
 
   provisioner "file" {
@@ -82,16 +89,9 @@ build {
     destination = "/tmp/image-files"
   }
 
-  # Font Awesome Pro tarballs — licensed, gitignored (see .gitignore, Dockerfile), not
-  # fetchable from the git clone. Same requirement as the Docker build: run this from a
-  # checkout that already has .fa-pro/ at the repo root (same one `bin/desk image` needs).
-  provisioner "file" {
-    source      = ".fa-pro/"
-    destination = "/tmp/fa-pro"
-  }
-
   provisioner "shell" {
-    execute_command = "sudo -S bash -c '{{ .Vars }} {{ .Path }}'"
-    script          = "ops/image/provision.sh"
+    environment_vars = ["VERSION=${var.version}"]
+    execute_command   = "sudo -S bash -c '{{ .Vars }} {{ .Path }}'"
+    script            = "ops/image/provision.sh"
   }
 }

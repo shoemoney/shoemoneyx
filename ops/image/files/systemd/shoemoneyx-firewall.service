@@ -1,0 +1,14 @@
+[Unit]
+Description=shoemoneyx ufw + Docker egress firewall policy
+After=docker.service shoemoneyx-first-boot.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/shoemoneyx-firewall.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

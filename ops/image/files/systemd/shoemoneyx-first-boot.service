@@ -1,8 +1,8 @@
 [Unit]
-Description=shoemoneyx desk first-boot setup (env, DB, credentials, migrate, product sync)
-After=network-online.target mariadb.service redis-server.service
-Wants=network-online.target
-Before=shoemoneyx-desk.service shoemoneyx-queue.service shoemoneyx-schedule.service shoemoneyx-reverb.service
+Description=shoemoneyx desk first-boot setup (pin version, bring up the stack via docker/up.sh, write credentials)
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+ConditionPathExists=!/opt/shoemoneyx/.env
 StartLimitIntervalSec=600
 StartLimitBurst=5
 
@@ -10,11 +10,10 @@ StartLimitBurst=5
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/shoemoneyx-first-boot.sh
-# Idempotent: the script itself no-ops after its first successful run (marker file),
-# so a retry on failure is safe and a reboot never repeats DB/APP_KEY generation.
-# A transient failure (DB not quite up yet, a flaky product sync) shouldn't strand
-# the box — retry a few times with backoff instead of leaving desk/queue/schedule/
-# reverb permanently blocked on Requires=.
+# Idempotent: docker/up.sh no-ops on an existing .env, and the ConditionPathExists above skips
+# this unit entirely once .env exists, so a retry on failure (DB/registry not quite up yet) is
+# safe and a reboot never repeats secret generation. The containers themselves come back on
+# reboot via their own restart:unless-stopped, not this unit.
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal

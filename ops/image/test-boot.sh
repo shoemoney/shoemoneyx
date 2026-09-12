@@ -148,6 +148,36 @@ if [[ -n "$MASTER_PASSWORD" ]]; then
   fi
 fi
 
+ssh_() {
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 "ubuntu@$PUBLIC_IP" "$@"
+}
+
+log "asserting docker compose ps shows web healthy and nginx up"
+COMPOSE_PS="$(ssh_ "sudo docker compose -f /opt/shoemoneyx/docker-compose.yml ps" 2>&1 || true)"
+echo "$COMPOSE_PS" >&2
+if ! echo "$COMPOSE_PS" | grep -qE '^web\b.*\(healthy\)'; then
+  fail "docker compose ps does not show web as healthy"
+fi
+if ! echo "$COMPOSE_PS" | grep -qE '^nginx\b.*Up'; then
+  fail "docker compose ps does not show nginx as Up"
+fi
+
+log "asserting the Docker egress policy holds from inside a container (443 reachable, plain :80 blocked)"
+EGRESS_OUT="$(ssh_ "sudo docker compose -f /opt/shoemoneyx/docker-compose.yml exec -T web sh -c 'curl -s -m 5 -o /dev/null -w \"%{http_code}\" https://api.coinbase.com/ ; echo; curl -s -m 5 -o /dev/null -w \"%{http_code}\" http://example.com/ || echo blocked'" 2>&1 || true)"
+echo "$EGRESS_OUT" >&2
+HTTPS_CODE="$(echo "$EGRESS_OUT" | sed -n '1p')"
+HTTP_RESULT="$(echo "$EGRESS_OUT" | sed -n '2p')"
+if [[ ! "$HTTPS_CODE" =~ ^[2-4][0-9][0-9]$ ]]; then
+  fail "container egress: https://api.coinbase.com/ returned '$HTTPS_CODE' (want a 2xx/3xx/4xx — reachable); egress policy may be blocking 443"
+else
+  log "OK: container reached https://api.coinbase.com/ ($HTTPS_CODE)"
+fi
+if [[ "$HTTP_RESULT" != "blocked" ]]; then
+  fail "container egress: plain http://example.com/ was NOT blocked (got '$HTTP_RESULT'); DOCKER-USER egress policy is not holding"
+else
+  log "OK: plain http://example.com/ was blocked"
+fi
+
 log "scanning ports 1-1024 with nmap"
 NMAP_OUT="$(nmap -p 1-1024 -T4 "$PUBLIC_IP" 2>&1 || true)"
 echo "$NMAP_OUT" >&2

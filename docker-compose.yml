@@ -21,7 +21,7 @@
 # against config/DB drift between restarts, not a second race.)
 services:
   worker:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     profiles: [worker]
     restart: unless-stopped
@@ -46,7 +46,7 @@ services:
       LOG_CHANNEL: stderr
 
   feeder:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
     environment:
@@ -85,7 +85,7 @@ services:
       retries: 30
 
   migrate:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     env_file: .env
     environment:
@@ -97,7 +97,7 @@ services:
       redis: { condition: service_healthy }
 
   web:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
     env_file: .env
@@ -113,7 +113,7 @@ services:
       retries: 30
 
   nginx:
-    image: ghcr.io/shoemoney/shoemoneyx-nginx:latest
+    image: ghcr.io/shoemoney/shoemoneyx-nginx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: nginx }
     restart: unless-stopped
     ports: ["443:443"]
@@ -121,7 +121,7 @@ services:
       web: { condition: service_healthy }
 
   desk:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
     env_file: .env
@@ -131,7 +131,7 @@ services:
       migrate: { condition: service_completed_successfully }
 
   queue:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
     env_file: .env
@@ -141,7 +141,7 @@ services:
       migrate: { condition: service_completed_successfully }
 
   schedule:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
     env_file: .env
@@ -151,7 +151,7 @@ services:
       migrate: { condition: service_completed_successfully }
 
   reverb:
-    image: ghcr.io/shoemoney/shoemoneyx:latest
+    image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
     env_file: .env

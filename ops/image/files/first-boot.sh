@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # /opt/shoemoneyx-first-boot.sh — runs once via shoemoneyx-first-boot.service.
-# No secrets are baked into the image: APP_KEY, MASTER_PASSWORD, and the DB
-# password are all generated here, on this box, the first time it boots.
+# Secret generation and the DB migration are no longer this script's job: they belong to
+# docker/up.sh (identical to what a self-hoster runs by hand) and to the compose file's own
+# one-shot `migrate` service. This script pins the image version, hands off to up.sh, corrects
+# the one thing up.sh can't know from inside a generic compose checkout (the public host name),
+# swaps in a real cert when a DOMAIN tag is present, and writes the credentials file the same
+# way the desk always has.
 set -euo pipefail
 
 APP_DIR=/opt/shoemoneyx
-APP_USER=shoemoneyx
-MARKER="$APP_DIR/.first-boot-done"
 CREDS_FILE=/root/shoemoneyx-credentials.txt
+VERSION="$(cat /opt/shoemoneyx-version)"
 
 log() { echo "[first-boot] $*"; }
 
-if [[ -f "$MARKER" ]]; then
-  log "already ran ($MARKER exists), skipping"
+cd "$APP_DIR"
+
+if [[ -f .env ]]; then
+  log ".env already exists, first boot already ran — skipping"
   exit 0
 fi
 
@@ -24,121 +29,66 @@ imds() { curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" "$META/$1" 2>/dev/nu
 PUBLIC_IP="$(imds public-ipv4)"
 [[ -z "$PUBLIC_IP" ]] && PUBLIC_IP="$(imds local-ipv4)"
 
-# DOMAIN comes from the instance's own tags via IMDS (no IAM role, no AWS CLI, no
-# outbound EC2 API call needed — keeps this working under the outbound-443-only
-# firewall). Requires the instance be launched with
-# --metadata-options InstanceMetadataTags=enabled; if it wasn't, this is empty
-# and we fall back to the self-signed cert, which is the safe default anyway.
+# DOMAIN comes from the instance's own tags via IMDS (no IAM role, no AWS CLI, no outbound EC2
+# API call needed — keeps this working under the outbound-443-only firewall). Requires the
+# instance be launched with --metadata-options InstanceMetadataTags=enabled; if it wasn't, this
+# is empty and we fall back to the self-signed cert baked into the nginx image, the safe default.
 DOMAIN="$(imds tags/instance/DOMAIN)"
 [[ "$DOMAIN" == *"Not Found"* || "$DOMAIN" == *"404"* ]] && DOMAIN=""
-
 APP_HOST="${DOMAIN:-$PUBLIC_IP}"
-log "app host: $APP_HOST (domain tag: ${DOMAIN:-none})"
+log "app host: $APP_HOST (domain tag: ${DOMAIN:-none}), pinning SHOEMONEYX_VERSION=$VERSION"
 
-rand() { openssl rand -base64 "$1" | tr -dc 'A-Za-z0-9' | head -c "$2"; }
+log "handing off to docker/up.sh — generates .env, runs the migrate gate, brings up the stack, and blocks until /api/status answers"
+SHOEMONEYX_VERSION="$VERSION" ./docker/up.sh
 
-APP_KEY="base64:$(openssl rand -base64 32)"
-MASTER_PASSWORD="$(rand 32 24)"
-DB_PASSWORD="$(rand 32 32)"
-
-log "creating MariaDB database + user"
-mysql -uroot <<SQL
-CREATE DATABASE IF NOT EXISTS shoemoneyx CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'shoemoneyx'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
-ALTER USER 'shoemoneyx'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
-GRANT ALL PRIVILEGES ON shoemoneyx.* TO 'shoemoneyx'@'localhost';
-FLUSH PRIVILEGES;
-SQL
-
-log "writing .env"
-cp "$APP_DIR/.env.example" "$APP_DIR/.env"
-declare -A OVERRIDES=(
-  [APP_KEY]="$APP_KEY"
-  [APP_ENV]="production"
-  [APP_DEBUG]="false"
-  [APP_URL]="https://$APP_HOST"
-  [DB_CONNECTION]="mysql"
-  [DB_HOST]="127.0.0.1"
-  [DB_PORT]="3306"
-  [DB_DATABASE]="shoemoneyx"
-  [DB_USERNAME]="shoemoneyx"
-  [DB_PASSWORD]="$DB_PASSWORD"
-  [REDIS_CLIENT]="phpredis"
-  [QUEUE_CONNECTION]="redis"
-  [CACHE_STORE]="redis"
-  [DESK_MODE]="paper"
-  [EXCHANGE]="coinbase"
-  [DESK_STRATEGY]="mr"
-  [MASTER_PASSWORD]="$MASTER_PASSWORD"
-  [HUB_URL]="https://hub.shoemoneyx.com"
-  [BROADCAST_CONNECTION]="reverb"
-  [REVERB_APP_ID]="shoemoneyx"
-  [REVERB_APP_KEY]="$(rand 24 20)"
-  [REVERB_APP_SECRET]="$(rand 24 32)"
-  [REVERB_HOST]="$APP_HOST"
-  [REVERB_PORT]="443"
-  [REVERB_SCHEME]="https"
-  [REVERB_SERVER_HOST]="0.0.0.0"
-  [REVERB_SERVER_PORT]="8812"
-)
-for key in "${!OVERRIDES[@]}"; do
-  value="${OVERRIDES[$key]}"
-  escaped="$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')"
-  if grep -q "^${key}=" "$APP_DIR/.env"; then
-    sed -i "s/^${key}=.*/${key}=${escaped}/" "$APP_DIR/.env"
-  else
-    echo "${key}=${value}" >> "$APP_DIR/.env"
-  fi
-done
-chown "$APP_USER":"$APP_USER" "$APP_DIR/.env"
-chmod 600 "$APP_DIR/.env"
-
-log "validating .env parses before touching the database"
-if ! sudo -u "$APP_USER" php -r '
-require "'"$APP_DIR"'/vendor/autoload.php";
-try {
-    Dotenv\Dotenv::createImmutable("'"$APP_DIR"'")->load();
-} catch (\Throwable $e) {
-    fwrite(STDERR, $e->getMessage() . "\n");
-    exit(1);
-}
-'; then
-  echo "[first-boot] FATAL: generated .env failed to parse (see dotenv error above) — not touching the database" >&2
-  exit 1
+# up.sh always writes APP_URL=https://localhost on a fresh .env (correct for a bare self-hosted
+# checkout, wrong for a box reachable at a public IP/domain) and has no way to be told otherwise
+# from outside; fix it up here and pin the version for any later manual `docker compose pull`.
+log "correcting APP_URL to https://$APP_HOST and pinning SHOEMONEYX_VERSION in .env"
+sed -i "s#^APP_URL=.*#APP_URL=https://$APP_HOST#" .env
+if grep -q '^SHOEMONEYX_VERSION=' .env; then
+  sed -i "s/^SHOEMONEYX_VERSION=.*/SHOEMONEYX_VERSION=$VERSION/" .env
+else
+  echo "SHOEMONEYX_VERSION=$VERSION" >> .env
 fi
-
-cd "$APP_DIR"
-sudo -u "$APP_USER" php artisan config:clear
-
-log "migrate + product sync"
-sudo -u "$APP_USER" php artisan migrate --force
-sudo -u "$APP_USER" php artisan market:sync-products || log "product sync failed, non-fatal (exchange may be unreachable); desk:run will retry hourly"
+SHOEMONEYX_VERSION="$VERSION" docker compose up -d
 
 if [[ -n "$DOMAIN" ]]; then
-  log "DOMAIN tag present ($DOMAIN): requesting a real cert via certbot"
-  if certbot --nginx --non-interactive --agree-tos -m "admin@$DOMAIN" -d "$DOMAIN" --redirect; then
-    log "certbot succeeded for $DOMAIN"
+  log "DOMAIN tag present ($DOMAIN): requesting a real cert via certbot (standalone, port 80 briefly)"
+  ufw allow in 80/tcp
+  if certbot certonly --standalone --non-interactive --agree-tos -m "admin@$DOMAIN" -d "$DOMAIN"; then
+    cat > docker-compose.override.yml <<YAML
+services:
+  nginx:
+    volumes:
+      - /etc/letsencrypt/live/$DOMAIN/fullchain.pem:/etc/ssl/shoemoneyx/selfsigned.crt:ro
+      - /etc/letsencrypt/live/$DOMAIN/privkey.pem:/etc/ssl/shoemoneyx/selfsigned.key:ro
+YAML
+    docker compose up -d nginx
+    log "certbot succeeded for $DOMAIN, nginx now serving the real cert"
   else
-    log "certbot failed for $DOMAIN, staying on the self-signed cert (port 80 must be reachable for HTTP-01; open it temporarily if this box needs a real cert)"
+    log "certbot failed for $DOMAIN (port 80 must be reachable in the SG for HTTP-01), staying on the self-signed cert"
   fi
+  ufw delete allow in 80/tcp
 else
-  log "no DOMAIN tag, staying on the build-time self-signed cert"
+  log "no DOMAIN tag, staying on the image's build-time self-signed cert"
 fi
 
 log "writing credentials to $CREDS_FILE"
+MASTER_PASSWORD="$(grep '^MASTER_PASSWORD=' .env | cut -d= -f2-)"
+DB_PASSWORD="$(grep '^DB_PASSWORD=' .env | cut -d= -f2-)"
+APP_URL="$(grep '^APP_URL=' .env | cut -d= -f2-)"
 cat > "$CREDS_FILE" <<EOF
 shoemoneyx desk — first-boot credentials
 generated: $(date -u +%FT%TZ)
 
-URL:              https://$APP_HOST
+URL:              $APP_URL
 MASTER_PASSWORD=$MASTER_PASSWORD
 DB_PASSWORD=$DB_PASSWORD
 
 MASTER_PASSWORD gates every page and the API (X-Desk-Token header or ?token=).
-DB_PASSWORD is the local 'shoemoneyx' MariaDB user, loopback-only.
+DB_PASSWORD is the local 'shoemoneyx' MariaDB user, reachable only from the compose network.
 EOF
 chmod 600 "$CREDS_FILE"
 
-touch "$MARKER"
-chown "$APP_USER":"$APP_USER" "$MARKER"
 log "first boot complete"
