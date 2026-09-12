@@ -189,7 +189,8 @@ if [[ ! "$HTTPS_CODE" =~ ^[2-4][0-9][0-9]$ ]]; then
 else
   log "OK: container reached https://api.coinbase.com/ ($HTTPS_CODE)"
 fi
-if [[ "$HTTP_RESULT" != "blocked" ]]; then
+# curl still prints its write-out ("000") before the `|| echo blocked` lands on the same line.
+if [[ "$HTTP_RESULT" != *blocked ]]; then
   fail "container egress: plain http://example.com/ was NOT blocked (got '$HTTP_RESULT'); DOCKER-USER egress policy is not holding"
 else
   log "OK: plain http://example.com/ was blocked"
