@@ -83,6 +83,22 @@ class Settings
         }
     }
 
+    /**
+     * True when the effective master password is still the .env value nobody has overridden
+     * from onboarding/Settings yet ("bootstrap" password) — false once an override row exists,
+     * regardless of what it's set to (including an explicit empty override). Drives the login
+     * page hint and the onboarding "you signed in with the bootstrap password" nudge. Fails
+     * quiet to false on a DB error, same posture as masterPassword().
+     */
+    public function masterPasswordIsBootstrap(): bool
+    {
+        try {
+            return ! Arr::has($this->overrides(), 'master_password');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public function strategyKey(): string
     {
         return (string) $this->get('strategy', 'mr');

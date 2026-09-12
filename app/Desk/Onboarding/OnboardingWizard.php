@@ -26,7 +26,7 @@ final class OnboardingWizard
 
     public function __construct(private readonly Settings $settings) {}
 
-    /** @return array{completed: bool, next_step: ?string, steps: list<array{key: string, status: string, skippable: bool}>} */
+    /** @return array{completed: bool, next_step: ?string, steps: list<array{key: string, status: string, skippable: bool}>, require_master_password: bool, bootstrap: bool} */
     public function state(): array
     {
         $stored = $this->stored();
@@ -42,6 +42,9 @@ final class OnboardingWizard
             'completed' => $next === null,
             'next_step' => $next['key'] ?? null,
             'steps' => $steps,
+            // Lets the SPA's master-password step adapt without a separate round trip.
+            'require_master_password' => (bool) config('desk.require_master_password'),
+            'bootstrap' => $this->settings->masterPasswordIsBootstrap(),
         ];
     }
 

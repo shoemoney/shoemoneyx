@@ -117,6 +117,33 @@ class OnboardingTest extends TestCase
         $this->assertSame('openrouter', $this->getJson('/api/onboarding')->json('next_step'));
     }
 
+    public function test_master_password_step_requires_a_password_when_the_desk_is_internet_exposed(): void
+    {
+        config(['desk.require_master_password' => true]);
+
+        $this->postJson('/api/onboarding/master-password', ['password' => ''])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.password.0', 'A password is required because this desk is reachable from the internet.');
+
+        $this->postJson('/api/onboarding/master-password', ['password' => str_repeat('a', 12)])
+            ->assertOk()
+            ->assertJson(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => true]);
+    }
+
+    public function test_state_reports_require_master_password_and_bootstrap_flags(): void
+    {
+        config(['desk.require_master_password' => true]);
+
+        $res = $this->getJson('/api/onboarding')->assertOk()->json();
+        $this->assertTrue($res['require_master_password']);
+        $this->assertTrue($res['bootstrap']);
+
+        $this->postJson('/api/onboarding/master-password', ['password' => str_repeat('a', 12)]);
+
+        $res = $this->getJson('/api/onboarding', ['X-Desk-Token' => str_repeat('a', 12)])->assertOk()->json();
+        $this->assertFalse($res['bootstrap']);
+    }
+
     public function test_openrouter_step_rejects_out_of_order_submission(): void
     {
         $this->fakeOpenRouterKey();

@@ -12,6 +12,9 @@
             @csrf
             <h1 class="text-lg font-semibold">ShoeMoneyX</h1>
             <p class="mb-4 text-sm text-zinc-400">Enter the master password to open the desk.</p>
+            @if (config('desk.master_password_hint') && app(\App\Desk\Settings::class)->masterPasswordIsBootstrap())
+                <p id="master-password-hint" class="mb-4 text-xs text-zinc-500">{{ config('desk.master_password_hint') }}</p>
+            @endif
             @error('password')
                 <p class="mb-3 text-sm text-red-400">{{ $message }}</p>
             @enderror

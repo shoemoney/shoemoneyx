@@ -67,4 +67,26 @@ class MasterPasswordTest extends TestCase
         $this->post('/logout')->assertRedirect('/login');
         $this->get('/')->assertRedirect('/login');
     }
+
+    public function test_login_page_shows_the_hint_while_the_password_is_still_the_bootstrap_value(): void
+    {
+        config(['desk.master_password' => 'i-0abc123def456789', 'desk.master_password_hint' => 'Your EC2 instance ID']);
+
+        $this->get('/login')->assertOk()->assertSee('id="master-password-hint"', false)->assertSee('Your EC2 instance ID');
+    }
+
+    public function test_login_page_hides_the_hint_once_the_buyer_sets_their_own_password(): void
+    {
+        config(['desk.master_password' => 'i-0abc123def456789', 'desk.master_password_hint' => 'Your EC2 instance ID']);
+        app(Settings::class)->set('master_password', 'my-own-password');
+
+        $this->get('/login')->assertOk()->assertDontSee('id="master-password-hint"', false);
+    }
+
+    public function test_login_page_hides_the_hint_when_no_hint_is_configured(): void
+    {
+        config(['desk.master_password' => 'i-0abc123def456789', 'desk.master_password_hint' => '']);
+
+        $this->get('/login')->assertOk()->assertDontSee('id="master-password-hint"', false);
+    }
 }

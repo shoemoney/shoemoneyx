@@ -209,6 +209,13 @@ return [
     // (X-Desk-Token header or ?token=). Empty = gate off, private network only.
     'master_password' => env('MASTER_PASSWORD'),
 
+    // Shown on the login page while the master password is still the bootstrap value (no
+    // onboarding override yet) — e.g. a marketplace AMI sets this to point at the EC2 instance ID.
+    'master_password_hint' => env('MASTER_PASSWORD_HINT'),
+
+    // True on internet-exposed images: onboarding refuses to leave the desk password-less.
+    'require_master_password' => (bool) env('DESK_REQUIRE_MASTER_PASSWORD', false),
+
     // Must be the literal string "yes" before the desk will send a real order.
     'live_confirm' => env('DESK_LIVE_CONFIRM', 'no'),
 ];

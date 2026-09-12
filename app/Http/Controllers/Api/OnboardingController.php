@@ -48,7 +48,13 @@ class OnboardingController extends Controller
 
     private function masterPassword(Request $request, OnboardingWizard $wizard): JsonResponse
     {
-        $data = $request->validate(['password' => 'nullable|string|max:200']);
+        $required = (bool) config('desk.require_master_password');
+        $exposedMessage = 'A password is required because this desk is reachable from the internet.';
+
+        $data = $request->validate(
+            ['password' => $required ? 'required|string|min:12|max:200' : 'nullable|string|max:200'],
+            ['password.required' => $exposedMessage, 'password.min' => $exposedMessage],
+        );
         $password = (string) ($data['password'] ?? '');
 
         app(Settings::class)->set('master_password', $password);

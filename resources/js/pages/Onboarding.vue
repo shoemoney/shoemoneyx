@@ -48,10 +48,15 @@ async function call(method, url, body) {
     return data;
 }
 
+const requireMasterPassword = ref(false);
+const bootstrapPassword = ref(false);
+
 async function refresh() {
     const state = await call("GET", "/onboarding");
     steps.value = state.steps;
     currentStep.value = state.next_step;
+    requireMasterPassword.value = !!state.require_master_password;
+    bootstrapPassword.value = !!state.bootstrap;
     if (state.completed) router.replace("/dashboard");
     return state;
 }
@@ -244,11 +249,22 @@ onMounted(async () => {
                         <h2>Set a master password</h2>
                     </div>
                 </div>
-                <p class="text-sm text-zinc-400">
+                <p v-if="requireMasterPassword" class="text-sm text-zinc-400">
+                    This desk is exposed to the internet, so a password is required.
+                </p>
+                <p v-else class="text-sm text-zinc-400">
                     Protects the desk when it's reachable off your own network. Leave it blank to run as a
                     trusted local desk with no password — you can set one later from Settings.
                 </p>
-                <input v-model="password" type="password" placeholder="master password (optional)" :disabled="busy" />
+                <p v-if="bootstrapPassword" class="text-sm text-zinc-400">
+                    You signed in with the bootstrap password; choose your own now.
+                </p>
+                <input
+                    v-model="password"
+                    type="password"
+                    :placeholder="requireMasterPassword ? 'master password (required, 12+ chars)' : 'master password (optional)'"
+                    :disabled="busy"
+                />
                 <button class="btn btn-primary" :disabled="busy" @click="submitPassword">Continue</button>
             </div>
 
