@@ -17,7 +17,7 @@ layer cannot express.
 ## The ccxt adapter
 
 `app/Exchange/Ccxt/CcxtExchange.php` is one generic adapter that speaks
-[ccxt](https://github.com/ccxt/ccxt)'s unified REST API, so every REST exchange ccxt supports (**110** as of ccxt 4.5.78, full roster below) is reachable without
+[ccxt](https://github.com/ccxt/ccxt)'s unified REST API, so every REST exchange ccxt supports (**110** as of ccxt 4.5.57, full roster below) is reachable without
 writing a class. The ccxt exchange id *is* the
 adapter id, so `kraken` in ccxt is `kraken` here.
 
