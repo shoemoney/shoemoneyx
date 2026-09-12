@@ -27,37 +27,81 @@ self-hoster runs by hand, not by anything AMI-specific.
 
 ## Build
 
-```bash
-brew install hashicorp/tap/packer   # if not already installed
-cd shoemoneyx                       # repo root — the template's file paths are relative to here
-packer init ops/image/desk.pkr.hcl
-packer validate -var version=0.1.0 ops/image/desk.pkr.hcl
-packer build -var version=0.1.0 ops/image/desk.pkr.hcl
-```
-
-`version` is required (no default) and has to match a real release: a `v<version>` git tag (for
-the compose file / `up.sh` clone) and a published `<version>` tag on both ghcr.io images. The AMI
-name and its `Version` tag both carry it, so `aws ec2 describe-images` tells you at a glance which
-release any given AMI is pinned to.
-
-Needs an AWS identity with EC2 + AMI permissions (`aws sts get-caller-identity` should already
-work) and a default VPC in the target region (`us-east-1` unless overridden with `-var
-region=...`). Builds in the default VPC on a temporary keypair/security group that Packer manages
-and tears down itself. Takes a few minutes: OS packages, Docker Engine, cloning the release tag,
-pulling the two pinned images, then the firewall script.
-
-On success, Packer prints the new AMI id. Write it to `ops/image/latest-ami.txt` (committed, so
-the last known-good AMI is always in git):
+`ops/image/release.sh` is the one entry point a human runs to cut a desk-image release. It wraps
+the packer build, the boot test, and the release bookkeeping that used to be three separate manual
+steps.
 
 ```bash
-echo ami-xxxxxxxxxxxxxxxxx > ops/image/latest-ami.txt
+bash ops/image/release.sh 0.2.0
 ```
+
+`bash ops/image/release.sh --dry-run 0.2.0` prints every command the script would run and executes
+nothing, so it works with no network and no AWS credentials. `bash ops/image/release.sh --status
+0.2.0` prints that version's record from `ops/image/releases.json` and, if a Marketplace change
+set has been submitted for it, the change set's current status. Set `RELEASE_NO_PUSH=1` to skip
+the `git push origin main` the script runs after committing the release record.
+
+Needs `packer` (`brew install hashicorp/tap/packer`, then `packer init ops/image/desk.pkr.hcl` once
+per checkout) and an AWS identity with EC2 and AMI permissions (`aws sts get-caller-identity`
+should already work), plus a default VPC in the target region (`us-east-1` unless overridden with
+`-var region=...`). `version` has to match a real release: a `v<version>` git tag (for the compose
+file / `up.sh` clone) and a published `<version>` tag on both ghcr.io images.
+
+`release.sh` runs five stages in order.
+
+1. Preflight checks everything at once and reports every failure rather than stopping at the
+   first. `version` has to look like `X.Y.Z`, the `v<version>` tag has to exist on origin, the
+   working tree has to be clean, and both `ghcr.io/shoemoney/shoemoneyx:<version>` and
+   `ghcr.io/shoemoney/shoemoneyx-nginx:<version>` have to be pullable anonymously. That last check
+   is what proves the `.github/workflows/image.yml` run triggered by `git push --tags` finished
+   publishing both multi-arch manifests.
+2. Build runs, under the hood, the same command as before:
+
+   ```bash
+   packer build -color=false -var version=0.2.0 ops/image/desk.pkr.hcl
+   ```
+
+   This step is convergent. It first asks EC2 for an AMI owned by this account tagged
+   `Project=shoemoneyx` and `Version=<version>` in state `available`, and adopts that instead of
+   building a second one. A rerun after a crash resumes instead of rebuilding. Builds in the
+   default VPC on a temporary keypair/security group that Packer manages and tears down itself, and
+   takes a few minutes: OS packages, Docker Engine, cloning the release tag, pulling the two pinned
+   images, then the firewall script.
+3. Boot test runs `ops/image/test-boot.sh` against the new AMI. See `## Boot test` below for what
+   it checks.
+4. Record upserts the release into `ops/image/releases.json`, commits it, pushes to origin unless
+   `RELEASE_NO_PUSH=1` is set, and tags the AMI `BootTested=true`.
+5. Marketplace is optional. If `ops/image/marketplace.env` exists (copy it from
+   `ops/image/marketplace.env.example`, it's gitignored) or `MARKETPLACE_PRODUCT_ID` /
+   `MARKETPLACE_ROLE_ARN` are set, this stage submits an `AddDeliveryOptions` change set for the new
+   version via `aws marketplace-catalog start-change-set` and records the change set id and status.
+   If it isn't configured, the script prints the seller-registration and product-creation steps and
+   exits 0, with the release from stage 4 still recorded.
+
+`ops/image/releases.json` replaces the old single-line AMI pointer file. It's a committed JSON
+array with one object per released version, upserted in place as a release advances through
+`built -> tested -> recorded -> published`. Each record looks like:
+
+```json
+{
+  "version": "0.1.2",
+  "commit": "<full 40-char git sha of the v0.1.2 tag's commit>",
+  "ami_id": "ami-...",
+  "ami_name": "shoemoneyx-desk-0.1.2-<packer-timestamp>",
+  "built_at": "<ISO8601 UTC>",
+  "boot_test": { "passed": true, "at": "<ISO8601 UTC>" },
+  "marketplace": { "change_set_id": "...", "status": "...", "at": "<ISO8601 UTC>" }
+}
+```
+
+`marketplace` is `null` until a change set has been submitted for that version.
 
 ## Boot test
 
-`ops/image/test-boot.sh` is the source of truth for "does this image actually work." It launches
-a real `t3.small` from the AMI, in the default VPC, behind a temporary security group (22 from
-the office IP only, 443 from anywhere), and asserts:
+`ops/image/test-boot.sh` is the source of truth for "does this image actually work." `release.sh`
+runs it automatically as stage 3, and it launches a real `t3.small` from the AMI, in the default
+VPC, behind a temporary security group (22 from the office IP only, 443 from anywhere), and
+asserts:
 
 1. HTTPS answers within 10 minutes
 2. `GET /api/status` (with the `X-Desk-Token` read off the instance via
@@ -70,8 +114,15 @@ the office IP only, 443 from anywhere), and asserts:
 
 Then it terminates the instance and deletes the temporary security group, success or failure.
 
+`release.sh` skips this stage when `ops/image/releases.json` already records a passing boot test
+for the exact AMI id stage 2 just built or adopted. If the test fails, `release.sh` deregisters the
+AMI, deletes its snapshots, records nothing, and exits non-zero, so a half-released image never
+sits around waiting to be found by an unlucky customer.
+
+To run it by hand against a specific AMI:
+
 ```bash
-bash ops/image/test-boot.sh "$(cat ops/image/latest-ami.txt)"
+bash ops/image/test-boot.sh ami-xxxxxxxxxxxxxxxxx
 ```
 
 Requires the `smx` EC2 key pair's private half at `~/.ssh/smx.pem` (override with
@@ -143,11 +194,13 @@ interface. Inbound to the published `443` still works: Docker's DNAT happens bef
 The image is immutable — there's no in-place app update path baked in. To ship a new release:
 
 ```bash
-packer build -var version=0.2.0 ops/image/desk.pkr.hcl   # clones v0.2.0, pulls the 0.2.0 images
-bash ops/image/test-boot.sh <new-ami-id>                 # proves it before anyone gets it
-echo <new-ami-id> > ops/image/latest-ami.txt
-git add ops/image/latest-ami.txt && git commit -m "chore: new desk image"
+bash ops/image/release.sh 0.2.0
 ```
+
+That runs preflight, builds or adopts the AMI, boot-tests it, and commits the result to
+`ops/image/releases.json`, pushing it to origin unless `RELEASE_NO_PUSH=1` is set. See `## Build`
+above for what each stage does, and run `bash ops/image/release.sh --status 0.2.0` afterward to
+check on it, including any Marketplace change set.
 
 An existing customer instance can also update itself in place, the same way any self-hoster does:
 
