@@ -70,12 +70,12 @@ The open-source desk stays one user per install. Everything social lives on the 
 - [x] Tests for every feature; `artisan test` green before merge
 
 ## Phase 5 — "Host it for you" ☁️
-- [ ] v2 hosted exchange: the hub runs its own tape + fill engine so contests are refereed centrally and feeder-less desks can paper trade on it (routes reserved in `docs/HUB_API.md`)
+- [x] ~~v2 hosted exchange~~ DROPPED 2026-09-11: no shoemoneyx-owned infra touches user trades (liability). Contests stay on reported fills. Reserved routes in `docs/HUB_API.md` stay unimplemented.
 - [x] Per-customer locked-down box image (AWS AMI first), only inbound HTTPS, outbound to exchange + OpenRouter — `ops/image/desk.pkr.hcl`, boot-tested by `ops/image/test-boot.sh`, see `docs/HOSTED_IMAGE.md`
 - [x] Onboarding: paste OpenRouter key → paper trading in minutes
 - [x] Billing: no hub billing. Revenue is the marked-up paid AMI listing on AWS Marketplace (user picks the paid image; 20% listing fee accepted). Decided 2026-09-11.
 - [ ] Image maintenance/update pipeline (rebuild + republish the AMI on release)
-- [ ] Hosted tier is paper-only at launch; live keys are self-host only
+- [x] No hosted tier at all. Users run the paid AMI in their own AWS account with their own keys (liability decision 2026-09-11).
 
 ## Open questions ❓
 - Which exchanges get native adapters after Coinbase (Binance, Kraken, Bybit?)
