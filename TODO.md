@@ -77,6 +77,7 @@ The open-source desk stays one user per install. Everything social lives on the 
 - [x] Docker-first distribution (v0.1.0 published 2026-09-11, ghcr.io/shoemoney/shoemoneyx + shoemoneyx-nginx, amd64+arm64): full-stack `docker compose up` (web/nginx/desk/queue/schedule/reverb/feeder + mariadb + redis), `docker/up.sh` generates secrets once, CI on tag `vX.Y.Z` publishes multi-arch images to ghcr.io (FA Pro decrypted from `ops/ci/fa-pro.tar.gz.enc` with the `FA_PRO_KEY` secret)
 - [ ] AMI runs the published Docker image (Ubuntu + docker + compose + `docker/up.sh` at first boot) so customers update with `docker compose pull`; replaces the bare-metal provision.sh
 - [ ] Image maintenance/update pipeline: on tag, Packer rebuilds the AMI from the tagged image, `test-boot.sh` proves it, `ops/image/releases.json` records it, and a Marketplace change set adds the version (IAM role `shoemoneyx-marketplace-ami-ingestion` exists; seller registration + first product load form are Jeremy's)
+- [x] Marketplace pricing (decided 2026-09-12): hourly, no free trial, no monthly/annual at launch; supported types t3.small (recommended), t3.medium, t3.large; software fee ~50% margin on the EC2 rate (exact per-type numbers TBD: fee = EC2 rate, or fee = 1.67x EC2 so net after AWS 20% is half the bill). Hosted/supported = private offer, still in the buyer's account.
 - [x] No hosted tier at all. Users run the paid AMI in their own AWS account with their own keys (liability decision 2026-09-11).
 
 ## Open questions ❓
