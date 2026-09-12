@@ -109,21 +109,16 @@ Operator commands (all on Pstan):
 - Redis has jobs reserved/queued on `backtests` but `CLIENT LIST` shows zero connected workers (best-effort heuristic — see the command's docblock for what it can't see)
 - any `backtests` row stuck `status=running` with `updated_at` older than 90 minutes (job timeout is 60 minutes)
 
-It runs every 5 minutes from **cron**, not the Laravel scheduler — this repo doesn't run `schedule:run`/`schedule:work` anywhere. See `ops/wick-cron.txt` for the exact crontab lines and the one-line install command. On a failed check it writes a `desk_events` row via `Reporter::warn()` (no Telegram — see the command's docblock for why) and self-remediates by calling `desk:release-orphans` with a `--since` cutoff appropriate to whichever condition fired.
+This repo does have a scheduler (routes/console.php, run via `ROLE=schedule` -> `schedule:work` under docker/entrypoint.sh, with `DESK_USE_SCHEDULER` gating only the desk-loop entries), but `desk:rounds-watch` is deliberately *not* registered there. Run it every 5 minutes from the operator's own cron instead — do not wire it into Illuminate's Schedule. On a failed check it writes a `desk_events` row via `Reporter::warn()` (no Telegram — see the command's docblock for why) and self-remediates by calling `desk:release-orphans` with a `--since` cutoff appropriate to whichever condition fired.
 
 ## Deploy
 
-**`ops/deploy-fleet.sh` reproduces this whole section as one command.** `--wick` (pull, build when
-package.json/resources changed, migrate, then restart the apps named by `--restart`, default
-`shoemoneyx-desk`; add `--optimizers` for a delete+start of every `shoemoneyx-optimizer*` app, `--workers` to
-restart `shoemoneyx-worker shoemoneyx-queue` and release the `backtests` queue 25s later), `--reek`, `--hueb`,
-`--images` (rebuild both arches from a clean worktree, swap on every live Pi and the NAS), `--verify`,
-or `--all` for the lot. `--dry-run` prints every command it would run on every host instead of
-running it; run `ops/deploy-fleet.sh --help` for the full flag list. It is idempotent — a host
-already at `--ref` skips its pull/build/migrate, a Pi or the NAS already running the freshly built
-image id skips the swap — and every `desk:release-orphans` call it makes is scoped to the queue that
+Deployments handle pulling code, building if resources changed, running migrations, and restarting
+the apps on each host — wick, reek, and hueb individually, or an image rebuild covering both arches
+from a clean worktree, in whatever combination the deploy needs. Every `desk:release-orphans` call after a restart is scoped to the queue that
 pool actually restarted, always run on wick, and named by the phase that failed if one does. The
-paragraphs below are what it automates; read them when the script needs debugging or a step by hand.
+paragraphs below describe the manual steps; read them when you need to understand a deployment step or
+troubleshoot by hand.
 
 **Scope the orphan release to the pool you restarted.** `desk:release-orphans --since=<restart time UTC>` re-queues *every* reservation older than the cutoff, on both queues by default. A Pi or NAS image swap only kills light-queue jobs, so after one run `php artisan desk:release-orphans --queues=backtests-light --since=…`; a wick/reek/hueb restart only kills heavy-queue jobs, so use `--queues=backtests`. Releasing the other queue with a short cutoff re-runs live jobs (2026-09-05 11:29: a one-minute cutoff after a Pi swap re-queued 38 heavy jobs the Macs were still running).
 
@@ -137,7 +132,7 @@ After restarting any worker pool (e.g., `systemctl --user restart farm-hueb` on 
 
 - wick: `WORKERS=24 pm2 start ecosystem.config.cjs --only shoemoneyx-worker` (heavy-first, the default order `backtests,backtests-light`)
 - reek: `WORKERS=16 WORKER_QUEUES=backtests-light,backtests pm2 start ecosystem.config.cjs --only shoemoneyx-worker` (light-first since 2026-09-05 11:45: the test-window leg on the Pis was bounding every round)
-- reek also hosts three optimizers (wick's load sat at 24–29 on 28 cores while reek idled at 3 on 20, 2026-09-05 14:20): `pm2 start ecosystem.config.cjs --only shoemoneyx-reekopt-short-m1,shoemoneyx-reekopt-short-m6,shoemoneyx-reekopt-long-focus,shoemoneyx-reekopt-short-ret` (short-ret is `--rank=return --dry`: report-only, it asks whether any short set reaches 7.5 % train with a positive test when ranked by raw return; never let it promote alongside the Calmar-ranked optimizers or the two rankings ping-pong the same champion). The `shoemoneyx-reekopt-` prefix keeps them out of `deploy-fleet.sh --optimizers`, which recreates only `shoemoneyx-optimizer*` on wick; after a reek pull, `pm2 delete` + that start line picks up new args. They do not appear in the /api/farm panel, which reads wick's pm2 only.
+- reek also hosts three optimizers (wick's load sat at 24–29 on 28 cores while reek idled at 3 on 20, 2026-09-05 14:20): `pm2 start ecosystem.config.cjs --only shoemoneyx-reekopt-short-m1,shoemoneyx-reekopt-short-m6,shoemoneyx-reekopt-long-focus,shoemoneyx-reekopt-short-ret` (short-ret is `--rank=return --dry`: report-only, it asks whether any short set reaches 7.5 % train with a positive test when ranked by raw return; never let it promote alongside the Calmar-ranked optimizers or the two rankings ping-pong the same champion). The `shoemoneyx-reekopt-` prefix keeps them out of any bulk recreate of `shoemoneyx-optimizer*` on wick; after a reek pull, `pm2 delete` + that start line picks up new args. They do not appear in the /api/farm panel, which reads wick's pm2 only.
 - `pm2 restart shoemoneyx-worker` keeps the env; only delete/start needs it again. `pm2 save` after either.
 
 
