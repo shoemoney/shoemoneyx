@@ -32,7 +32,7 @@ Base: `https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/`
 - `rest-api/public/get-public-market-trades.md` — trade tape, `start`/`end` unix seconds, `limit` ≤ 1000 — used by `market:backfill-trades` for sub-minute bars.
 - `rest-api/public/get-public-product-book.md` — spread / depth (`vet.max_spread_bps`)
 
-### Authenticated (CDP key, ES256 JWT) — `app/Services/Coinbase/*`
+### Authenticated (CDP key, ES256 JWT) — `app/Exchange/Coinbase/*`
 - `rest-api/accounts/list-accounts.md`, `get-account.md` — balances (`coinbase:account`)
 - `rest-api/fees/get-transaction-summary.md` — **your real maker/taker tier + 30-day volume. Check this before trusting `fees.taker_rate`.**
 - `rest-api/orders/create-order.md` — order_configuration: `market_market_ioc`, `limit_limit_gtc` (`post_only` flag = maker), `limit_limit_gtd`, `sor_limit_ioc`, stop/bracket types
