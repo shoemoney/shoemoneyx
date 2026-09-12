@@ -42,7 +42,7 @@ Update to the latest image:
 docker compose pull && docker compose up -d
 ```
 
-The published `ghcr.io` images include Font Awesome Pro, so no license files are needed to run them.
+The published `ghcr.io` images already include Font Awesome Pro, so no Font Awesome license files are needed to run them (charts still need your own TradingView Charting Library copy — see below).
 
 ## Quick start (no Docker)
 
