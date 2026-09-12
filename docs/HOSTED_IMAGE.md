@@ -108,6 +108,13 @@ Requires the `smx` EC2 key pair's private half at `~/.ssh/smx.pem` (override wit
 
 ## Getting the credentials
 
+No SSH needed for a normal launch: the bootstrap `MASTER_PASSWORD` is the **EC2 instance ID**
+(`i-…`, shown in the AWS console). Open `https://<ip>/`, the login page says so, paste the ID, and
+onboarding makes you choose your own password before anything else. The desk refuses an empty
+password on this image because it is reachable from the internet.
+
+For scripting (this is what `test-boot.sh` does):
+
 ```bash
 ssh -i ~/.ssh/smx.pem ubuntu@<ip> sudo cat /root/shoemoneyx-credentials.txt
 ```

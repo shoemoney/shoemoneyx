@@ -43,8 +43,16 @@ DOMAIN="$(imds tags/instance/DOMAIN)"
 APP_HOST="${DOMAIN:-$PUBLIC_IP}"
 log "app host: $APP_HOST (domain tag: ${DOMAIN:-none}), pinning SHOEMONEYX_VERSION=$VERSION"
 
+# The bootstrap password is the instance ID: the buyer reads it in the AWS console, so the
+# Marketplace one-click launch needs no SSH. The app shows the hint on /login while the password
+# is still this bootstrap value and makes onboarding refuse an empty password on this exposed box.
+INSTANCE_ID="$(imds instance-id)"
 log "handing off to docker/up.sh — generates .env, runs the migrate gate, brings up the stack, and blocks until /api/status answers"
-SHOEMONEYX_VERSION="$VERSION" ./docker/up.sh
+SHOEMONEYX_VERSION="$VERSION" \
+MASTER_PASSWORD="${INSTANCE_ID:-}" \
+MASTER_PASSWORD_HINT="First login: your EC2 instance ID (i-…), shown in the AWS console" \
+DESK_REQUIRE_MASTER_PASSWORD="true" \
+  ./docker/up.sh
 
 # Pin the version in .env too (up.sh only sees it on the process environment) so a later manual
 # `docker compose pull` on this box stays on this release by default. A plain text edit to .env
@@ -89,7 +97,8 @@ URL:              https://$APP_HOST
 MASTER_PASSWORD=$MASTER_PASSWORD
 DB_PASSWORD=$DB_PASSWORD
 
-MASTER_PASSWORD gates every page and the API (X-Desk-Token header or ?token=).
+MASTER_PASSWORD is the bootstrap password (this instance's ID); onboarding makes you replace it.
+It gates every page and the API (X-Desk-Token header or ?token=).
 DB_PASSWORD is the local 'shoemoneyx' MariaDB user, reachable only from the compose network.
 EOF
 chmod 600 "$CREDS_FILE"
