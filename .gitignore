@@ -46,7 +46,8 @@ dump.rdb
 /storage/arena-renders/
 
 # TradingView Charting Library is licensed per-user and cannot be redistributed. Apply at tradingview.com/charting-library-docs and drop your copy here.
-/public/charting_library
+/public/charting_library/*
+!/public/charting_library/README.md
 /public/datafeeds
 
 # research data stays local
