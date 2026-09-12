@@ -109,13 +109,13 @@ Operator commands (all on Pstan):
 - Redis has jobs reserved/queued on `backtests` but `CLIENT LIST` shows zero connected workers (best-effort heuristic — see the command's docblock for what it can't see)
 - any `backtests` row stuck `status=running` with `updated_at` older than 90 minutes (job timeout is 60 minutes)
 
-It runs every 5 minutes from cron or via `ROLE=schedule` (if `DESK_USE_SCHEDULER=true` in your config, which runs `schedule:work` from routes/console.php). Do not wire this into Illuminate's Schedule; invoke from the operator's own cron instead. On a failed check it writes a `desk_events` row via `Reporter::warn()` (no Telegram — see the command's docblock for why) and self-remediates by calling `desk:release-orphans` with a `--since` cutoff appropriate to whichever condition fired.
+This repo does have a scheduler (routes/console.php, run via `ROLE=schedule` -> `schedule:work` under docker/entrypoint.sh, with `DESK_USE_SCHEDULER` gating only the desk-loop entries), but `desk:rounds-watch` is deliberately *not* registered there. Run it every 5 minutes from the operator's own cron instead — do not wire it into Illuminate's Schedule. On a failed check it writes a `desk_events` row via `Reporter::warn()` (no Telegram — see the command's docblock for why) and self-remediates by calling `desk:release-orphans` with a `--since` cutoff appropriate to whichever condition fired.
 
 ## Deploy
 
 Deployments handle pulling code, building if resources changed, running migrations, and restarting
-the apps on each host (`--wick`, `--reek`, `--hueb`, `--images` for both arches from a clean worktree,
-or other combinations). Every `desk:release-orphans` call after a restart is scoped to the queue that
+the apps on each host — wick, reek, and hueb individually, or an image rebuild covering both arches
+from a clean worktree, in whatever combination the deploy needs. Every `desk:release-orphans` call after a restart is scoped to the queue that
 pool actually restarted, always run on wick, and named by the phase that failed if one does. The
 paragraphs below describe the manual steps; read them when you need to understand a deployment step or
 troubleshoot by hand.
@@ -132,7 +132,7 @@ After restarting any worker pool (e.g., `systemctl --user restart farm-hueb` on 
 
 - wick: `WORKERS=24 pm2 start ecosystem.config.cjs --only shoemoneyx-worker` (heavy-first, the default order `backtests,backtests-light`)
 - reek: `WORKERS=16 WORKER_QUEUES=backtests-light,backtests pm2 start ecosystem.config.cjs --only shoemoneyx-worker` (light-first since 2026-09-05 11:45: the test-window leg on the Pis was bounding every round)
-- reek also hosts three optimizers (wick's load sat at 24–29 on 28 cores while reek idled at 3 on 20, 2026-09-05 14:20): `pm2 start ecosystem.config.cjs --only shoemoneyx-reekopt-short-m1,shoemoneyx-reekopt-short-m6,shoemoneyx-reekopt-long-focus,shoemoneyx-reekopt-short-ret` (short-ret is `--rank=return --dry`: report-only, it asks whether any short set reaches 7.5 % train with a positive test when ranked by raw return; never let it promote alongside the Calmar-ranked optimizers or the two rankings ping-pong the same champion). The `shoemoneyx-reekopt-` prefix keeps them out of `deploy-fleet.sh --optimizers`, which recreates only `shoemoneyx-optimizer*` on wick; after a reek pull, `pm2 delete` + that start line picks up new args. They do not appear in the /api/farm panel, which reads wick's pm2 only.
+- reek also hosts three optimizers (wick's load sat at 24–29 on 28 cores while reek idled at 3 on 20, 2026-09-05 14:20): `pm2 start ecosystem.config.cjs --only shoemoneyx-reekopt-short-m1,shoemoneyx-reekopt-short-m6,shoemoneyx-reekopt-long-focus,shoemoneyx-reekopt-short-ret` (short-ret is `--rank=return --dry`: report-only, it asks whether any short set reaches 7.5 % train with a positive test when ranked by raw return; never let it promote alongside the Calmar-ranked optimizers or the two rankings ping-pong the same champion). The `shoemoneyx-reekopt-` prefix keeps them out of any bulk recreate of `shoemoneyx-optimizer*` on wick; after a reek pull, `pm2 delete` + that start line picks up new args. They do not appear in the /api/farm panel, which reads wick's pm2 only.
 - `pm2 restart shoemoneyx-worker` keeps the env; only delete/start needs it again. `pm2 save` after either.
 
 
