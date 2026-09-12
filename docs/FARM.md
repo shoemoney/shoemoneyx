@@ -109,21 +109,16 @@ Operator commands (all on Pstan):
 - Redis has jobs reserved/queued on `backtests` but `CLIENT LIST` shows zero connected workers (best-effort heuristic — see the command's docblock for what it can't see)
 - any `backtests` row stuck `status=running` with `updated_at` older than 90 minutes (job timeout is 60 minutes)
 
-It runs every 5 minutes from **cron**, not the Laravel scheduler — this repo doesn't run `schedule:run`/`schedule:work` anywhere. See `ops/wick-cron.txt` for the exact crontab lines and the one-line install command. On a failed check it writes a `desk_events` row via `Reporter::warn()` (no Telegram — see the command's docblock for why) and self-remediates by calling `desk:release-orphans` with a `--since` cutoff appropriate to whichever condition fired.
+It runs every 5 minutes from cron or via `ROLE=schedule` (if `DESK_USE_SCHEDULER=true` in your config, which runs `schedule:work` from routes/console.php). Do not wire this into Illuminate's Schedule; invoke from the operator's own cron instead. On a failed check it writes a `desk_events` row via `Reporter::warn()` (no Telegram — see the command's docblock for why) and self-remediates by calling `desk:release-orphans` with a `--since` cutoff appropriate to whichever condition fired.
 
 ## Deploy
 
-**`ops/deploy-fleet.sh` reproduces this whole section as one command.** `--wick` (pull, build when
-package.json/resources changed, migrate, then restart the apps named by `--restart`, default
-`shoemoneyx-desk`; add `--optimizers` for a delete+start of every `shoemoneyx-optimizer*` app, `--workers` to
-restart `shoemoneyx-worker shoemoneyx-queue` and release the `backtests` queue 25s later), `--reek`, `--hueb`,
-`--images` (rebuild both arches from a clean worktree, swap on every live Pi and the NAS), `--verify`,
-or `--all` for the lot. `--dry-run` prints every command it would run on every host instead of
-running it; run `ops/deploy-fleet.sh --help` for the full flag list. It is idempotent — a host
-already at `--ref` skips its pull/build/migrate, a Pi or the NAS already running the freshly built
-image id skips the swap — and every `desk:release-orphans` call it makes is scoped to the queue that
+Deployments handle pulling code, building if resources changed, running migrations, and restarting
+the apps on each host (`--wick`, `--reek`, `--hueb`, `--images` for both arches from a clean worktree,
+or other combinations). Every `desk:release-orphans` call after a restart is scoped to the queue that
 pool actually restarted, always run on wick, and named by the phase that failed if one does. The
-paragraphs below are what it automates; read them when the script needs debugging or a step by hand.
+paragraphs below describe the manual steps; read them when you need to understand a deployment step or
+troubleshoot by hand.
 
 **Scope the orphan release to the pool you restarted.** `desk:release-orphans --since=<restart time UTC>` re-queues *every* reservation older than the cutoff, on both queues by default. A Pi or NAS image swap only kills light-queue jobs, so after one run `php artisan desk:release-orphans --queues=backtests-light --since=…`; a wick/reek/hueb restart only kills heavy-queue jobs, so use `--queues=backtests`. Releasing the other queue with a short cutoff re-runs live jobs (2026-09-05 11:29: a one-minute cutoff after a Pi swap re-queued 38 heavy jobs the Macs were still running).
 

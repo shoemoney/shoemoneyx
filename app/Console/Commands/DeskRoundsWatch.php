@@ -13,9 +13,9 @@ use Illuminate\Support\Facades\Redis;
 
 /**
  * Dead-man's switch for the optimizer farm: is a round landing, are workers actually
- * connected, is anything wedged in "running". Run every 5 minutes from cron (this repo's
- * scheduler is not running — there is no schedule:run/schedule:work anywhere — see
- * ops/wick-cron.txt for the crontab line; do not wire this into Illuminate's Schedule).
+ * connected, is anything wedged in "running". Invoked every 5 minutes via cron or
+ * `ROLE=schedule` if `DESK_USE_SCHEDULER=true` (see routes/console.php). Do not wire
+ * this into Illuminate's Schedule; invoke from cron instead.
  *
  * Each condition is its own named check (name + closure) executed in sequence, rather than
  * one long straight-line command, so a single failure mode can be read and tested in
