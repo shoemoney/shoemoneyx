@@ -2,10 +2,15 @@
 # /opt/shoemoneyx-first-boot.sh — runs once via shoemoneyx-first-boot.service.
 # Secret generation and the DB migration are no longer this script's job: they belong to
 # docker/up.sh (identical to what a self-hoster runs by hand) and to the compose file's own
-# one-shot `migrate` service. This script pins the image version, hands off to up.sh, corrects
-# the one thing up.sh can't know from inside a generic compose checkout (the public host name),
-# swaps in a real cert when a DOMAIN tag is present, and writes the credentials file the same
-# way the desk always has.
+# one-shot `migrate` service. This script pins the image version, hands off to up.sh, swaps in a
+# real cert when a DOMAIN tag is present, and writes the credentials file the same way the desk
+# always has. It deliberately never recreates web/queue/schedule/reverb/desk after up.sh brings
+# them up: nginx resolves the `web`/`reverb` hostnames once at its own startup and never again
+# (no `resolver` directive), so recreating one of those containers behind an nginx that's still
+# running leaves nginx pointing at a dead IP — a real 502 reproduced while writing this. up.sh's
+# own APP_URL=https://localhost is left as-is (the same default every self-hoster runs on); the
+# credentials file below reports the box's real IP/domain as the URL to open without touching
+# .env or the running stack.
 set -euo pipefail
 
 APP_DIR=/opt/shoemoneyx
@@ -41,17 +46,16 @@ log "app host: $APP_HOST (domain tag: ${DOMAIN:-none}), pinning SHOEMONEYX_VERSI
 log "handing off to docker/up.sh — generates .env, runs the migrate gate, brings up the stack, and blocks until /api/status answers"
 SHOEMONEYX_VERSION="$VERSION" ./docker/up.sh
 
-# up.sh always writes APP_URL=https://localhost on a fresh .env (correct for a bare self-hosted
-# checkout, wrong for a box reachable at a public IP/domain) and has no way to be told otherwise
-# from outside; fix it up here and pin the version for any later manual `docker compose pull`.
-log "correcting APP_URL to https://$APP_HOST and pinning SHOEMONEYX_VERSION in .env"
-sed -i "s#^APP_URL=.*#APP_URL=https://$APP_HOST#" .env
+# Pin the version in .env too (up.sh only sees it on the process environment) so a later manual
+# `docker compose pull` on this box stays on this release by default. A plain text edit to .env
+# — no container touches this file again until something is next recreated, so there's no need
+# to restart anything for it to take effect.
+log "pinning SHOEMONEYX_VERSION=$VERSION in .env for future manual docker compose runs"
 if grep -q '^SHOEMONEYX_VERSION=' .env; then
   sed -i "s/^SHOEMONEYX_VERSION=.*/SHOEMONEYX_VERSION=$VERSION/" .env
 else
   echo "SHOEMONEYX_VERSION=$VERSION" >> .env
 fi
-SHOEMONEYX_VERSION="$VERSION" docker compose up -d
 
 if [[ -n "$DOMAIN" ]]; then
   log "DOMAIN tag present ($DOMAIN): requesting a real cert via certbot (standalone, port 80 briefly)"
@@ -77,12 +81,11 @@ fi
 log "writing credentials to $CREDS_FILE"
 MASTER_PASSWORD="$(grep '^MASTER_PASSWORD=' .env | cut -d= -f2-)"
 DB_PASSWORD="$(grep '^DB_PASSWORD=' .env | cut -d= -f2-)"
-APP_URL="$(grep '^APP_URL=' .env | cut -d= -f2-)"
 cat > "$CREDS_FILE" <<EOF
 shoemoneyx desk — first-boot credentials
 generated: $(date -u +%FT%TZ)
 
-URL:              $APP_URL
+URL:              https://$APP_HOST
 MASTER_PASSWORD=$MASTER_PASSWORD
 DB_PASSWORD=$DB_PASSWORD
 

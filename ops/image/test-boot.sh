@@ -27,6 +27,10 @@ BOOT_TIMEOUT_SECS=600
 POLL_INTERVAL_SECS=10
 
 aws_() { aws --profile "$PROFILE" --region "$REGION" "$@"; }
+# LogLevel=ERROR suppresses ssh's "Warning: Permanently added ... to the list of known hosts"
+# line, which UserKnownHostsFile=/dev/null makes it print on every single connection — without
+# this, that line becomes stdout line 1 of any output this function's caller parses positionally.
+ssh_() { ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 "ubuntu@$PUBLIC_IP" "$@"; }
 
 INSTANCE_ID=""
 SG_ID=""
@@ -148,18 +152,31 @@ if [[ -n "$MASTER_PASSWORD" ]]; then
   fi
 fi
 
-ssh_() {
-  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 "ubuntu@$PUBLIC_IP" "$@"
-}
+# shoemoneyx-firewall.service runs after shoemoneyx-first-boot.service (After=), but its own
+# ufw reset/reconfigure/enable sequence alone takes ~25s — MASTER_PASSWORD can already be
+# readable before that finishes, so wait for it explicitly before asserting anything firewall-
+# related, or the egress check below races the DOCKER-USER rules still being installed.
+log "waiting for shoemoneyx-firewall.service to finish applying the DOCKER-USER policy"
+FIREWALL_READY=0
+for _ in $(seq 1 24); do
+  if ssh_ "sudo systemctl is-active --quiet shoemoneyx-firewall.service" 2>/dev/null; then
+    FIREWALL_READY=1
+    break
+  fi
+  sleep 5
+done
+[[ "$FIREWALL_READY" -eq 1 ]] || fail "shoemoneyx-firewall.service never reached active state"
 
 log "asserting docker compose ps shows web healthy and nginx up"
-COMPOSE_PS="$(ssh_ "sudo docker compose -f /opt/shoemoneyx/docker-compose.yml ps" 2>&1 || true)"
-echo "$COMPOSE_PS" >&2
-if ! echo "$COMPOSE_PS" | grep -qE '^web\b.*\(healthy\)'; then
-  fail "docker compose ps does not show web as healthy"
+COMPOSE_PS_JSON="$(ssh_ "sudo docker compose -f /opt/shoemoneyx/docker-compose.yml ps --format json" 2>&1 || true)"
+echo "$COMPOSE_PS_JSON" >&2
+WEB_HEALTH="$(echo "$COMPOSE_PS_JSON" | jq -rs 'map(select(.Service=="web")) | .[0].Health // "missing"')"
+NGINX_STATE="$(echo "$COMPOSE_PS_JSON" | jq -rs 'map(select(.Service=="nginx")) | .[0].State // "missing"')"
+if [[ "$WEB_HEALTH" != "healthy" ]]; then
+  fail "docker compose ps shows web health='$WEB_HEALTH' (want healthy)"
 fi
-if ! echo "$COMPOSE_PS" | grep -qE '^nginx\b.*Up'; then
-  fail "docker compose ps does not show nginx as Up"
+if [[ "$NGINX_STATE" != "running" ]]; then
+  fail "docker compose ps shows nginx state='$NGINX_STATE' (want running)"
 fi
 
 log "asserting the Docker egress policy holds from inside a container (443 reachable, plain :80 blocked)"
