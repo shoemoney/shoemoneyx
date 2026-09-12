@@ -51,3 +51,6 @@ dump.rdb
 
 # research data stays local
 /research/
+
+# operator-supplied AWS Marketplace product id / ingestion role (copy marketplace.env.example)
+ops/image/marketplace.env
