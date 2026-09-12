@@ -44,7 +44,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
     [CACHE_STORE]="redis"
     [DESK_MODE]="paper"
     [EXCHANGE]="coinbase"
-    [MASTER_PASSWORD]="$(rand 32 24)"
+    [MASTER_PASSWORD]="${MASTER_PASSWORD:-$(rand 32 24)}"
     [HUB_URL]="https://hub.shoemoneyx.com"
     [BROADCAST_CONNECTION]="reverb"
     [REVERB_APP_ID]="shoemoneyx"
@@ -56,6 +56,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
     [REVERB_SERVER_HOST]="0.0.0.0"
     [REVERB_SERVER_PORT]="8812"
   )
+  # An image's first boot can hand in a known bootstrap password (the EC2 instance ID) and the
+  # login-page hint / exposed-desk flag the app reads; a plain self-hoster leaves these unset.
+  [[ -n "${MASTER_PASSWORD_HINT:-}" ]] && OVERRIDES[MASTER_PASSWORD_HINT]="$MASTER_PASSWORD_HINT"
+  [[ -n "${DESK_REQUIRE_MASTER_PASSWORD:-}" ]] && OVERRIDES[DESK_REQUIRE_MASTER_PASSWORD]="$DESK_REQUIRE_MASTER_PASSWORD"
   for key in "${!OVERRIDES[@]}"; do
     set_env "$key" "${OVERRIDES[$key]}"
   done
