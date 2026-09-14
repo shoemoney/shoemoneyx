@@ -76,14 +76,27 @@ try {
   await page.locator('button:has-text("Continue")').first().click();
   const keyInput = page.locator('input[placeholder="sk-or-v1-…"]');
   await keyInput.waitFor({ timeout: 15000 });
-  check('master-password step advanced to openrouter step', true);
+  // The wizard renders exactly one step's markup at a time (v-else-if), so a real transition
+  // both retires the master-password input from the DOM and leaves the openrouter key input
+  // enabled (busy flips back to false only after /api/onboarding/master-password + refresh()
+  // both resolved) — neither is implied merely by keyInput having become visible.
+  const pwGone = (await pw.count()) === 0;
+  const keyInputEnabled = await keyInput.isEnabled();
+  check('master-password step advanced to openrouter step', pwGone && keyInputEnabled, `pwInputGone=${pwGone} keyInputEnabled=${keyInputEnabled}`);
 
   if (!OR_KEY) throw new Error('OPENROUTER_API_KEY is required for the openrouter wizard step');
   await keyInput.fill(OR_KEY);
   await page.locator('button:has-text("Continue")').first().click();
   const coinbase = page.locator('input[type="radio"][value="coinbase"]');
   await coinbase.waitFor({ timeout: 30000 });
-  check('openrouter step accepted the key (server validated it against OpenRouter)', true);
+  // submitOpenRouter() only calls refresh() (which advances currentStep to 'exchange') after
+  // the POST to /api/onboarding/openrouter resolves without throwing; a rejected/invalid key
+  // throws first, leaves currentStep on 'openrouter' and renders the error banner instead — so
+  // an absent banner here is evidence the server-side OpenRouter validation actually passed,
+  // not just that some step rendered a coinbase radio.
+  const orError = page.locator('.mw-error[role="alert"]');
+  const orErrorCount = await orError.count();
+  check('openrouter step accepted the key (server validated it against OpenRouter)', orErrorCount === 0, `errorBannerCount=${orErrorCount}`);
 
   await coinbase.check();
   await page.locator('button:has-text("Continue with coinbase")').click();
