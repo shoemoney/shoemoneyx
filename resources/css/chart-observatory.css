@@ -67,6 +67,12 @@
 .cl-stage-label i{width:5px;height:18px;background:#4bc9ff;box-shadow:0 0 13px #19a2ff}.cl-stage-label b{font-weight:400;color:#72a5c6}
 .cl-chart-viewport{position:relative;isolation:isolate;overflow:hidden}
 .cl-observatory #tv_chart{height:min(68vh,820px);min-height:560px}
+.cl-no-tv{margin:14px;padding:22px 24px;border:1px solid #255477;border-radius:12px;background:linear-gradient(135deg,#06223566,#02070bcc);color:#b4cee0;font-size:14px;line-height:1.55}
+.cl-no-tv .cl-no-tv-title{margin:0 0 10px;color:#c0e6ff;font:600 15px/1.3 var(--font-sans,sans-serif);letter-spacing:.03em}
+.cl-no-tv p{margin:0 0 10px;max-width:72ch}
+.cl-no-tv p:last-child{margin-bottom:0}
+.cl-no-tv a{color:#59bfff;text-decoration:underline}
+.cl-no-tv code{font:0.92em var(--font-mono,monospace);color:#9de3ff;background:#0b528533;border:1px solid #28618a55;border-radius:6px;padding:1px 6px}
 .cl-guardian{position:absolute;inset:0;z-index:2;pointer-events:none!important;overflow:hidden;transition:opacity .5s}
 .cl-guardian-muted{opacity:0}
 .cl-guardian-grid{position:absolute;inset:48% 70px 35px 35%;opacity:.2;background:linear-gradient(#007be622 1px,transparent 1px),linear-gradient(90deg,#007be622 1px,transparent 1px);background-size:24px 24px;transform:perspective(220px) rotateX(54deg);transform-origin:center bottom;mask-image:radial-gradient(ellipse at 75% 80%,#000,transparent 72%)}

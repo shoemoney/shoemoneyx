@@ -20,6 +20,10 @@ const interval = ref("1");
 const position = ref(null);
 const candidates = ref([]);
 const error = ref("");
+// True when the page loaded but public/charting_library is empty (every AMI/marketplace desk —
+// the library is licensed and cannot be redistributed). Gets its own honest notice, not the
+// generic "refresh to try again" error, because refreshing never fixes it.
+const libraryMissing = ref(false);
 const positionState = ref("loading");
 const decisionState = ref("loading");
 const range = ref(null);
@@ -221,8 +225,7 @@ async function loadSide() {
 function mount() {
     if (!alive || widget) return;
     if (!window.TradingView || !window.Datafeeds) {
-        error.value =
-            "The chart could not load. Refresh this page to try again.";
+        libraryMissing.value = true;
         return;
     }
     mountedSeries = selectedSeries();
@@ -426,7 +429,22 @@ onBeforeUnmount(() => {
             <div class="smx-chart-main flex min-w-0 flex-1 flex-col">
                 <div class="cl-stage-label"><span><i></i>{{ symbol }} <b>/ {{ TF_MAP[interval] }}</b></span><span>B / S marks show your fills</span></div>
                 <div class="cl-chart-viewport" @pointerleave="guardian?.leave()">
-                    <div id="tv_chart" class="min-h-0 flex-1"></div>
+                    <div v-if="libraryMissing" class="cl-no-tv" role="note">
+                        <p class="cl-no-tv-title">Interactive chart not installed</p>
+                        <p>
+                            This desk ships without the TradingView Charting Library — it is free,
+                            but its license forbids redistribution, so no distributed image can
+                            include it. The market feed, candles, and indicators on this page are
+                            live and unaffected.
+                        </p>
+                        <p>
+                            To enable the chart, request access at
+                            <a href="https://www.tradingview.com/charting-library-docs" target="_blank" rel="noopener">tradingview.com/charting-library-docs</a>,
+                            extract the library into <code>public/charting_library/</code> as
+                            described in that directory's <code>README.md</code>, and reload this page.
+                        </p>
+                    </div>
+                    <div v-show="!libraryMissing" id="tv_chart" class="min-h-0 flex-1"></div>
                     <ChartGuardian ref="guardian" :symbol="symbol" :active="effectsActive" :quote="quote" :class="{ 'cl-guardian-muted': !effects }" />
                 </div>
                 <SmxPanel
