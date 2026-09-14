@@ -257,6 +257,8 @@ class StrategyPluginController extends Controller
      */
     public function assist(Request $request, ChatClient $client): JsonResponse
     {
+        set_time_limit(300);
+
         $data = $request->validate([
             'messages' => 'required|array|min:1|max:50',
             'messages.*.role' => 'required|string|in:user,assistant',

@@ -29,6 +29,10 @@ class AgentController extends Controller
     {
         $data = $request->validate(['message' => 'required|string|max:8000']);
 
+        // A turn is up to MAX_TOOL_CALLS model round-trips at 90 s each; PHP's default 30 s limit
+        // kills it mid-loop. 300 s matches nginx's fastcgi_read_timeout in the image.
+        set_time_limit(300);
+
         return response()->json($agent->turn($conversation->id, $data['message']));
     }
 
