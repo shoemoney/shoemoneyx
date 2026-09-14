@@ -69,7 +69,7 @@ Charts need the TradingView Charting Library, which is free but cannot be redist
 | `php artisan desk:ctl status\|halt\|resume\|stop\|close <PRODUCT\|all>\|paper-reset\|set <key> <v>\|get <key>` | controls |
 | `php artisan desk:backtest --products=BTC-USD,SOL-USD --days=30 --cash=1000` | replay a strategy |
 | `php artisan desk:sweep --queue` | fan a parameter grid out to the farm |
-| `php artisan desk:optimize --space=core\|wide --mutate=N` | walk-forward optimizer |
+| `php artisan desk:optimize --space=mr\|mr-short --mutate=N` | walk-forward optimizer |
 | `php artisan desk:coin show\|set\|clear` | per-coin parameter overrides |
 | `php artisan market:sync-products` / `market:backfill --days=90` / `market:backfill-trades --timeframes=33s,41s` | data |
 | `php artisan coinbase:account --key=… --secret=…` / `--test` | store (encrypted) and test an exchange key |
