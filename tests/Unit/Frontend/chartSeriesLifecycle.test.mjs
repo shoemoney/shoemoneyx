@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ref, reactive, computed, watch, nextTick, effectScope } from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import { cursorTarget } from '../../../resources/js/components/chart/marketLens.js';
+import { deskHeaders } from '../../../resources/js/api.js';
 const base = new URL('../../../', import.meta.url);
 class Events {
     handlers=new Set(); subscribe(_owner,fn){this.handlers.add(fn);} unsubscribe(_owner,fn){this.handlers.delete(fn);} emit(...args){for(const fn of [...this.handlers])fn(...args);}
@@ -23,8 +24,8 @@ async function instance(file, initialProps, exposed) {
         source = source.slice(0, node.start) + source.slice(node.end);
     }
     const mounted=[],unmounted=[],scope=effectScope(),props=reactive(initialProps);
-    const create=new Function('ref','computed','watch','onMounted','onBeforeUnmount','onUnmounted','defineProps','useRouter','api','cursorTarget',`${source}\nreturn {${exposed}}`);
-    const result=scope.run(()=>create(ref,computed,watch,(fn)=>mounted.push(fn),(fn)=>unmounted.push(fn),(fn)=>unmounted.push(fn),()=>props,()=>({replace(){}}),api,cursorTarget));
+    const create=new Function('ref','computed','watch','onMounted','onBeforeUnmount','onUnmounted','defineProps','useRouter','useRoute','api','cursorTarget','deskHeaders',`${source}\nreturn {${exposed}}`);
+    const result=scope.run(()=>create(ref,computed,watch,(fn)=>mounted.push(fn),(fn)=>unmounted.push(fn),(fn)=>unmounted.push(fn),()=>props,()=>({replace(){}}),()=>({query:{}}),api,cursorTarget,deskHeaders));
     return {result,props,mounted,unmount(){for(const fn of unmounted)fn();scope.stop();}};
 }
 let widget,failConstructor=false;
@@ -36,7 +37,7 @@ class Widget {
     finish(){const request=this.pending.shift();this.currentSymbol=request.symbol;this.currentInterval=request.interval;this.events.interval.emit(request.interval);request.callback();return request;}
     remove(){this.removed=true;}
 }
-globalThis.window={TradingView:{widget:Widget},Datafeeds:{UDFCompatibleDatafeed:class{getBars(...args){this.historyRequest=args;}}}};
+globalThis.window={TradingView:{widget:Widget},Datafeeds:{UDFCompatibleDatafeed:class{getBars(...args){this.historyRequest=args;}}},fetch(){return new Promise(()=>{});}};
 const chart=await instance('resources/js/pages/Chart.vue',{symbol:'BTC-USD'},'symbol,interval,range,products,error,guardian,effects');
 const aims=[];chart.result.guardian.value={aim:target=>aims.push(target),leave(){}};
 const mountedPromise=chart.mounted[0]();
