@@ -94,7 +94,7 @@ answer anything. Verify it still fits your setup before setting `MCP_SERVERS` to
 it; `config/mcp.php` documents the exact shape as a comment rather than an active
 default.
 
-## ChatClient contract
+## ChatClient contract and OpenRouter implementation
 
 The agent codes against `App\Ai\Contracts\ChatClient` / `App\Ai\ChatResponse` and does
 not assume anything beyond that interface:
@@ -109,6 +109,25 @@ interface ChatClient
 
 `$messages` and `$tools` follow the OpenAI chat-completions shape. `ChatResponse`
 carries `content`, `toolCalls` (`list<array{id, name, arguments}>`), `model`, `usage`,
-and `finishReason`. This PR ships the interface, the prompt, the tools, and
-`StrategyAgent`'s loop against it — a concrete `ChatClient` implementation (the actual
-OpenRouter/provider call) is supplied separately and is out of scope here.
+and `finishReason`.
+
+### OpenRouterChatClient
+
+`App\Ai\OpenRouterChatClient` implements this interface and ships production-ready.
+It's bound via `App\Providers\AiServiceProvider::register()`:
+
+```php
+$this->app->bind(ChatClient::class, OpenRouterChatClient::class);
+```
+
+The implementation:
+- Routes all chat completions through the operator's connected OpenRouter account.
+- Resolves API keys from user `AiConnection` rows (with audit trail) or from
+  `services.openrouter.key` in config/services.php for self-hosted setups.
+- Every request is gated and audited by `App\Ai\Gate`: `ensureAllowed()` runs before
+  the HTTP call, `record()` logs metadata after (prompts, completions, tool arguments
+  never leak into logs).
+- Handles OpenRouter 429 rate limits with a single 30-second backoff retry (looping
+  against a rate limit digs deeper, so one retry maximum).
+- Parses OpenRouter's response into `ChatResponse`, extracting tool calls, usage, and
+  finish reason into the standard shape.
