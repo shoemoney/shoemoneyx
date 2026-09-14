@@ -131,6 +131,7 @@ spot-only caveat.
 
 ```bash
 php artisan test
+npm run test:frontend
 ```
 
 ## Contributing
