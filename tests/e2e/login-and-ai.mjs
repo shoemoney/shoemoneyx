@@ -41,15 +41,29 @@ async function json(ctx, url) {
   return { status: r.status(), body };
 }
 
+// A marketplace AMI boots with the EC2 instance ID as the bootstrap master password, so the login
+// gate comes BEFORE the wizard there. Set E2E_BOOTSTRAP_PASSWORD to walk that path; leave it unset
+// for a bare desk whose root goes straight to onboarding. E2E_INSECURE=1 accepts a self-signed cert.
+const BOOTSTRAP = process.env.E2E_BOOTSTRAP_PASSWORD || '';
+const ctxOpts = { viewport: { width: 1280, height: 900 }, ignoreHTTPSErrors: process.env.E2E_INSECURE === '1' };
+
 const browser = await chromium.launch({ headless: true });
 let current = null;
 try {
   // ---- 1. First-run wizard --------------------------------------------------------------
-  const setup = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const setup = await browser.newContext(ctxOpts);
   const page = await setup.newPage();
   current = page;
   page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) console.log(`  http ${r.status()} ${r.request().method()} ${r.url()}`); });
   await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  if (BOOTSTRAP) {
+    check('AMI desk gates on /login before the wizard', page.url().endsWith('/login'), page.url());
+    const hint = await page.locator('body').innerText();
+    check('login page shows the instance-ID hint', /instance ID/i.test(hint));
+    await page.locator('input[name="password"]').fill(BOOTSTRAP);
+    await page.locator('button:has-text("Sign in")').click();
+    await page.waitForLoadState('networkidle');
+  }
   check('root redirects to onboarding on a fresh desk', page.url().endsWith('/onboarding'), page.url());
   await shot(page, '01-onboarding');
 
@@ -86,7 +100,7 @@ try {
   await setup.close();
 
   // ---- 2. Login gate in a fresh session ---------------------------------------------------
-  const fresh = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const fresh = await browser.newContext(ctxOpts);
   const p2 = await fresh.newPage();
   current = p2;
   p2.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) console.log(`  http ${r.status()} ${r.request().method()} ${r.url()}`); });
