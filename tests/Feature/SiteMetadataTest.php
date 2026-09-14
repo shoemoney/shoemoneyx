@@ -65,6 +65,8 @@ class SiteMetadataTest extends TestCase
         $index = $this->get('/llms.txt')->assertOk()->assertHeader('Content-Type', 'text/plain; charset=UTF-8')->getContent();
         $this->assertStringStartsWith("# ShoeMoneyX\n", $index);
         $this->assertStringContainsString('All public data is simulated', $index);
+        $this->assertStringContainsString("## Support and contact\n\n- Email: support@shoemoneyx.com", $index);
+        $this->assertStringContainsString('support@shoemoneyx.com', $this->get('/llms-full.txt')->assertOk()->getContent());
         preg_match_all('/\]\((https:\/\/shoemoneyx.com[^)]+)\)/', $index, $links);
         $this->assertCount(12, $links[1]);
         foreach ($links[1] as $url) {
@@ -80,6 +82,7 @@ class SiteMetadataTest extends TestCase
         $ai = $this->get('/ai.txt')->assertOk()->getContent();
         $this->assertSame($ai, $this->get('/.well-known/ai.txt')->assertOk()->getContent());
         $this->assertStringNotContainsString('example.com', $ai);
+        $this->assertStringContainsString('# Contact: support@shoemoneyx.com', $ai);
         $this->get('/index.md')->assertOk()->assertHeader('Content-Type', 'text/markdown; charset=UTF-8');
         $this->get('/unknown.md')->assertNotFound();
     }

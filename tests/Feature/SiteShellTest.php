@@ -29,6 +29,8 @@ class SiteShellTest extends TestCase
             $page = $this->page($item['path']);
             $this->assertSame(1, $page->query('//header[@data-site-header and not(@hidden)]')->length);
             $this->assertSame(1, $page->query('//footer[@data-site-footer and not(@hidden)]')->length);
+            $this->assertSame(1, $page->query('//footer[@data-site-footer]//*[@data-site-support]/a[@href="mailto:support@shoemoneyx.com"]')->length);
+            $this->assertSame(1, $page->query('//footer[@data-site-footer]//*[@data-site-support]/a[@href="https://github.com/shoemoney/shoemoneyx/issues"]')->length);
             $this->assertSame(12, $page->query('//nav[@aria-label="Main navigation"]/a[@href]')->length);
             $this->assertSame(1, $page->query('//nav/a[@aria-current="page"]')->length);
             $this->assertSame($item['path'], $page->query('//nav/a[@aria-current="page"]')->item(0)->getAttribute('href'));

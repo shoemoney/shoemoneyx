@@ -419,6 +419,32 @@
 .smx-footer-links a:hover {
     color: var(--smx-blue-bright);
 }
+.smx-footer-support {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 22px;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #193548;
+    color: var(--smx-muted);
+    font-size: 14px;
+}
+.smx-footer-support span {
+    font: 12px/1.6 ui-monospace, monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.smx-footer-support a {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--smx-muted);
+    text-decoration: none;
+}
+.smx-footer-support a:hover {
+    color: var(--smx-blue-bright);
+}
 .smx-health-detail {
     margin-top: 20px;
     padding-top: 14px;

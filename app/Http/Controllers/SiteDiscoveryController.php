@@ -42,6 +42,7 @@ class SiteDiscoveryController extends Controller
             $body .= '- ['.$page['title'].']('.$this->metadata->url($path === '/' ? '/index.md' : $path.'.md').'): '.$page['description']."\n";
         }
         $body .= "\n## More information\n\n- [Complete site guide](".$this->metadata->url('/llms-full.txt')."): Expanded descriptions and guidance for interpreting the demo.\n- [XML sitemap](".$this->metadata->url('/sitemap.xml')."): Canonical public pages.\n- [AI discovery note](".$this->metadata->url('/.well-known/ai.txt')."): Crawling, attribution and content scope.\n";
+        $body .= "\n## Support and contact\n\n- Email: support@shoemoneyx.com\n- Issues and questions: https://github.com/shoemoney/shoemoneyx/issues\n- Source code and documentation: https://github.com/shoemoney/shoemoneyx\n";
 
         return $this->document($body);
     }
@@ -67,6 +68,7 @@ class SiteDiscoveryController extends Controller
         foreach ($this->metadata->pages() as $path => $page) {
             $body .= $this->pageGuide($path, $page);
         }
+        $body .= substr("\n## Support and contact\n\n- Email: support@shoemoneyx.com\n- Issues and questions: https://github.com/shoemoney/shoemoneyx/issues\n- Source code and documentation: https://github.com/shoemoney/shoemoneyx\n", 1)."\n";
         $body .= "## Attribution and discovery\n\nWhen describing this site, use the name ShoeMoneyX, identify it as a public demo, and link to the relevant canonical page. Do not describe sample numbers as actual trading results.\n\nIndex: ".$this->metadata->url('/llms.txt')."\nSitemap: ".$this->metadata->url('/sitemap.xml')."\nSocial preview: ".$this->metadata->url(SiteMetadata::IMAGE)."\n\nThis document describes public pages only. It contains no private account or exchange information.\n";
 
         return $this->document($body);
@@ -75,6 +77,6 @@ class SiteDiscoveryController extends Controller
     public function ai(): Response
     {
         // Informational discovery file; do not invent a license or training grant.
-        return $this->document("# ShoeMoneyX AI discovery note\n# Informational metadata; ai.txt is not an access-control mechanism.\n\nUser-Agent: *\nAllow: /\nDisallow: /api/\nDisallow: /broadcasting/\n\n# Website: ".$this->metadata->url()."\n# Index: ".$this->metadata->url('/llms.txt')."\n# Full guide: ".$this->metadata->url('/llms-full.txt')."\n# Sitemap: ".$this->metadata->url('/sitemap.xml')."\n\n# Public content may be discovered for search and on-demand summaries.\n# Attribute summaries to ShoeMoneyX and link to the source page.\n# All displayed account data, prices, returns and strategy scores are simulated.\n# This file grants no additional copyright license or model-training rights.\n# Third-party names, marks and assets retain their respective rights.\n# Crawler access rules are published in robots.txt.\n");
+        return $this->document("# ShoeMoneyX AI discovery note\n# Informational metadata; ai.txt is not an access-control mechanism.\n\nUser-Agent: *\nAllow: /\nDisallow: /api/\nDisallow: /broadcasting/\n\n# Website: ".$this->metadata->url()."\n# Contact: support@shoemoneyx.com\n# Issues: https://github.com/shoemoney/shoemoneyx/issues\n# Index: ".$this->metadata->url('/llms.txt')."\n# Full guide: ".$this->metadata->url('/llms-full.txt')."\n# Sitemap: ".$this->metadata->url('/sitemap.xml')."\n\n# Public content may be discovered for search and on-demand summaries.\n# Attribute summaries to ShoeMoneyX and link to the source page.\n# All displayed account data, prices, returns and strategy scores are simulated.\n# This file grants no additional copyright license or model-training rights.\n# Third-party names, marks and assets retain their respective rights.\n# Crawler access rules are published in robots.txt.\n");
     }
 }

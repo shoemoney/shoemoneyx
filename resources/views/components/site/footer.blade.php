@@ -11,6 +11,12 @@
         <div class="smx-public-state" data-site-public @if (($current['path'] ?? '/') !== '/') hidden @endif><span data-site-public-source>Awaiting market data</span><p class="smx-public-note" data-site-public-note hidden></p></div>
         <div class="smx-footer-links"><a href="/dashboard" data-site-link>Dashboard <i class="fa-solid fa-arrow-up-right" aria-hidden="true"></i></a><a href="/settings" data-site-link>Settings</a></div>
     </div>
+    <div class="smx-footer-support" data-site-support>
+        <span>Support &amp; contact</span>
+        <a href="mailto:support@shoemoneyx.com">support@shoemoneyx.com</a>
+        <a href="https://github.com/shoemoney/shoemoneyx/issues" target="_blank" rel="noopener">GitHub issues</a>
+        <a href="https://github.com/shoemoney/shoemoneyx#readme" target="_blank" rel="noopener">Documentation</a>
+    </div>
     <div class="smx-health-detail" data-site-health-detail hidden>
         <p class="smx-health-error" data-site-error hidden role="status"></p>
         <p class="smx-health-error" data-site-halted hidden role="status"></p>
