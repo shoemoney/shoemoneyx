@@ -14,7 +14,7 @@ The entire Laravel/Vue site is public at https://shoemoneyx.com. This deployment
 ## Hosting
 
 - Existing EC2 server: `shoemoney.com` / `100.49.4.12`, instance `i-06a6e6157f9d5980b` in us-east-1. SSH uses the pre-existing `shoemoney.com` host configuration. No credentials are stored here.
-- Application: `/var/www/shoemoneyx.com/current` → `releases/20260908-demo`.
+- Application: `/var/www/shoemoneyx.com/current` → `releases/20260914-support-e724087` (built from `main` e724087; the previous release `20260908-metadata-f1129ae` from the old `master` tree stays on disk for rollback, its path recorded in `releases/20260914-support-e724087-previous.txt`).
 - Private runtime settings: `/var/www/shoemoneyx.com/shared/.env`; writable files in `shared/storage`. New application key, file sessions/cache, production mode, debug off, no live environment copied.
 - Separate PHP 8.4 FPM pool, operating system user `shoemoneyx`, socket `/run/php/shoemoneyx-fpm.sock`. On-demand processes, maximum four. The pool pins `SITE_DEMO=true`, confines filesystem access to this application and disables shell execution.
 - Nginx configuration: `/etc/nginx/sites-available/shoemoneyx.com`, linked from sites-enabled; app snippet `/etc/nginx/snippets/shoemoneyx-app.conf`.
@@ -24,9 +24,15 @@ The entire Laravel/Vue site is public at https://shoemoneyx.com. This deployment
 
 ## Updating the website
 
-Use an isolated checkout of the reviewed `master` commit. Install PHP dependencies independently; do not symlink another checkout's optimized Composer autoloader because its App/Tests classmap can execute the wrong source. Install the existing frontend dependencies with the locally available licensed icon packages, then build assets. No dependency upgrades are required; this release only synchronizes the lockfile's already-declared PHP ^8.4 platform metadata.
+Deploy from `main` (the public tree; `master` is the pre-publication private history and has no common ancestor with it). Use a clean checkout at the pushed commit. Install PHP dependencies independently; do not symlink another checkout's optimized Composer autoloader because its App/Tests classmap can execute the wrong source. Install the existing frontend dependencies with the locally available licensed icon packages, then build assets. No dependency upgrades are required; this release only synchronizes the lockfile's already-declared PHP ^8.4 platform metadata.
 
 Create a new release directory with application source, routes, config, Blade resources, Composer manifests, public assets and the production Vite build. Do not transfer `.env`, database files, logs, credentials, research outputs, or the Git directory. Install production Composer dependencies from the lock with scripts initially disabled. Link the existing demo environment and storage; discover packages and cache configuration/routes/views as `shoemoneyx`. Check that the cached demo setting is true before activation. Retain prior hashed assets for browsers already open. Atomically switch `current` only after validation.
+
+Three traps from the 2026-09-14 release, all silent until the release directory boots:
+
+- **Never copy `bootstrap/cache/*.php` into the release.** They are gitignored but present in a working checkout, and a laptop's `packages.php` lists `laravel/boost` (require-dev), so every artisan command dies with `Class "Laravel\Boost\BoostServiceProvider" not found` before `package:discover` can regenerate it. Exclude the directory in the rsync, then run `package:discover` and `config:cache` in the release as the `shoemoneyx` user.
+- **`ccxt/ccxt` requires `ext-gmp`.** The box needs `php8.4-gmp` (installed 2026-09-14 from the same sury repo; `systemctl reload php8.4-fpm` afterwards is graceful and the other vhosts keep serving). Without it `composer install` refuses the lock.
+- **Read the demo flag from the cached config before switching `current`**: `php -r '$c=require "bootstrap/cache/config.php"; echo $c["site"]["demo"];'` — `artisan tinker` under the pool user prints a psysh home-directory warning that swallows the answer.
 
 Templates for the dedicated PHP pool and Nginx HTTP/HTTPS setup are in `deploy/shoemoneyx/`. The app snippet intentionally omits a `$uri/` directory fallback: the public `arena` asset directory must not intercept the Vue `/arena` route. Validate Nginx/FPM before graceful reload. Never restart unrelated trading or website processes.
 
