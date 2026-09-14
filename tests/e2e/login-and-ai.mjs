@@ -22,6 +22,9 @@ const OUT = process.env.E2E_OUT || path.join(process.cwd(), 'storage', 'e2e');
 const PASSWORD = process.env.E2E_PASSWORD || 'e2e-master-password-2026';
 const OR_KEY = process.env.OPENROUTER_API_KEY;
 const AI_TIMEOUT = Number(process.env.E2E_AI_TIMEOUT_MS || 120000);
+// The agent turn runs a multi-tool StrategyAgent loop; on free models that legitimately exceeds
+// the assist-chat budget (observed >120 s against the AMI, whose endpoints allow 300 s).
+const AGENT_TIMEOUT = Number(process.env.E2E_AGENT_TIMEOUT_MS || 300000);
 fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];
@@ -161,7 +164,7 @@ try {
   const agentBefore = await agentChat.locator('.msg.assistant').count();
   await agentDraft.fill('I want a simple BTC-USD mean-reversion strategy on 1h candles.');
   await agentDraft.press('Enter');
-  await p2.waitForFunction((n) => document.querySelectorAll('.chat')[1]?.querySelectorAll('.msg.assistant').length > n, agentBefore, { timeout: AI_TIMEOUT });
+  await p2.waitForFunction((n) => document.querySelectorAll('.chat')[1]?.querySelectorAll('.msg.assistant').length > n, agentBefore, { timeout: AGENT_TIMEOUT });
   const agentReply = (await agentChat.locator('.msg.assistant').last().innerText()).trim();
   const canned = /^Error:|^Connect your OpenRouter|^Pick a model|^\(no reply\)|^\(empty reply\)/;
   check('agent turn produced a model-written assistant reply', agentReply.length > 0 && !canned.test(agentReply), agentReply.slice(0, 120));
