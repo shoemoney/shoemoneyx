@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { deskHeaders } from '../../api.js';
 import { fmt } from '../../api';
 import { pngUrlFor } from '../../coinIcons';
 import { readQuote, observeQuote } from './marketLens';
@@ -31,7 +32,7 @@ async function refresh() {
     const request = new AbortController(); controller = request;
     const timeout = setTimeout(() => request.abort(), 7000);
     try {
-        const response = await fetch(`/api/quote?product=${encodeURIComponent(symbol)}`, { signal: request.signal, headers: { Accept: 'application/json' } });
+        const response = await fetch(`/api/quote?product=${encodeURIComponent(symbol)}`, { signal: request.signal, headers: deskHeaders({ Accept: 'application/json' }) });
         if (!response.ok) throw Error('Quote unavailable');
         const next = readQuote(await response.json(), symbol);
         if (disposed || id !== generation) return;

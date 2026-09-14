@@ -1,4 +1,5 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { deskHeaders } from "../api.js";
 import { demoSnapshot, demoEvent } from "./demo";
 import { mergeEvents } from "./format";
 import { createEventLedger, roundEvent, snapshotEvents } from "./liveEvents";
@@ -126,6 +127,7 @@ export function useLiveDesk(
         const timeout = setTimeout(() => requestController?.abort(), 8000);
         try {
             const response = await fetch("/api/landing", {
+                headers: deskHeaders({ Accept: "application/json" }),
                 signal: requestController.signal,
                 headers: { Accept: "application/json" },
             });

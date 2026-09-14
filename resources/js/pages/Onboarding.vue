@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import PageHeading from "../components/PageHeading.vue";
 
@@ -212,6 +212,8 @@ function onStepChange(step) {
     if (step === "exchange" && !exchangesLoaded.value) loadExchanges();
     if (step === "strategy-import" && !syncLoaded.value) loadSync();
 }
+
+watch(currentStep, onStepChange);
 
 onMounted(async () => {
     await load();

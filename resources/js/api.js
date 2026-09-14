@@ -1,10 +1,22 @@
 import { publicDemo } from './demoMode.js';
 
+// The desk's master password doubles as the API token (App\Http\Middleware\DeskToken). The app
+// shell writes it to localStorage on login and the onboarding wizard writes it when the password is
+// first set; without this header every /api call 401s the moment a password exists.
+export function deskToken() {
+    try { return localStorage.getItem('desk_token') || ''; } catch { return ''; }
+}
+
+export function deskHeaders(extra = {}) {
+    const token = deskToken();
+    return token ? { ...extra, 'X-Desk-Token': token } : { ...extra };
+}
+
 async function request(method, url, body) {
     if (publicDemo && method !== 'GET') throw new Error('This demo is read-only. No trades, jobs or settings are changed.');
     const res = await fetch('/api' + url, {
         method,
-        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        headers: deskHeaders({ 'Accept': 'application/json', 'Content-Type': 'application/json' }),
         body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await res.text();

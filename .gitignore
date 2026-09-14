@@ -55,3 +55,4 @@ dump.rdb
 
 # operator-supplied AWS Marketplace product id / ingestion role (copy marketplace.env.example)
 ops/image/marketplace.env
+storage/e2e/

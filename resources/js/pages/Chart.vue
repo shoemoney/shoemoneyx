@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from "vue";
+import { deskHeaders } from '../api.js';
 import { useRouter, useRoute } from "vue-router";
 import { api, fmt } from "../api";
 import Pnl from "../components/Pnl.vue";
@@ -66,7 +67,7 @@ function createHistoryFeed() {
     if (backtestId) {
         feed.getMarks = (symbolInfo, from, to, onDataCallback) => {
             const ticker = (symbolInfo.ticker || symbolInfo.name || '').replace(/^COINBASE:/, '');
-            fetch(`/api/udf/marks?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&backtest_id=${encodeURIComponent(backtestId)}`)
+            fetch(`/api/udf/marks?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&backtest_id=${encodeURIComponent(backtestId)}`, { headers: deskHeaders() })
                 .then((r) => r.json()).then((marks) => { if (alive) onDataCallback(marks); }).catch(() => onDataCallback([]));
         };
     }
