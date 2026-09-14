@@ -122,6 +122,11 @@ try {
   await shot(p2, '05-after-login');
 
   // ---- 3. Internal AI on the Strategy Builder -------------------------------------------
+  let convId = null;
+  p2.on('request', (r) => {
+    const m = r.url().match(/\/api\/agent\/conversations\/(\d+)\/turn$/);
+    if (m) convId = Number(m[1]);
+  });
   await p2.goto(BASE + '/builder', { waitUntil: 'networkidle' });
   const status = await json(fresh, '/api/ai/status');
   check('/api/ai/status is 200 and connected', status.status === 200 && status.body?.connected === true, JSON.stringify(status.body));
@@ -134,41 +139,56 @@ try {
   await shot(p2, '06-builder');
 
   // assist chat
+  // Two chats share the .chat/.msg markup: the SMX assist chat is the first .chat, the agent
+  // conversation the second. Scope every count to its own container or the assist reply passes
+  // the agent check before the agent has even sent.
+  const assistChat = p2.locator('.chat').nth(0);
+  const agentChat = p2.locator('.chat').nth(1);
   const draft = p2.locator('input[placeholder="Describe your strategy…"]');
   await draft.waitFor({ timeout: 15000 });
-  const assistBefore = await p2.locator('.chat .msg.assistant').count();
+  const assistBefore = await assistChat.locator('.msg.assistant').count();
   await draft.fill('Reply with exactly the single word PONG and nothing else.');
   await draft.press('Enter');
-  await p2.waitForFunction((n) => document.querySelectorAll('.chat .msg.assistant').length > n, assistBefore, { timeout: AI_TIMEOUT });
-  const assistReply = (await p2.locator('.chat .msg.assistant').last().innerText()).trim();
+  await p2.waitForFunction((n) => document.querySelectorAll('.chat')[0]?.querySelectorAll('.msg.assistant').length > n, assistBefore, { timeout: AI_TIMEOUT });
+  const assistReply = (await assistChat.locator('.msg.assistant').last().innerText()).trim();
   check('assist chat produced a model-written assistant reply', assistReply.length > 0 && !/^Error:|^Connect your OpenRouter|^Pick a model|^\(empty reply\)/.test(assistReply), assistReply.slice(0, 120));
   await shot(p2, '07-assist-chat');
 
   // agent conversation
   const agentDraft = p2.locator('input[placeholder="Describe your setup…"]');
   await agentDraft.waitFor({ timeout: 15000 });
+
+  const agentBefore = await agentChat.locator('.msg.assistant').count();
   await agentDraft.fill('I want a simple BTC-USD mean-reversion strategy on 1h candles.');
   await agentDraft.press('Enter');
-  await p2.waitForFunction(() => {
-    const msgs = [...document.querySelectorAll('.chat .msg.assistant')];
-    return msgs.some(m => m.closest('.chat')?.previousElementSibling?.className?.includes('phase') || msgs.length > 0);
-  }, null, { timeout: AI_TIMEOUT });
-  const agentMsgs = await p2.locator('.chat .msg.assistant').allInnerTexts();
-  const agentReply = (agentMsgs.at(-1) || '').trim();
+  await p2.waitForFunction((n) => document.querySelectorAll('.chat')[1]?.querySelectorAll('.msg.assistant').length > n, agentBefore, { timeout: AI_TIMEOUT });
+  const agentReply = (await agentChat.locator('.msg.assistant').last().innerText()).trim();
   const canned = /^Error:|^Connect your OpenRouter|^Pick a model|^\(no reply\)|^\(empty reply\)/;
   check('agent turn produced a model-written assistant reply', agentReply.length > 0 && !canned.test(agentReply), agentReply.slice(0, 120));
-  const convs = await json(fresh, '/api/agent/conversations/1');
-  check('agent conversation persisted (GET /api/agent/conversations/1 is 200)', convs.status === 200, `${convs.status}`);
+  const convStatus = convId === null ? null : await p2.evaluate(async (id) => {
+    const token = localStorage.getItem('desk_token') || '';
+    const r = await fetch(`/api/agent/conversations/${id}`, { headers: { Accept: 'application/json', 'X-Desk-Token': token } });
+    return r.status;
+  }, convId);
+  check('agent conversation persisted (GET by the id the page created is 200)', convStatus === 200, `id=${convId} status=${convStatus}`);
   await shot(p2, '08-agent-chat');
 
   // ---- 4. Chart page: TradingView's own datafeed must carry the token ------------------------
   const udf = [];
   p2.on('response', (r) => { if (r.url().includes('/api/udf/')) udf.push({ path: new URL(r.url()).pathname, status: r.status() }); });
   await p2.goto(BASE + '/chart/BTC-USD', { waitUntil: 'networkidle' });
-  await p2.waitForFunction(() => performance.getEntriesByType('resource').some(e => e.name.includes('/api/udf/config')), null, { timeout: 30000 }).catch(() => {});
-  const cfg = udf.find(u => u.path.endsWith('/api/udf/config'));
-  check('chart datafeed fetched /api/udf/config with 200', cfg?.status === 200, JSON.stringify(udf.slice(0, 6)));
-  check('no /api/udf request was rejected with 401', udf.length > 0 && udf.every(u => u.status !== 401), `${udf.length} udf responses`);
+  // The TradingView Charting Library is licensed and gitignored, so a desk built from the repo
+  // alone (the AMI included) has no window.TradingView. Only a desk with the library dropped into
+  // public/charting_library exercises the UDF datafeed; elsewhere the checks are recorded as skipped.
+  const hasTv = await p2.evaluate(() => !!(window.TradingView && window.Datafeeds));
+  if (hasTv) {
+    await p2.waitForFunction(() => performance.getEntriesByType('resource').some(e => e.name.includes('/api/udf/config')), null, { timeout: 30000 }).catch(() => {});
+    const cfg = udf.find(u => u.path.endsWith('/api/udf/config'));
+    check('chart datafeed fetched /api/udf/config with 200', cfg?.status === 200, JSON.stringify(udf.slice(0, 6)));
+    check('no /api/udf request was rejected with 401', udf.length > 0 && udf.every(u => u.status !== 401), `${udf.length} udf responses`);
+  } else {
+    check('chart datafeed checks skipped: TradingView library not installed on this desk', true, 'expected on the AMI');
+  }
   await shot(p2, '09-chart');
   await fresh.close();
 } catch (e) {
