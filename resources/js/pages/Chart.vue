@@ -52,7 +52,23 @@ function historyError(reason) {
     if (typeof reason?.errmsg === 'string' && reason.errmsg) return reason.errmsg;
     return 'Market history is temporarily unavailable.';
 }
+// TradingView's stock UDF bundle builds its own Requester and fetches /config inside the
+// constructor, so there is no hook to hand it X-Desk-Token. Behind a master password every
+// chart request would 401. This wraps window.fetch once, for same-origin /api/udf/ URLs only.
+function installUdfTokenShim() {
+    if (window.__smxUdfTokenShim) return;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+        const url = typeof input === 'string' ? input : input?.url || '';
+        if (!url.startsWith('/api/udf/')) return nativeFetch(input, init);
+        const headers = deskHeaders(init?.headers || {});
+        return nativeFetch(input, { ...(init || {}), headers });
+    };
+    window.__smxUdfTokenShim = true;
+}
+
 function createHistoryFeed() {
+    installUdfTokenShim();
     const feed = new window.Datafeeds.UDFCompatibleDatafeed('/api/udf', 15000);
     const getBars = feed.getBars.bind(feed);
     // The bundled UDF adapter forwards rejected Error/undefined values directly.
