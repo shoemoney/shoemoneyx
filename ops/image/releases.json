@@ -22,5 +22,17 @@
       "at": "2026-09-14T03:01:00Z"
     },
     "marketplace": null
+  },
+  {
+    "version": "0.1.4",
+    "commit": "8fe1cd85610786056fab2a65dcc2be6987f430ec",
+    "ami_id": "ami-0d0a34b4af23e8c6b",
+    "ami_name": "shoemoneyx-desk-0.1.4-1789361006",
+    "built_at": "2026-09-14T05:02:06Z",
+    "boot_test": {
+      "passed": true,
+      "at": "2026-09-14T05:02:06Z"
+    },
+    "marketplace": null
   }
 ]
