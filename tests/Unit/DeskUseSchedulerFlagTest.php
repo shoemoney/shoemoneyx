@@ -21,10 +21,32 @@ class DeskUseSchedulerFlagTest extends TestCase
 {
     private function scheduleList(string $flag): string
     {
+        // Anchored to this test file's own tree (not base_path()) so the subprocess runs
+        // THIS branch's artisan/routes/console.php — under PHPUnit, vendor/ is a symlink
+        // back to the main repo checkout, and base_path() resolves relative to that
+        // symlinked vendor/autoload.php, not to this worktree.
+        $repoRoot = dirname(__DIR__, 2);
         $php = escapeshellarg(PHP_BINARY);
-        $artisan = escapeshellarg(base_path('artisan'));
+        $artisan = escapeshellarg($repoRoot.'/artisan');
 
-        return (string) shell_exec("DESK_USE_SCHEDULER={$flag} {$php} {$artisan} schedule:list 2>&1");
+        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $process = proc_open(
+            "DESK_USE_SCHEDULER={$flag} {$php} {$artisan} schedule:list 2>&1",
+            $descriptors,
+            $pipes,
+            $repoRoot
+        );
+
+        if (! is_resource($process)) {
+            $this->fail('Failed to start schedule:list subprocess.');
+        }
+
+        $output = (string) stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        proc_close($process);
+
+        return $output;
     }
 
     public function test_desk_loop_entries_are_scheduled_when_use_scheduler_is_true(): void
