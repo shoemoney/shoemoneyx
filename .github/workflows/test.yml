@@ -1,0 +1,64 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # php artisan test — sqlite :memory: per phpunit.xml, no npm build needed since
+  # blade-rendering tests call withoutVite().
+  php:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, gmp
+          coverage: none
+      - name: Copy .env
+        run: cp .env.example .env
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+      - name: Generate key
+        run: php artisan key:generate
+      - run: php artisan test
+
+  # node --test over the resources/js module graph — resources/js and
+  # tests/Unit/Frontend import vue and @vue/compiler-sfc, so node_modules must
+  # have them. Installed into an isolated manifest (not the repo's
+  # package.json, which resolves gitignored file:.fa-pro/*.tgz FA Pro deps and
+  # would ENOENT on a fresh checkout) and copied into the workspace.
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend test deps
+        run: |
+          mkdir -p "$RUNNER_TEMP/fedeps" && cd "$RUNNER_TEMP/fedeps"
+          npm init -y >/dev/null
+          npm install --no-package-lock vue@^3.5.42 @vue/compiler-sfc@^3.5.42
+          mkdir -p "$GITHUB_WORKSPACE/node_modules"
+          cp -R "$RUNNER_TEMP/fedeps/node_modules/." "$GITHUB_WORKSPACE/node_modules/"
+      - run: npm run test:frontend
+
+  # feeder/feed.mjs imports ws/ioredis/mysql2, so this needs a real npm ci — which
+  # needs the FA Pro tarballs decrypted the same way image.yml's verify job does.
+  # Same-repo PRs only: fork PRs can't read FA_PRO_KEY.
+  feeder:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Decrypt Font Awesome Pro
+        env:
+          FA_PRO_KEY: ${{ secrets.FA_PRO_KEY }}
+        run: openssl enc -d -aes-256-cbc -pbkdf2 -pass env:FA_PRO_KEY -in ops/ci/fa-pro.tar.gz.enc | tar xzf -
+      - run: npm ci
+      - run: npm run test:feeder
