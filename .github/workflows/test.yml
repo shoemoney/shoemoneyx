@@ -24,8 +24,11 @@ jobs:
         run: php artisan key:generate
       - run: php artisan test
 
-  # node --test over the resources/js module graph — no bare specifiers, so no
-  # node_modules install is required.
+  # node --test over the resources/js module graph — resources/js and
+  # tests/Unit/Frontend import vue and @vue/compiler-sfc, so node_modules must
+  # have them. Installed into an isolated manifest (not the repo's
+  # package.json, which resolves gitignored file:.fa-pro/*.tgz FA Pro deps and
+  # would ENOENT on a fresh checkout) and copied into the workspace.
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -34,7 +37,12 @@ jobs:
         with:
           node-version: 22
       - name: Install frontend test deps
-        run: npm install --no-save vue@^3.5.42 @vue/compiler-sfc@^3.5.42
+        run: |
+          mkdir -p "$RUNNER_TEMP/fedeps" && cd "$RUNNER_TEMP/fedeps"
+          npm init -y >/dev/null
+          npm install --no-package-lock vue@^3.5.42 @vue/compiler-sfc@^3.5.42
+          mkdir -p "$GITHUB_WORKSPACE/node_modules"
+          cp -R "$RUNNER_TEMP/fedeps/node_modules/." "$GITHUB_WORKSPACE/node_modules/"
       - run: npm run test:frontend
 
   # feeder/feed.mjs imports ws/ioredis/mysql2, so this needs a real npm ci — which
