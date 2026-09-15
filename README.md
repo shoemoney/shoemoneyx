@@ -16,7 +16,7 @@ CHIEF                              health, heartbeats, halt switch, reports
 
 - **110 exchanges** behind one contract. Set `EXCHANGE=kraken` and go.
 - **Paper desk** that simulates market orders against the live bid/ask with configurable slippage. No exchange key needed.
-- **Candles you can't get from an exchange**: 15s, 30s, 33s, 41s, 45s, 49s, 90s built from the trade tape, plus every standard timeframe.
+- **Candles you can't get from an exchange**: 13s, 15s, 20s, 25s, 30s, 33s, 41s, 45s, 49s built from the trade tape, plus 90s, 2m, 3m, 4m, 10m derived by resampling, plus every standard timeframe.
 - **Backtester** that replays a strategy over any window, and a **farm** that fans a parameter grid out to every worker box you own.
 - **Optimizer** that runs random or hill-climb candidates per coin, trains and tests walk-forward, and only promotes out-of-sample winners.
 - **Dashboard** with live chart, positions, runs, backtests, and every tunable editable in place.
