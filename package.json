@@ -6,7 +6,7 @@
         "build": "vite build",
         "dev": "vite",
         "test:feeder": "node --test feeder/feed.test.mjs",
-        "test:frontend": "node --test tests/Unit/Frontend/"
+        "test:frontend": "node --test tests/Unit/Frontend/*.test.mjs"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

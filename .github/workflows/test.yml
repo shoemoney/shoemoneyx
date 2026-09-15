@@ -5,10 +5,22 @@ on:
   pull_request:
 
 jobs:
-  # php artisan test — sqlite :memory: per phpunit.xml, no npm build needed since
-  # blade-rendering tests call withoutVite().
+  # php artisan test — sqlite :memory: per phpunit.xml; Tests\TestCase calls withoutVite()
+  # so no npm build is needed. Redis is a real dependency (CandleStore keeps its
+  # candle-version counters on the default Redis connection, shared with the feeder),
+  # so the suite runs against a live redis service exactly like docker-compose does.
   php:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2

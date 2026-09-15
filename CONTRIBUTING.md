@@ -21,7 +21,7 @@ php artisan test
 npm run test:frontend
 ```
 
-**Font Awesome Pro requirement:** `npm ci` and `npm run build` require the four Font Awesome Pro 7.3.1 npm tarballs in `.fa-pro/` (licensed, not redistributable). Contributors: fork PRs cannot run the image build workflow because the FA_PRO_KEY secret is not available to untrusted code. Use the published `ghcr.io` images for Docker-based development.
+**Font Awesome Pro requirement:** `npm ci` and `npm run build` require the four Font Awesome Pro 7.3.1 npm tarballs in `.fa-pro/` (licensed, not redistributable). Contributors: fork PRs cannot run the image build workflow or the feeder test suite in CI because the FA_PRO_KEY secret is not available to untrusted code. Use the published `ghcr.io` images for Docker-based development.
 
 ## Exchange adapters 🔌
 
