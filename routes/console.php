@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Schedule;
 | Either run `php artisan desk:run` under a supervisor, OR run
 | `php artisan schedule:work` and let these fire. Not both.
 */
-if (env('DESK_USE_SCHEDULER', false)) {
+if (config('desk.use_scheduler')) {
     Schedule::command('market:sync-products')->hourly()->withoutOverlapping();
     Schedule::command('market:sync-candles --hours=72')->everyMinute()->withoutOverlapping();
     Schedule::command('desk:risk')->everyMinute()->withoutOverlapping();

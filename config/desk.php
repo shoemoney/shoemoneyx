@@ -218,4 +218,10 @@ return [
 
     // Must be the literal string "yes" before the desk will send a real order.
     'live_confirm' => env('DESK_LIVE_CONFIRM', 'no'),
+
+    // Gates the desk-loop schedule entries in routes/console.php (market:sync-products,
+    // market:sync-candles, desk:risk, desk:cycle). true = drive them with `schedule:work`
+    // instead of the long-running `desk:run` loop — never run both. Read via config() (not
+    // env()) so the setting survives `artisan config:cache`/`optimize` in production.
+    'use_scheduler' => (bool) env('DESK_USE_SCHEDULER', false),
 ];
