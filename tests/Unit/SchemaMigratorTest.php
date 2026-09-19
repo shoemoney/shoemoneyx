@@ -199,6 +199,29 @@ class SchemaMigratorTest extends TestCase
     }
 
     #[Test]
+    public function v1_to_v2_carries_base_and_suggest_through_unchanged(): void
+    {
+        $v1 = json_decode(file_get_contents(base_path('resources/strategies/examples/mean-reversion.json')), true);
+
+        $v2 = SchemaMigrator::v1ToV2($v1);
+
+        $this->assertSame($v1['base'], $v2['base']);
+        $this->assertSame($v1['suggest'], $v2['suggest']);
+    }
+
+    #[Test]
+    public function v2_to_v1_view_carries_base_and_suggest_back_through(): void
+    {
+        $v1 = json_decode(file_get_contents(base_path('resources/strategies/examples/mean-reversion.json')), true);
+        $v2 = SchemaMigrator::v1ToV2($v1);
+
+        $view = SchemaMigrator::v2ToV1View($v2);
+
+        $this->assertSame($v1['base'], $view['base']);
+        $this->assertSame($v1['suggest'], $view['suggest']);
+    }
+
+    #[Test]
     public function v1_to_v2_round_trips_every_shipped_v1_example_to_a_valid_v2_definition(): void
     {
         $checked = 0;
@@ -212,6 +235,11 @@ class SchemaMigratorTest extends TestCase
             $result = StrategySchemaValidator::validate($v2);
 
             $this->assertTrue($result['valid'], basename($file).': '.json_encode($result['errors']));
+            foreach (['base', 'suggest'] as $k) {
+                if (array_key_exists($k, $def)) {
+                    $this->assertSame($def[$k], $v2[$k], basename($file).": {$k} did not survive v1ToV2()");
+                }
+            }
             $checked++;
         }
 

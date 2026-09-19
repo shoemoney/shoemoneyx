@@ -332,6 +332,55 @@ class StrategySchemaValidatorV2Test extends TestCase
     }
 
     #[Test]
+    public function an_unreferenced_signal_produces_a_warning_but_stays_valid(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['unused'] = ['all' => [['field' => 'price', 'op' => '>', 'value' => 0]]];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertTrue($result['valid'], json_encode($result['errors']));
+        $this->assertSame([], $result['errors']);
+        $this->assertContains(
+            ['path' => 'signals.unused', 'message' => 'signal is never referenced'],
+            $result['warnings']
+        );
+    }
+
+    #[Test]
+    public function the_shipped_example_has_no_unreferenced_signal_warnings(): void
+    {
+        $result = StrategySchemaValidator::validate($this->validDefinition());
+
+        $this->assertSame([], $result['warnings']);
+    }
+
+    #[Test]
+    public function an_unresolved_param_reference_in_a_not_in_value_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['liquid']['all'][] = ['field' => 'price', 'op' => 'not_in', 'value' => ['$nope']];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].value[0]', $this->paths($result));
+    }
+
+    #[Test]
+    public function an_unresolved_param_reference_in_a_between_value_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['liquid']['all'][] = ['field' => 'price', 'op' => 'between', 'value' => ['$lo', '$hi']];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].value[0]', $this->paths($result));
+        $this->assertContains('signals.liquid.all[1].value[1]', $this->paths($result));
+    }
+
+    #[Test]
     public function adds_rung_rejects_both_size_pct_and_size_at_once(): void
     {
         $def = $this->validDefinition();

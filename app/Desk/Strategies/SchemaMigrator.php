@@ -169,6 +169,11 @@ final class SchemaMigrator
             'author' => $definition['author'] ?? null,
             'meta' => is_array($definition['meta'] ?? null) ? $definition['meta'] : [],
         ];
+        foreach (['base', 'suggest'] as $k) {
+            if (array_key_exists($k, $definition)) {
+                $out[$k] = $definition[$k];
+            }
+        }
         if ($params !== []) {
             $out['params'] = $params;
         }
@@ -280,11 +285,19 @@ final class SchemaMigrator
         $triggerGroup = is_array($signals['trigger'] ?? null) ? $signals['trigger'] : [];
         $triggerRules = $triggerGroup['all'] ?? [];
 
+        $carried = [];
+        foreach (['base', 'suggest'] as $k) {
+            if (array_key_exists($k, $definition)) {
+                $carried[$k] = $definition[$k];
+            }
+        }
+
         return [
             'schema_version' => self::CURRENT_VERSION,
             'key' => $definition['key'] ?? null,
             'author' => $definition['author'] ?? null,
             'meta' => $definition['meta'] ?? [],
+            ...$carried,
             'params' => $definition['params'] ?? [],
             'setup' => ['rules' => []],
             'trigger' => [

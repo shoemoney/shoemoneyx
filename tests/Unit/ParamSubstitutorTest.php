@@ -82,4 +82,20 @@ class ParamSubstitutorTest extends TestCase
 
         $this->assertSame('long', ParamSubstitutor::apply($definition)['entry']['side']);
     }
+
+    #[Test]
+    public function a_scalar_params_value_is_returned_untouched(): void
+    {
+        $definition = ['params' => 'not-an-object', 'entry' => ['side' => 'long']];
+
+        $this->assertSame($definition, ParamSubstitutor::apply($definition));
+    }
+
+    #[Test]
+    public function a_json_list_params_value_is_returned_untouched(): void
+    {
+        $definition = ['params' => ['fail_safe_pct'], 'entry' => ['side' => 'long']];
+
+        $this->assertSame($definition, ParamSubstitutor::apply($definition));
+    }
 }

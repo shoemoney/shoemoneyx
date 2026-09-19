@@ -83,11 +83,11 @@ final class StrategySchemaValidator
      * CoinbaseMarketData::GRANULARITY_MAP keys are uppercase ("1H") — same set, both are seen. */
     private const KNOWN_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '6h', '1d'];
 
-    /** @return array{valid: bool, errors: array<int, array{path: string, message: string}>} */
+    /** @return array{valid: bool, errors: array<int, array{path: string, message: string}>, warnings: array<int, array{path: string, message: string}>} */
     public static function validate(mixed $definition): array
     {
         if (! is_array($definition)) {
-            return ['valid' => false, 'errors' => [['path' => '$', 'message' => 'definition must be a JSON object']]];
+            return ['valid' => false, 'errors' => [['path' => '$', 'message' => 'definition must be a JSON object']], 'warnings' => []];
         }
 
         return match ($definition['schema_version'] ?? null) {
@@ -96,7 +96,7 @@ final class StrategySchemaValidator
         };
     }
 
-    /** @return array{valid: bool, errors: array<int, array{path: string, message: string}>} */
+    /** @return array{valid: bool, errors: array<int, array{path: string, message: string}>, warnings: array<int, array{path: string, message: string}>} */
     private static function validateV1(array $definition): array
     {
         $errors = [];
@@ -122,7 +122,7 @@ final class StrategySchemaValidator
         self::checkExit($definition['exit'] ?? null, $errors);
         self::checkRisk($definition['risk'] ?? null, $errors);
 
-        return ['valid' => $errors === [], 'errors' => $errors];
+        return ['valid' => $errors === [], 'errors' => $errors, 'warnings' => []];
     }
 
     /** @param array<int, array{path: string, message: string}> $errors */
@@ -444,7 +444,7 @@ final class StrategySchemaValidator
 
     // ── v2 (docs/STRATEGY_SCHEMA_V2.md) ─────────────────────────────────
 
-    /** @return array{valid: bool, errors: array<int, array{path: string, message: string}>} */
+    /** @return array{valid: bool, errors: array<int, array{path: string, message: string}>, warnings: array<int, array{path: string, message: string}>} */
     private static function validateV2(array $definition): array
     {
         $definition = ParamSubstitutor::apply($definition);
@@ -477,7 +477,35 @@ final class StrategySchemaValidator
         self::checkStopV2($definition['stop'] ?? null, $errors);
         self::checkRisk($definition['risk'] ?? null, $errors);
 
-        return ['valid' => $errors === [], 'errors' => $errors];
+        $warnings = [];
+        foreach (array_diff($signalNames, self::referencedSignalNames($definition)) as $unreferenced) {
+            $warnings[] = ['path' => "signals.{$unreferenced}", 'message' => 'signal is never referenced'];
+        }
+
+        return ['valid' => $errors === [], 'errors' => $errors, 'warnings' => $warnings];
+    }
+
+    /**
+     * Every signal name referenced from entry.when or reentry.when (including "entry" meaning
+     * "reuse entry.when"), for the "signal is never referenced" warning. Non-array/malformed
+     * `when` values are ignored here — checkEntryV2/checkReentryV2 already error on those.
+     *
+     * @return array<int, string>
+     */
+    private static function referencedSignalNames(array $definition): array
+    {
+        $entryWhen = is_array($definition['entry'] ?? null) && is_array($definition['entry']['when'] ?? null)
+            ? array_filter($definition['entry']['when'], 'is_string')
+            : [];
+
+        $reentryWhen = is_array($definition['reentry'] ?? null) ? ($definition['reentry']['when'] ?? null) : null;
+        $reentryNames = match (true) {
+            $reentryWhen === 'entry' => $entryWhen,
+            is_array($reentryWhen) => array_filter($reentryWhen, 'is_string'),
+            default => [],
+        };
+
+        return [...$entryWhen, ...$reentryNames];
     }
 
     /**
@@ -994,8 +1022,16 @@ final class StrategySchemaValidator
         if (in_array($op, ['between', 'in', 'not_in'], true)) {
             if (! is_array($value)) {
                 $errors[] = ['path' => "{$path}.value", 'message' => "value must be an array for op \"{$op}\""];
-            } elseif ($op === 'between' && count($value) !== 2) {
-                $errors[] = ['path' => "{$path}.value", 'message' => 'value must have exactly 2 elements [min, max] for op "between"'];
+            } else {
+                if ($op === 'between' && count($value) !== 2) {
+                    $errors[] = ['path' => "{$path}.value", 'message' => 'value must have exactly 2 elements [min, max] for op "between"'];
+                }
+                foreach ($value as $i => $el) {
+                    $name = self::unresolvedParamName($el);
+                    if ($name !== null) {
+                        $errors[] = ['path' => "{$path}.value[{$i}]", 'message' => "unknown parameter reference \${$name}"];
+                    }
+                }
             }
 
             return;

@@ -25,8 +25,13 @@ final class ParamSubstitutor
     /** @return array<string, mixed> */
     public static function apply(array $definition): array
     {
+        $rawParams = $definition['params'] ?? [];
+        if (! is_array($rawParams)) {
+            return $definition;
+        }
+
         $defaults = [];
-        foreach ($definition['params'] ?? [] as $name => $spec) {
+        foreach ($rawParams as $name => $spec) {
             if (is_string($name) && is_array($spec) && array_key_exists('default', $spec)) {
                 $defaults[$name] = $spec['default'];
             }
