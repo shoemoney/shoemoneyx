@@ -510,6 +510,17 @@ final class StrategySchemaValidator
         foreach (array_diff($signalNames, self::referencedSignalNames($definition)) as $unreferenced) {
             $warnings[] = ['path' => "signals.{$unreferenced}", 'message' => 'signal is never referenced'];
         }
+        // stop.rules alone is a fail-CLOSED gate (it only closes when a rule's own field/op/value
+        // matches), which is a fail-OPEN risk posture: absent, unmet, or wrong, the position just
+        // never gets that check. Only pct_from_avg or time_hours is an unconditional fail-safe.
+        // This is a warning, not an error — a strategy relying purely on take_profit/reentry to
+        // exit is a legitimate (if riskier) design, not an invalid definition.
+        $stop = $definition['stop'] ?? null;
+        $hasFailSafe = is_array($stop)
+            && (isset($stop['pct_from_avg']) || (array_key_exists('time_hours', $stop) && $stop['time_hours'] !== null));
+        if (! $hasFailSafe) {
+            $warnings[] = ['path' => 'stop', 'message' => 'no stop.pct_from_avg or stop.time_hours fail-safe: stop.rules alone (or no stop at all) can fail open and hold a losing position indefinitely'];
+        }
 
         return ['valid' => $errors === [], 'errors' => $errors, 'warnings' => $warnings];
     }

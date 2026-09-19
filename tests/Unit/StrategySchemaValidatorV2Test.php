@@ -355,6 +355,71 @@ class StrategySchemaValidatorV2Test extends TestCase
         $this->assertSame([], $result['warnings']);
     }
 
+    /** Round-4 review, finding 6: stop.rules is fail-CLOSED (only closes when a rule matches), so no stop at all is a fail-OPEN risk — valid, but worth a warning, not silence. */
+    #[Test]
+    public function no_stop_section_at_all_produces_a_warning_but_stays_valid(): void
+    {
+        $def = $this->validDefinition();
+        unset($def['stop']);
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertTrue($result['valid'], json_encode($result['errors']));
+        $this->assertContains(
+            ['path' => 'stop', 'message' => 'no stop.pct_from_avg or stop.time_hours fail-safe: stop.rules alone (or no stop at all) can fail open and hold a losing position indefinitely'],
+            $result['warnings']
+        );
+    }
+
+    #[Test]
+    public function a_stop_with_only_rules_on_ind_fields_and_no_fail_safe_produces_a_warning(): void
+    {
+        $def = $this->validDefinition();
+        $def['stop'] = ['rules' => [['field' => 'ind.rsi(14)', 'op' => '>', 'value' => 80]]];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertTrue($result['valid'], json_encode($result['errors']));
+        $this->assertContains(
+            ['path' => 'stop', 'message' => 'no stop.pct_from_avg or stop.time_hours fail-safe: stop.rules alone (or no stop at all) can fail open and hold a losing position indefinitely'],
+            $result['warnings']
+        );
+    }
+
+    #[Test]
+    public function a_stop_with_pct_from_avg_alongside_rules_produces_no_fail_safe_warning(): void
+    {
+        $def = $this->validDefinition();
+        $def['stop']['rules'] = [['field' => 'ind.rsi(14)', 'op' => '>', 'value' => 80]];
+        $this->assertArrayHasKey('pct_from_avg', $def['stop'], 'the shipped example must already carry a pct_from_avg fail-safe, or this test proves nothing');
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertTrue($result['valid'], json_encode($result['errors']));
+        $this->assertNotContains('stop', array_column($result['warnings'], 'path'));
+    }
+
+    #[Test]
+    public function a_stop_with_only_time_hours_produces_no_fail_safe_warning(): void
+    {
+        $def = $this->validDefinition();
+        unset($def['stop']['pct_from_avg']);
+        $def['stop']['time_hours'] = 48;
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertTrue($result['valid'], json_encode($result['errors']));
+        $this->assertNotContains('stop', array_column($result['warnings'], 'path'));
+    }
+
+    #[Test]
+    public function the_shipped_pi_example_produces_no_stop_fail_safe_warning(): void
+    {
+        $result = StrategySchemaValidator::validate($this->validDefinition());
+
+        $this->assertNotContains('stop', array_column($result['warnings'], 'path'));
+    }
+
     #[Test]
     public function an_unresolved_param_reference_in_a_not_in_value_is_rejected(): void
     {
