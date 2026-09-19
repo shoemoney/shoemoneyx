@@ -9,11 +9,9 @@ use App\Ai\Exceptions\AiGateException;
 use App\Ai\Exceptions\AiNoConnectionException;
 use App\Desk\Assist\SmxPrompt;
 use App\Desk\Strategies\BacktestVersionPin;
-use App\Desk\Strategies\JsonPluginValidator;
 use App\Desk\Strategies\PluginMarkdownExporter;
 use App\Desk\Strategies\PluginPineExporter;
 use App\Desk\Strategies\SchemaMigrator;
-use App\Desk\Strategies\StrategySchemaValidator;
 use App\Hub\HubException;
 use App\Hub\Publisher;
 use App\Http\Controllers\Controller;
@@ -99,9 +97,7 @@ class StrategyPluginController extends Controller
     /** @return array{valid: bool, errors: array<int, mixed>} */
     private static function runValidator(array $definition): array
     {
-        return isset($definition['schema_version'])
-            ? StrategySchemaValidator::validate($definition)
-            : JsonPluginValidator::validate($definition);
+        return SchemaMigrator::validateForSave($definition);
     }
 
     /**

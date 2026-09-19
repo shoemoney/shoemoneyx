@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Ai\AgentContext;
-use App\Desk\Strategies\JsonPluginValidator;
-use App\Desk\Strategies\StrategySchemaValidator;
+use App\Desk\Strategies\SchemaMigrator;
 use App\Models\StrategyPlugin;
 use App\Support\SemVer;
 use Illuminate\Support\Facades\DB;
@@ -48,9 +47,7 @@ final class StrategyJsonTool implements Tool
             return ['valid' => false, 'errors' => ['definition must be an object']];
         }
 
-        $result = isset($def['schema_version'])
-            ? StrategySchemaValidator::validate($def)
-            : JsonPluginValidator::validate($def);
+        $result = SchemaMigrator::validateForSave($def);
 
         if (! $result['valid']) {
             return ['valid' => false, 'errors' => $result['errors']];

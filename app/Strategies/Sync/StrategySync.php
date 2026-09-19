@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace App\Strategies\Sync;
 
-use App\Desk\Strategies\JsonPluginValidator;
 use App\Desk\Strategies\SchemaMigrator;
-use App\Desk\Strategies\StrategySchemaValidator;
 use App\Models\StrategyPlugin;
 use App\Models\SyncedStrategy;
 use App\Support\SemVer;
@@ -86,9 +84,7 @@ final class StrategySync
             return ['imported' => false, 'error' => "{$remoteId}: remote file is not valid JSON"];
         }
 
-        $result = isset($definition['schema_version'])
-            ? StrategySchemaValidator::validate($definition)
-            : JsonPluginValidator::validate($definition);
+        $result = SchemaMigrator::validateForSave($definition);
         if (! $result['valid']) {
             return ['imported' => false, 'error' => "{$remoteId}: schema validation failed", 'errors' => $result['errors']];
         }
