@@ -906,6 +906,16 @@ class JsonPluginStrategy extends BaseDeskStrategy
                 continue;
             }
             if ((int) $position->trims_count > (int) ($pending['trims_count_at_emit'] ?? -1)) {
+                // Hoisted above the branch and guarded the same way on both reads (round-5 review,
+                // BLOCKER): a legacy record written before qty_at_emit/sell_qty both existed can
+                // carry neither, and reading $pending['sell_qty'] unguarded on every confirmed
+                // cash-out threw "Undefined array key" — which escapes riskV2() into
+                // Desk::riskSweep() outside its own try, so one poisoned position's meta stopped
+                // every later position in the sweep from being managed at all. Falls back to
+                // lot_qty (a cash-out with no recorded intent sold the whole lot, the pre-qty_at_emit
+                // behaviour), never null.
+                $sellQty = (float) ($pending['sell_qty'] ?? $pending['lot_qty'] ?? 0.0);
+                $lotQty = (float) ($pending['lot_qty'] ?? 0.0);
                 // Clamped to the INTENDED sell_qty the same way reconcilePendingRung() clamps its
                 // own actualQty: an out-of-band trim between emit and reconcile (a separate rung, a
                 // manual close) can shrink position.quantity by more than this cash-out ever asked
@@ -913,15 +923,14 @@ class JsonPluginStrategy extends BaseDeskStrategy
                 // (round-4 review — proven: a 4.0 intended sell computed as an 8.0 real shrink,
                 // driving ladder.original_qty from 10.0 to 6.0). `qty_at_emit` missing at all means
                 // this is a pre-fix in-flight record with no snapshot to diff against — fall back to
-                // trusting the intended sell_qty outright, the behaviour before that snapshot existed
-                // (NOT $lot['qty'], which is the re-entry lot's own quantity, not a position snapshot).
+                // trusting the intended sell_qty outright, the behaviour before that snapshot existed.
                 $soldQty = array_key_exists('qty_at_emit', $pending)
-                    ? max(0.0, min((float) $pending['sell_qty'], (float) $pending['qty_at_emit'] - (float) $position->quantity))
-                    : (float) $pending['sell_qty'];
+                    ? max(0.0, min($sellQty, (float) $pending['qty_at_emit'] - (float) $position->quantity))
+                    : $sellQty;
                 $list[$i]['cashed_out'] = true;
                 if (($pending['remainder'] ?? 'runner') === 'ladder' && ! ($pending['reset_on_add'] ?? true)) {
                     $meta['v2']['ladder']['original_qty'] = (float) ($meta['v2']['ladder']['original_qty'] ?? 0)
-                        + ((float) $pending['lot_qty'] - $soldQty);
+                        + ($lotQty - $soldQty);
                 }
             }
             unset($list[$i]['cash_out_pending']);

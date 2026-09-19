@@ -90,4 +90,40 @@ class JsonPluginStrategyReconcileMetaTest extends TestCase
         );
         $this->assertTrue($p->meta['v2']['reentries'][0]['cashed_out']);
     }
+
+    /**
+     * Round-5 review, BLOCKER 2: a legacy cash_out_pending record written before qty_at_emit and
+     * sell_qty both existed carries neither — reading $pending['sell_qty'] unguarded threw
+     * "Undefined array key sell_qty" on every confirmed cash-out, which propagates out of
+     * riskV2() into Desk::riskSweep() (outside its own try), stopping every later position in the
+     * sweep from being managed at all. Covers both remainder values (r5_sellqty.php: 'runner'
+     * never even reads sell_qty pre-fix; r5_items_1_3_4.php item 4(d): 'ladder' does).
+     */
+    #[Test]
+    public function reconcile_pending_cash_out_never_throws_on_a_legacy_record_with_no_sell_qty(): void
+    {
+        $ladder = new Position(['product_id' => 'X-USD', 'side' => 'long', 'quantity' => 1.0, 'trims_count' => 3]);
+        $ladder->meta = ['v2' => [
+            'ladder' => ['original_qty' => 10.0, 'fired' => [], 'sold' => []],
+            'reentries' => [[
+                'qty' => 4.0, 'cashed_out' => false,
+                'cash_out_pending' => ['trims_count_at_emit' => 1, 'qty_at_emit' => 9.0, 'lot_qty' => 4.0, 'remainder' => 'ladder', 'reset_on_add' => false],
+            ]],
+        ]];
+
+        $this->invokeReconcile('reconcilePendingCashOut', $ladder);
+
+        $this->assertTrue($ladder->meta['v2']['reentries'][0]['cashed_out']);
+        $this->assertEqualsWithDelta(10.0, $ladder->meta['v2']['ladder']['original_qty'], 1e-9, 'no recorded intent falls back to lot_qty, selling the whole lot — original_qty must be unchanged');
+
+        $runner = new Position(['product_id' => 'X-USD', 'side' => 'long', 'quantity' => 5.0, 'trims_count' => 2]);
+        $runner->meta = ['v2' => ['ladder' => ['original_qty' => 10.0], 'reentries' => [[
+            'qty' => 4.0, 'cashed_out' => false,
+            'cash_out_pending' => ['trims_count_at_emit' => 1, 'lot_qty' => 4.0, 'remainder' => 'runner'],
+        ]]]];
+
+        $this->invokeReconcile('reconcilePendingCashOut', $runner);
+
+        $this->assertTrue($runner->meta['v2']['reentries'][0]['cashed_out']);
+    }
 }
