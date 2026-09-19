@@ -28,9 +28,17 @@ final class OrderResult
         public readonly ?\Closure $ledgerWrite = null,
     ) {}
 
+    /**
+     * A degraded fill (filled_size > 0 but no usable price/value from the venue — seen on
+     * CoinbaseExecutor polls missing filled_value/average_filled_price) must never book: a zero
+     * or missing fillPrice drags the v2 average to zero, which silences every pct_from_avg
+     * fail-safe and zeros every ladder target (round-4 review). Every caller of ok() — Desk's
+     * entry/add/trim/close bookkeeping — relies on this as the one gate; nothing downstream
+     * re-checks fillPrice on its own.
+     */
     public function ok(): bool
     {
-        return $this->status === 'filled' && $this->filledQty > 0;
+        return $this->status === 'filled' && $this->filledQty > 0 && $this->fillPrice !== null && $this->fillPrice > 0 && $this->filledUsd > 0;
     }
 
     /** Runs the deferred ledger write, if this fill carries one. No-op for live fills. */

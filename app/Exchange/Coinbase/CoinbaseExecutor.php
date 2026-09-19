@@ -10,6 +10,7 @@ use App\Exchange\Coinbase\Api\CoinbaseApiException;
 use App\Exchange\Coinbase\Api\CoinbaseService;
 use App\Models\CoinbaseAccount;
 use App\Models\Product;
+use Illuminate\Support\Facades\Log;
 
 /**
  * LIVE execution through Coinbase Advanced Trade. One venue, one path.
@@ -100,7 +101,24 @@ class CoinbaseExecutor implements Executor
         $filledQty = (float) ($order['filled_size'] ?? 0);
         $filledValue = (float) ($order['filled_value'] ?? 0);
         $fee = (float) ($order['total_fees'] ?? 0);
-        $avg = (float) ($order['average_filled_price'] ?? 0) ?: ($filledQty > 0 ? $filledValue / $filledQty : null);
+        $avgReported = (float) ($order['average_filled_price'] ?? 0);
+        $avg = $avgReported > 0 ? $avgReported : ($filledQty > 0 && $filledValue > 0 ? $filledValue / $filledQty : null);
+        // A poll can report filled_size > 0 with no filled_value and no average_filled_price at
+        // all — $avg would otherwise book a 0.0 fillPrice, which drags the v2 average to zero and
+        // silences the fail-safe (round-4 review, OrderResult::ok() now refuses this fill outright
+        // unless we recover a sane basis here). Falls back to the decision price for BOTH the
+        // price and the notional so entry_usd/quantity keep the same real cost basis, and logs
+        // loudly since this means the venue gave back materially incomplete fill data.
+        if ($filledQty > 0 && ($avg === null || $avg <= 0)) {
+            Log::warning('CoinbaseExecutor: filled order missing a usable average price, falling back to the decision price', [
+                'order_id' => $orderId,
+                'filled_size' => $filledQty,
+                'filled_value' => $filledValue,
+                'average_filled_price' => $order['average_filled_price'] ?? null,
+            ]);
+            $avg = $decisionPrice;
+            $filledValue = $filledQty * $avg;
+        }
         $status = $filledQty > 0 ? 'filled' : 'rejected';
         $partial = $side === 'BUY'
             ? $filledValue + $fee < $requestedUsd * 0.98

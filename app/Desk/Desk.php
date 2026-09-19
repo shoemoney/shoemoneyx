@@ -1009,15 +1009,12 @@ class Desk
                 $p->trims_count = $p->trims_count + 1;
                 // v2's ladder reconciles its rung price from this, not the rung's computed target
                 // (JsonPluginStrategy::reconcilePendingRung(), docs/STRATEGY_SCHEMA_V2.md review round 1)
-                // — a live/paper trim fills at market, not at the target. Guarded against a null OR
-                // zero fillPrice (CoinbaseExecutor can report 0.0 on a poll with filled_size > 0 but
-                // no filled_value) — reconcilePendingRung()'s is_numeric() fallback guard treats 0.0
-                // as present, which would stamp a zero sale price and silently kill the re-entry loop.
-                if ($result->fillPrice !== null && $result->fillPrice > 0) {
-                    $meta = $p->meta ?? [];
-                    $meta['v2']['last_trim_fill_price'] = (float) $result->fillPrice;
-                    $p->meta = $meta;
-                }
+                // — a live/paper trim fills at market, not at the target. No null/zero guard needed
+                // here: we already returned above unless $result->ok(), which now requires a
+                // positive fillPrice (round-4 review, OrderResult::ok()).
+                $meta = $p->meta ?? [];
+                $meta['v2']['last_trim_fill_price'] = (float) $result->fillPrice;
+                $p->meta = $meta;
 
                 if ($p->quantity > self::QTY_EPSILON) {
                     $p->save();
