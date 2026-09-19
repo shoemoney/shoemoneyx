@@ -113,27 +113,28 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-a');
         $p = $this->freshPosition();
 
-        // (a) walk up through all four rungs: each trim is 2/4/8/10% of the ORIGINAL 1000 units,
-        // expressed as a fraction of whatever quantity remains at that moment.
-        $d0 = $this->step($p, $ctx, 100.5);
+        // (a) walk up through all four rungs (at_pct 1.5/3.0/4.5/6.0): each trim is 2/4/8/10% of the
+        // ORIGINAL 1000 units, expressed as a fraction of whatever quantity remains at that moment.
+        $d0 = $this->step($p, $ctx, 101.5);
         $this->assertTrue($d0->shouldTrim());
         $this->assertEqualsWithDelta(20 / 1000, $d0->fraction, 1e-9, 'rung 0: 2% of original');
 
-        $d1 = $this->step($p, $ctx, 101.0);
+        $d1 = $this->step($p, $ctx, 103.0);
         $this->assertEqualsWithDelta(40 / 980, $d1->fraction, 1e-9, 'rung 1: 4% of original');
 
-        $d2 = $this->step($p, $ctx, 101.5);
+        $d2 = $this->step($p, $ctx, 104.5);
         $this->assertEqualsWithDelta(80 / 940, $d2->fraction, 1e-9, 'rung 2: 8% of original');
 
-        $d3 = $this->step($p, $ctx, 102.0);
+        $d3 = $this->step($p, $ctx, 106.0);
         $this->assertEqualsWithDelta(100 / 860, $d3->fraction, 1e-9, 'rung 3: 10% of original');
         $this->assertEqualsWithDelta(760.0, $p->quantity, 1e-9);
         $this->assertEqualsWithDelta(100.0, $p->entry_price, 1e-9, 'trims never move the average');
 
-        // (b) dip half a rung (retrace.min 0.5 x the 0.5%-wide rung spacing) from the last fired
-        // rung's sale price (102) toward avg (100) and stay above it: reentry arms and buys the
-        // formula's exact quantity (sold_qty=100, retrace_pct=0.3 -> 100 x min(1, 0.3*pi/0.5) = 100).
-        $dReentry = $this->step($p, $ctx, 101.7);
+        // (b) dip 0.9 points (retrace.min 0.5 x the 1.5%-wide rung spacing = 0.75, comfortably
+        // cleared) from the last fired rung's sale price (106) toward avg (100) and stay above it:
+        // reentry arms and buys the formula's exact quantity (sold_qty=100, retrace_pct=0.9 ->
+        // 100 x min(1, 0.9*pi/1.5) = 100, the formula clamps to the full sold quantity).
+        $dReentry = $this->step($p, $ctx, 105.1);
         $this->assertTrue($dReentry->shouldAdd());
         $this->assertEqualsWithDelta(100.0, $dReentry->dollars / $dReentry->limitPrice, 1e-6, 'buys the formula quantity');
         $this->assertSame(1, $p->adds_count);
@@ -144,7 +145,7 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         // (d) finds `avg` has moved, rebuilding the ladder from scratch: `fired` resets, `original_qty`
         // re-bases to the CURRENT quantity (860), so this rung-0 fire is 2% of 860, not of 1000.
         $qtyAtRearm = $p->quantity;
-        $dRearmed = $this->step($p, $ctx, 101.7);
+        $dRearmed = $this->step($p, $ctx, 105.1);
         $this->assertTrue($dRearmed->shouldTrim());
         $this->assertEqualsWithDelta(0.02, $dRearmed->fraction, 1e-9, 'rung 0 of the RE-ARMED ladder: 2% of the new original (860)');
         $ladder = $p->meta['v2']['ladder'];
@@ -154,36 +155,40 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $this->assertEqualsWithDelta($qtyAtRearm, $ladder['original_qty'], 1e-9);
         $this->assertTrue($p->meta['v2']['reentries'][0]['confirmed']);
 
-        // (c) a tiny further tick makes the re-bought lot (in @ 101.7) green after fees (rate 0
+        // (c) a tiny further tick makes the re-bought lot (in @ 105.1) green after fees (rate 0
         // here, so any positive move qualifies) — cash_out fires AHEAD of the still-unfired rungs,
-        // since reentry.cash_out is checked before take_profit.ladder every call.
+        // since reentry.cash_out is checked before take_profit.ladder every call. It only sets
+        // `cash_out_pending`, not `cashed_out`, until reconcilePendingCashOut sees the trim confirm
+        // on the NEXT call (mirroring reconcilePendingRung) — asserted after dRung1New below.
         $qtyBeforeCashOut = $p->quantity;
-        $dCashOut = $this->step($p, $ctx, 101.72);
+        $dCashOut = $this->step($p, $ctx, 105.12);
         $this->assertTrue($dCashOut->shouldTrim());
         $this->assertStringContainsString('reentry.cash_out', $dCashOut->ruleFired);
-        $this->assertTrue($p->meta['v2']['reentries'][0]['cashed_out']);
         $this->assertEqualsWithDelta(80 / $qtyBeforeCashOut, $dCashOut->fraction, 1e-9, '80% of the 100-unit reentry lot');
 
-        // Rungs 1-3 of the re-armed ladder, now that cash_out is out of the way.
+        // Rungs 1-3 of the re-armed ladder, now that cash_out is out of the way. The first of these
+        // calls is also what confirms the cash-out above (reconcilePendingCashOut runs before any
+        // decision is made).
         $qtyBeforeRung1 = $p->quantity;
-        $dRung1New = $this->step($p, $ctx, 101.72);
+        $dRung1New = $this->step($p, $ctx, 107.0);
+        $this->assertTrue($p->meta['v2']['reentries'][0]['cashed_out'], 'confirmed once trims_count advanced past the cash-out trim');
         $this->assertStringContainsString('take_profit.ladder.1', $dRung1New->ruleFired);
         $this->assertEqualsWithDelta(0.04 * 860 / $qtyBeforeRung1, $dRung1New->fraction, 1e-9);
 
         $qtyBeforeRung2 = $p->quantity;
-        $dRung2New = $this->step($p, $ctx, 102.5);
+        $dRung2New = $this->step($p, $ctx, 107.0);
         $this->assertStringContainsString('take_profit.ladder.2', $dRung2New->ruleFired);
         $this->assertEqualsWithDelta(0.08 * 860 / $qtyBeforeRung2, $dRung2New->fraction, 1e-9);
 
         $qtyBeforeRung3 = $p->quantity;
-        $dRung3New = $this->step($p, $ctx, 102.5);
+        $dRung3New = $this->step($p, $ctx, 107.0);
         $this->assertStringContainsString('take_profit.ladder.3', $dRung3New->ruleFired);
         $this->assertEqualsWithDelta(0.10 * 860 / $qtyBeforeRung3, $dRung3New->fraction, 1e-9);
 
-        // (e) ride to a new peak, then give back 1% from it: the runner closes the remainder.
-        $p->markPrice(104.0);
-        $this->step($p, $ctx, 104.0);   // marks the peak, holds (base rails: nothing else fires)
-        $dTtp = $this->step($p, $ctx, 102.9);
+        // (e) ride to a new peak, then give back more than 1% from it: the runner closes the remainder.
+        $p->markPrice(112.0);
+        $this->step($p, $ctx, 112.0);   // marks the peak, holds (base rails: nothing else fires)
+        $dTtp = $this->step($p, $ctx, 109.0);
         $this->assertTrue($dTtp->shouldClose());
         $this->assertSame('take_profit.runner.ttp', $dTtp->ruleFired);
     }
@@ -195,10 +200,10 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-f');
         $p = $this->freshPosition();
 
-        $this->step($p, $ctx, 100.5);   // rung 0 fires, avg stays 100
-        $dAdd = $this->step($p, $ctx, 100.2);   // a comfortable half-rung-plus retrace: reentry buys
+        $this->step($p, $ctx, 101.5);   // rung 0 fires, avg stays 100
+        $dAdd = $this->step($p, $ctx, 100.7);   // a comfortable retrace past the 0.75-point minimum: reentry buys
         $this->assertTrue($dAdd->shouldAdd());
-        $this->step($p, $ctx, 100.2);   // confirms the add; avg is now > 100
+        $this->step($p, $ctx, 100.7);   // confirms the add; avg is now > 100
 
         $avg = $p->entry_price;
         $this->assertGreaterThan(100.0, $avg, 'the reentry buy moved the average up');
@@ -219,7 +224,7 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-noreset');
         $p = $this->freshPosition();
 
-        $d0 = $this->step($p, $ctx, 100.5);
+        $d0 = $this->step($p, $ctx, 101.5);
         $this->assertTrue($d0->shouldTrim());
         $this->assertSame(0, $p->meta['v2']['ladder']['pending']['idx'], 'rung 0 is pending — apply()\'s trims_count++ confirms it next call');
 
@@ -299,15 +304,16 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $this->assertEqualsWithDelta(1004.0, $pNoReset->meta['v2']['ladder']['original_qty'], 1e-9);
     }
 
-    /** Rung 0 fires (sells 20 of 1000), a reentry buys back 20 units at a half-rung retrace, then a flat tick cashes out 80% (16 of 20) of that lot green after (zero) fees. */
+    /** Rung 0 fires (sells 20 of 1000), a reentry buys back 20 units at a retrace, then a tick cashes out 80% (16 of 20) of that lot green after (zero) fees — a final same-price call lets reconcilePendingCashOut confirm the trim before the caller reads `original_qty`. */
     private function runRungReentryCashOut(Position $p, DeskContext $ctx): void
     {
-        $this->step($p, $ctx, 100.5);
-        $dAdd = $this->step($p, $ctx, 100.2);
+        $this->step($p, $ctx, 101.5);
+        $dAdd = $this->step($p, $ctx, 100.7);
         $this->assertTrue($dAdd->shouldAdd());
-        $dCashOut = $this->step($p, $ctx, 100.25);
+        $dCashOut = $this->step($p, $ctx, 100.8);
         $this->assertTrue($dCashOut->shouldTrim());
         $this->assertStringContainsString('reentry.cash_out', $dCashOut->ruleFired);
+        $this->step($p, $ctx, 100.8);
     }
 
     #[Test]
@@ -317,9 +323,10 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-real-fees', 0.006);   // desk.fees.taker_rate default
         $p = $this->freshPosition();
 
-        $this->step($p, $ctx, 100.5);   // rung 0 fires
-        // min_spacing_x_fees 0.4 x the 1.2% round-trip fee = 0.48%, which the 0.5%-wide rungs clear.
-        $d = $this->step($p, $ctx, 100.2);
+        $this->step($p, $ctx, 101.5);   // rung 0 fires
+        // min_spacing_x_fees 1 x the 1.2% round-trip fee = 1.2%, which rung 0's 1.5-point spacing
+        // (measured from 0, the first fired rung) clears.
+        $d = $this->step($p, $ctx, 100.7);
         $this->assertTrue($d->shouldAdd(), 'the acceptance strategy\'s re-entry must still arm at the desk\'s real default fee rate');
     }
 
@@ -330,13 +337,13 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-maxpos');
         $p = $this->freshPosition();
 
-        $this->step($p, $ctx, 100.5);            // rung 0 fires
-        $dAdd = $this->step($p, $ctx, 100.2);    // reentry #1 arms
+        $this->step($p, $ctx, 101.5);            // rung 0 fires
+        $dAdd = $this->step($p, $ctx, 100.7);    // reentry #1 arms
         $this->assertTrue($dAdd->shouldAdd());
-        $this->step($p, $ctx, 100.2);            // confirms it; avg moves, the ladder re-arms from it
+        $this->step($p, $ctx, 100.7);            // confirms it; avg moves, the ladder re-arms from it
 
-        $this->step($p, $ctx, 100.51);           // rearmed rung 0 fires again
-        $dSecond = $this->step($p, $ctx, 100.2); // every reentry gate would otherwise pass again
+        $this->step($p, $ctx, 101.52);           // rearmed rung 0 fires again
+        $dSecond = $this->step($p, $ctx, 100.7); // every reentry gate would otherwise pass again
         $this->assertFalse($dSecond->shouldAdd(), 'max_per_position:1 must refuse a second reentry');
         $this->assertCount(1, $p->meta['v2']['reentries']);
     }
@@ -348,10 +355,10 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-anchor-entry');
         $p = $this->freshPosition();
 
-        $this->step($p, $ctx, 100.5);          // rung 0 fires, avg stays 100
-        $dAdd = $this->step($p, $ctx, 100.2);  // reentry buys, moving avg
+        $this->step($p, $ctx, 101.5);          // rung 0 fires, avg stays 100
+        $dAdd = $this->step($p, $ctx, 100.7);  // reentry buys, moving avg
         $this->assertTrue($dAdd->shouldAdd());
-        $this->step($p, $ctx, 100.2);          // confirms the add
+        $this->step($p, $ctx, 100.7);          // confirms the add
 
         $this->assertGreaterThan(100.0, $p->entry_price, 'avg did move');
         $this->assertEqualsWithDelta(100.0, $p->meta['v2']['entry_price'], 1e-9, 'anchor:"entry" stays pinned to the first fill, unlike avg');
@@ -372,15 +379,16 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-retrace-pct');
         $p = $this->freshPosition();
 
-        $this->step($p, $ctx, 100.5);   // rung 0 fires at avg 100, sale price 100.5
+        $this->step($p, $ctx, 101.5);   // rung 0 fires at avg 100, sale price 101.5
 
-        // A 0.3% retrace: under the (wrong) rung_spacing reading this would be 0.4 x 0.5% = 0.2%,
-        // comfortably cleared — retrace.of:"pct" must require the full 0.4% directly instead.
-        $dShort = $this->step($p, $ctx, 100.2);
-        $this->assertFalse($dShort->shouldAdd(), 'retrace.of:"pct" needs the full 0.4%, not 0.4 x the rung spacing');
+        // A 0.3% retrace falls under the flat 0.4% bar regardless of how it's read.
+        $dShort = $this->step($p, $ctx, 101.2);
+        $this->assertFalse($dShort->shouldAdd(), 'retrace.of:"pct" needs the full 0.4%');
 
-        // A 0.41% retrace clears that same 0.4% absolute bar.
-        $dEnough = $this->step($p, $ctx, 100.09);
+        // A 0.5% retrace clears the flat 0.4% bar, but would FAIL the (wrong) rung_spacing reading
+        // (0.4 x the 1.5%-wide rung spacing = 0.6%) — proving retrace.of:"pct" is read as an
+        // absolute percent, not a multiple of the spacing.
+        $dEnough = $this->step($p, $ctx, 101.0);
         $this->assertTrue($dEnough->shouldAdd());
     }
 
@@ -392,10 +400,10 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $p = $this->freshPosition();
         $strategy = new JsonPluginStrategy;
 
-        $this->step($p, $ctx, 100.5);   // rung 0 fires
+        $this->step($p, $ctx, 101.5);   // rung 0 fires
 
-        $p->markPrice(100.2);
-        $dAdd = $strategy->risk($p, $this->stats(100.2), $ctx);
+        $p->markPrice(100.7);
+        $dAdd = $strategy->risk($p, $this->stats(100.7), $ctx);
         $this->assertTrue($dAdd->shouldAdd());
         $intendedPrice = $dAdd->limitPrice;
         $intendedQty = $dAdd->dollars / $intendedPrice;
@@ -414,8 +422,8 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $p->adds_count++;
         $this->assertNotEqualsWithDelta($intendedQty, $filledQty, 1e-9, 'the simulated fill must differ from the naive intent or this test proves nothing');
 
-        $p->markPrice(100.2);
-        $strategy->risk($p, $this->stats(100.2), $ctx);   // confirms the lot
+        $p->markPrice(100.7);
+        $strategy->risk($p, $this->stats(100.7), $ctx);   // confirms the lot
         $lot = $p->meta['v2']['reentries'][0];
         $this->assertTrue($lot['confirmed']);
         $this->assertEqualsWithDelta($filledQty, $lot['qty'], 1e-9, 'the lot must record the REAL filled quantity');
@@ -430,11 +438,33 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-stopmeta');
         $p = $this->freshPosition();
 
-        $d = $this->step($p, $ctx, 100.5);   // rung 0 fires
+        $d = $this->step($p, $ctx, 101.5);   // rung 0 fires
         $this->assertTrue($d->shouldTrim());
         // shipped example: stop.pct_from_avg 2.5, anchor "avg" (100) -> stop price 97.5. Backtester's
         // own conservative exit_touch_policy reads this to race the rung against the stop intrabar.
         $this->assertEqualsWithDelta(97.5, $d->meta['stop_price'] ?? null, 1e-9);
+    }
+
+    #[Test]
+    public function take_profit_rules_close_the_position_v1_migration_compatibility(): void
+    {
+        // docs/STRATEGY_SCHEMA_V2.md "Migration v1 -> v2": exit.take_profit.rules -> take_profit.rules,
+        // kept as close-only rules. A hand-authored v2 definition can set the same section directly.
+        $this->plugin('smx-pi-tprules', ['take_profit' => ['rules' => [
+            ['field' => 'volume_ratio_6h', 'op' => '<', 'value' => 0.1],
+        ]]]);
+        $ctx = $this->ctx('smx-pi-tprules');
+        $p = $this->freshPosition();
+
+        $stats = ProductStats::fromArray([
+            'product_id' => 'BTC-USD', 'price' => 100.1,
+            'volume_h24_usd' => 600000, 'volume_h1_usd' => 100000, 'volume_h6_usd' => 10000,
+            'price_change_h24_pct' => 3, 'spread_bps' => 5, 'candles_h1_count' => 30,
+        ]);
+        $p->markPrice(100.1);
+        $d = (new JsonPluginStrategy)->risk($p, $stats, $ctx);
+        $this->assertTrue($d->shouldClose());
+        $this->assertStringContainsString('take_profit.rules', $d->ruleFired);
     }
 
     #[Test]
@@ -444,10 +474,10 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $ctx = $this->ctx('smx-pi-tinyreentry');
         $p = $this->freshPosition();
 
-        $this->step($p, $ctx, 100.5);   // rung 0 fires
+        $this->step($p, $ctx, 101.5);   // rung 0 fires
         // Every other reentry gate passes here (same retrace as the other tests) — the ticket
         // itself is a fraction of a cent and must be refused, not booked.
-        $d = $this->step($p, $ctx, 100.2);
+        $d = $this->step($p, $ctx, 100.7);
         $this->assertFalse($d->shouldAdd(), 'size.min_ticket_usd must still clamp a reentry order to nothing');
     }
 }

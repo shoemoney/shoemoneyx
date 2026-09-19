@@ -108,11 +108,15 @@ class JsonRunnerV2LadderReentryBacktestTest extends TestCase
         $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
         [$ts, , $fill] = $this->warmupAndEntry($from);
 
-        // Rungs 0-3 (+0.55/1.05/1.55/2.06%: a hair past each exact target so bar-close floating
-        // point never leaves a rung just short of "reached"), a retrace that arms one reentry buy,
-        // its cash-out once green, the ladder re-arming from the new average for a second pass,
-        // then a peak and a 1%+ giveback that fires the runner.
-        $ts = $this->walk($ts, $fill, [1.0055, 1.0105, 1.0155, 1.0206, 1.016, 1.016, 1.0175, 1.0175, 1.026, 1.026, 1.045, 1.03]);
+        // Rung 0 (+1.6%, a hair past its 1.5% target), then a real multi-bar retrace back toward
+        // avg that arms one reentry buy — the widened 1.5%-spaced ladder pushes RSI(14) well past
+        // the not_overbought(70) gate reentry.when also checks after only ONE rung, so the retrace
+        // is spread over several bars to let RSI cool before arming, rather than firing all four
+        // original rungs first (after_rungs defaults to 1 — this is still the shipped example's own
+        // gate, not a relaxed one). The reentry cashes out once green, the ladder re-arms from the
+        // new average and climbs all four rungs again, then a peak and a 1%+ giveback fires the
+        // runner.
+        $ts = $this->walk($ts, $fill, [1.016, 1.010, 1.006, 1.003, 1.0005, 1.007, 1.017, 1.032, 1.047, 1.062, 1.10, 1.08]);
         $to = $ts->copy()->addHour();
 
         $bt = app(Backtester::class)->run('json', ['BTC-USD'], $from, $to, 2_000_000.0, $this->overrides($def['key']));
@@ -121,16 +125,14 @@ class JsonRunnerV2LadderReentryBacktestTest extends TestCase
         $trade = $bt->trades[0];
         $this->assertSame('take_profit.runner.ttp', $trade['rule']);
         $this->assertSame(1, $trade['adds'], 'exactly one reentry buy');
-        $this->assertSame(9, $trade['trims'], '4 original rungs + cash_out + 4 re-armed rungs');
+        $this->assertSame(6, $trade['trims'], 'rung 0 + cash_out + 4 re-armed rungs');
 
         // Closed form: SIZE puts in 5% of the $2,000,000 starting equity ($100,000, no fees/slippage)
         // at the fill price; every rung/cash_out trim banks (rung price - avg cost/unit) x qty sold,
         // the reentry buy moves cash by exactly -dollars, and the runner's TTP close banks whatever
-        // is left at its own fill price minus its cost basis. That is exactly the same fee-free walk
-        // JsonPluginStrategyV2EngineTest drives directly against JsonPluginStrategy::risk() on a
-        // round-number position (avg 100, qty 1000) — same rungs, same reentry formula, same
-        // rearm — so this number is cross-checked against that closed-form derivation, not tuned.
-        $this->assertEqualsWithDelta(2_002_428.04, (float) $bt->ending_equity, 0.02);
+        // is left at its own fill price minus its cost basis. Fees, slippage and funding are zeroed
+        // (see overrides()), so this number is fully determined by the walk above, not tuned.
+        $this->assertEqualsWithDelta(2_007_094.31, (float) $bt->ending_equity, 0.02);
     }
 
     public function test_the_stop_fires_off_the_moved_average_after_a_reentry_buy(): void
@@ -140,11 +142,14 @@ class JsonRunnerV2LadderReentryBacktestTest extends TestCase
         $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
         [$ts, , $fill] = $this->warmupAndEntry($from);
 
-        // One rung, a small retrace that arms a reentry (moving the average up), then a crash well
-        // past the fail-safe from wherever that new average landed. The direct-call engine test
+        // One rung (+1.6%, past the 1.5% target), a multi-bar retrace that both clears the
+        // 0.75-point minimum and cools RSI(14) back under the not_overbought(70) gate reentry.when
+        // also checks (see the comment on the other test in this file), arming a reentry that moves
+        // the average up — then a crash well past the fail-safe from wherever that new average
+        // landed. The direct-call engine test
         // (JsonPluginStrategyV2EngineTest::the_stop_moves_with_the_average_after_a_reentry_buy)
         // is what actually pins the boundary — this proves the same thing survives a real run.
-        $ts = $this->walk($ts, $fill, [1.0055, 1.002]);
+        $ts = $this->walk($ts, $fill, [1.016, 1.010, 1.006, 1.006]);
         $ts->addHour();
         $crash = $fill * 0.90;
         Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $fill * 1.002, 'high' => $fill * 1.002, 'low' => $crash, 'close' => $crash, 'volume' => 230]);
@@ -160,7 +165,8 @@ class JsonRunnerV2LadderReentryBacktestTest extends TestCase
 
         // Closed form: SIZE puts in $100,000 at $fill (no fees/slippage), the ladder banks one small
         // rung, the reentry buy moves cash by -dollars, and the stop liquidates everything left at
-        // the crash price. Cross-checked the same way as the path above.
-        $this->assertEqualsWithDelta(1_990_006.05, (float) $bt->ending_equity, 0.02);
+        // the crash price. Fees, slippage and funding are zeroed (see overrides()), so this number
+        // is fully determined by the walk above, not tuned.
+        $this->assertEqualsWithDelta(1_990_018.05, (float) $bt->ending_equity, 0.02);
     }
 }

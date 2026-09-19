@@ -53,7 +53,7 @@ same JSON, and the hub can render a "how this works" poster from it without a hu
   "author": "shoemoney",
   "meta": {
     "name": "SMX π Take Profit",
-    "description": "Nibble 2/4/8/10% at +0.5/1/1.5/2%, run the rest on a TTP, π re-entry on the dip, cash it out green after fees, 2.5% fail-safe.",
+    "description": "Nibble 2/4/8/10% at +1.5/3/4.5/6%, run the rest on a TTP, π re-entry on the dip, cash it out green after fees, 2.5% fail-safe.",
     "tags": ["take-profit", "ladder", "reentry", "smx"],
     "timeframe": "1h",
     "assets": ["BTC-USD", "ETH-USD"]
@@ -77,12 +77,12 @@ same JSON, and the hub can render a "how this works" poster from it without a hu
   "take_profit": {
     "from": "avg",
     "ladder": [
-      { "at_pct": 0.5, "sell_pct_of_original": 2 },
-      { "at_pct": 1.0, "sell_pct_of_original": 4 },
-      { "at_pct": 1.5, "sell_pct_of_original": 8 },
-      { "at_pct": 2.0, "sell_pct_of_original": 10 }
+      { "at_pct": 1.5, "sell_pct_of_original": 2 },
+      { "at_pct": 3.0, "sell_pct_of_original": 4 },
+      { "at_pct": 4.5, "sell_pct_of_original": 8 },
+      { "at_pct": 6.0, "sell_pct_of_original": 10 }
     ],
-    "runner": { "ttp": { "activate_pct": 2.0, "giveback_pct": 1.0 } },
+    "runner": { "ttp": { "activate_pct": 6.0, "giveback_pct": 1.0 } },
     "reset_on_add": true
   },
   "reentry": {
@@ -90,7 +90,7 @@ same JSON, and the hub can render a "how this works" poster from it without a hu
     "after_rungs": 1,
     "retrace": { "of": "rung_spacing", "min": 0.5, "stay_above_avg": true },
     "size": { "mode": "formula", "expr": "sold_qty * min(1, retrace_pct * pi / spacing_pct)" },
-    "min_spacing_x_fees": 0.4,
+    "min_spacing_x_fees": 1,
     "cash_out": {
       "when": "green_after_fees",
       "sell_pct_of_reentry": 80,
