@@ -85,4 +85,37 @@ class CoinbaseExecutorSettleTest extends TestCase
         $this->assertTrue($result->ok());
         Log::shouldNotHaveReceived('warning');
     }
+
+    /**
+     * Round-5 review, IMPORTANT 4(a): average_filled_price present (real) but filled_value
+     * absent bypassed round 4's fallback outright (it only checked the average) — fillPrice 102,
+     * filledUsd = 0 - fee = negative, and ok() (still filledUsd > 0 at the time) refused a real
+     * fill. Fixed by widening the recovery, not by the filledUsd removal alone.
+     */
+    public function test_buy_rebuilds_filled_value_when_the_average_is_present_but_the_value_is_not(): void
+    {
+        $coinbase = \Mockery::mock(CoinbaseService::class);
+        $coinbase->shouldReceive('marketBuy')->once()->andReturn([
+            'success' => true,
+            'success_response' => ['order_id' => 'order-3'],
+        ]);
+        $coinbase->shouldReceive('getOrder')->andReturn([
+            'order' => [
+                'status' => 'FILLED',
+                'filled_size' => '2.0',
+                'filled_value' => '0',
+                'average_filled_price' => '102.0',
+                'total_fees' => '1.20',
+            ],
+        ]);
+
+        Log::spy();
+
+        $result = $this->executor($coinbase)->buy('BTC-USD', 200.0, 100.0);
+
+        $this->assertEqualsWithDelta(102.0, $result->fillPrice, 1e-9, 'the real average must not be discarded');
+        $this->assertEqualsWithDelta(2.0 * 102.0 + 1.20, $result->filledUsd, 1e-9, 'filled_value must be rebuilt from the real average, not left at 0');
+        $this->assertTrue($result->ok());
+        Log::shouldHaveReceived('warning')->once();
+    }
 }
