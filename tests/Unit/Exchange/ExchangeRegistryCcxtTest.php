@@ -39,7 +39,7 @@ class ExchangeRegistryCcxtTest extends TestCase
 
         $this->assertInstanceOf(CcxtExchange::class, $exchange);
         $this->assertSame('kraken', $exchange->id());
-        $this->assertSame('Kraken via ccxt', $exchange->name());
+        $this->assertSame('Kraken', $exchange->name());
     }
 
     public function test_native_driver_wins_over_a_same_named_ccxt_id(): void

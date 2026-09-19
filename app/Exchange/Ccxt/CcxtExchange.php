@@ -38,7 +38,7 @@ class CcxtExchange implements Exchange
 
     public function name(): string
     {
-        return ucfirst($this->ccxtId).' via ccxt';
+        return ucfirst($this->ccxtId);
     }
 
     public function capabilities(): Capabilities
