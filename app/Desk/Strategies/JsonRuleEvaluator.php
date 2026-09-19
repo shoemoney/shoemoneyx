@@ -153,7 +153,7 @@ final class JsonRuleEvaluator
             return null;
         }
 
-        $snapshot = IndicatorCache::snapshot($ctx, $s->productId, $tf, $parsed);
+        $snapshot = IndicatorCache::snapshot($ctx, $s->productId, $tf, $parsed, $s->price);
 
         return ($previous ? $snapshot['previous'] : $snapshot['current'])[$parsed->output] ?? null;
     }

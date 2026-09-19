@@ -356,16 +356,25 @@ final class StrategySchemaValidator
                 $errors[] = ['path' => "{$rulePath}.field", 'message' => 'field is unknown (stats key, indicators.*, time.*, or position.* where allowed)'];
             }
             $op = $rule['op'] ?? null;
+            $isCrosses = $op === 'crosses_above' || $op === 'crosses_below';
             if (! in_array($op, JsonRuleEvaluator::OPS, true)) {
                 $errors[] = ['path' => "{$rulePath}.op", 'message' => 'op must be one of: '.implode(', ', JsonRuleEvaluator::OPS)];
             } elseif (in_array($op, ['between', 'in', 'not_in'], true) && ! is_array($rule['value'] ?? null)) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => "value must be an array for op \"{$op}\""];
             } elseif ($op === 'between' && is_array($rule['value'] ?? null) && count($rule['value']) !== 2) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value must have exactly 2 elements [min, max] for op "between"'];
+            } elseif ($isCrosses && ! str_starts_with((string) ($rule['field'] ?? ''), 'ind.')) {
+                $errors[] = ['path' => "{$rulePath}.field", 'message' => 'crosses_* needs an ind.* field on both sides'];
+            } elseif ($isCrosses) {
+                $value = $rule['value'] ?? null;
+                $isIndFieldRef = is_array($value) && is_string($value['field'] ?? null) && str_starts_with($value['field'], 'ind.');
+                if (! is_numeric($value) && ! $isIndFieldRef) {
+                    $errors[] = ['path' => "{$rulePath}.value", 'message' => 'crosses_* needs an ind.* field on both sides'];
+                }
             }
             if (! array_key_exists('value', $rule)) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value is required'];
-            } elseif (! in_array($op, ['between', 'in', 'not_in'], true) && (is_array($rule['value']) || is_object($rule['value']))) {
+            } elseif (! $isCrosses && ! in_array($op, ['between', 'in', 'not_in'], true) && (is_array($rule['value']) || is_object($rule['value']))) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value must be a scalar or null'];
             }
         }

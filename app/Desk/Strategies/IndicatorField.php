@@ -13,21 +13,23 @@ namespace App\Desk\Strategies;
 final class IndicatorField
 {
     /**
-     * name => arity, outputs[]. An output-less field (`ind.rsi(14)`, no `.suffix`) resolves
-     * to 'value' — and only when 'value' is in the list. Every indicator with more than one
-     * output requires an explicit `.output` suffix.
+     * name => arity, outputs[], int_args[]. An output-less field (`ind.rsi(14)`, no `.suffix`)
+     * resolves to 'value' — and only when 'value' is in the list. Every indicator with more
+     * than one output requires an explicit `.output` suffix. `int_args` names the 0-based
+     * argument indices that must be a positive whole number rather than any float — every
+     * period-like arg except `bb`'s free-float `k`.
      */
     private const TABLE = [
-        'rsi' => ['arity' => 1, 'outputs' => ['value']],
-        'sma' => ['arity' => 1, 'outputs' => ['value']],
-        'ema' => ['arity' => 1, 'outputs' => ['value']],
-        'atr' => ['arity' => 1, 'outputs' => ['value', 'pct']],
-        'adx' => ['arity' => 1, 'outputs' => ['value']],
-        'macd' => ['arity' => 3, 'outputs' => ['macd', 'signal', 'hist']],
-        'bb' => ['arity' => 2, 'outputs' => ['upper', 'lower', 'mid', 'pos']],
-        'vwap' => ['arity' => 0, 'outputs' => ['value']],
-        'obv' => ['arity' => 0, 'outputs' => ['value']],
-        'smx' => ['arity' => 0, 'outputs' => ['wt1', 'wt2', 'wt_cross', 'rsi_mfi', 'buy', 'sell', 'gold_buy', 'div_bull', 'div_bear']],
+        'rsi' => ['arity' => 1, 'outputs' => ['value'], 'int_args' => [0]],
+        'sma' => ['arity' => 1, 'outputs' => ['value'], 'int_args' => [0]],
+        'ema' => ['arity' => 1, 'outputs' => ['value'], 'int_args' => [0]],
+        'atr' => ['arity' => 1, 'outputs' => ['value', 'pct'], 'int_args' => [0]],
+        'adx' => ['arity' => 1, 'outputs' => ['value'], 'int_args' => [0]],
+        'macd' => ['arity' => 3, 'outputs' => ['macd', 'signal', 'hist'], 'int_args' => [0, 1, 2]],
+        'bb' => ['arity' => 2, 'outputs' => ['upper', 'lower', 'mid', 'pos'], 'int_args' => [0]],
+        'vwap' => ['arity' => 0, 'outputs' => ['value'], 'int_args' => []],
+        'obv' => ['arity' => 0, 'outputs' => ['value'], 'int_args' => []],
+        'smx' => ['arity' => 0, 'outputs' => ['wt1', 'wt2', 'wt_cross', 'rsi_mfi', 'buy', 'sell', 'gold_buy', 'div_bull', 'div_bear'], 'int_args' => []],
     ];
 
     private function __construct(
@@ -37,7 +39,7 @@ final class IndicatorField
         public readonly string $output,
     ) {}
 
-    /** @return array<string, array{arity: int, outputs: array<int, string>}> */
+    /** @return array<string, array{arity: int, outputs: array<int, string>, int_args: array<int, int>}> */
     public static function table(): array
     {
         return self::TABLE;
@@ -82,6 +84,11 @@ final class IndicatorField
         if (count($args) !== $spec['arity']) {
             throw new \InvalidArgumentException(sprintf('ind.%s takes %d argument(s), got %d', $name, $spec['arity'], count($args)));
         }
+        foreach ($spec['int_args'] as $i) {
+            if (! self::isPositiveWholeNumber($args[$i])) {
+                throw new \InvalidArgumentException(sprintf('ind.%s argument %d must be a positive whole number, got %s', $name, $i + 1, self::formatArg($args[$i])));
+            }
+        }
 
         $output = $m[3] ?? '';
         if ($output === '') {
@@ -100,5 +107,15 @@ final class IndicatorField
     public function seriesKey(): string
     {
         return $this->name.'('.implode(',', $this->args).')';
+    }
+
+    private static function isPositiveWholeNumber(float $arg): bool
+    {
+        return $arg >= 1.0 && floor($arg) === $arg;
+    }
+
+    private static function formatArg(float $arg): string
+    {
+        return rtrim(rtrim(sprintf('%.6f', $arg), '0'), '.');
     }
 }

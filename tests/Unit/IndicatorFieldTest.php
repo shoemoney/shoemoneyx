@@ -106,4 +106,35 @@ class IndicatorFieldTest extends TestCase
 
         $this->assertSame($a->seriesKey(), $b->seriesKey());
     }
+
+    public function test_fractional_period_argument_rejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        IndicatorField::parse('ind.rsi(14.5)');
+    }
+
+    public function test_zero_period_argument_rejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        IndicatorField::parse('ind.ema(0)');
+    }
+
+    public function test_negative_period_argument_rejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        IndicatorField::parse('ind.rsi(-5)');
+    }
+
+    public function test_bb_k_argument_stays_a_free_float(): void
+    {
+        $f = IndicatorField::parse('ind.bb(20,2.5).upper');
+
+        $this->assertSame([20.0, 2.5], $f->args);
+    }
+
+    public function test_bb_period_argument_still_rejected_when_fractional(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        IndicatorField::parse('ind.bb(20.5,2).upper');
+    }
 }

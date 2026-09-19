@@ -99,6 +99,30 @@ class StrategySchemaValidatorTest extends TestCase
     }
 
     #[Test]
+    public function crosses_above_on_a_non_indicator_field_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['trigger']['rules'][0] = ['field' => 'price', 'op' => 'crosses_above', 'value' => 30];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('trigger.rules[0].field', array_column($result['errors'], 'path'));
+    }
+
+    #[Test]
+    public function crosses_above_with_a_non_indicator_value_field_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['trigger']['rules'][0] = ['field' => 'ind.ema(20)', 'op' => 'crosses_above', 'value' => ['field' => 'price']];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('trigger.rules[0].value', array_column($result['errors'], 'path'));
+    }
+
+    #[Test]
     public function position_fields_are_rejected_outside_exit_and_management(): void
     {
         $def = $this->validDefinition();

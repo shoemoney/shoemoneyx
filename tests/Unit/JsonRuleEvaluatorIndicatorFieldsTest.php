@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Desk\Data\ProductStats;
 use App\Desk\DeskContext;
+use App\Desk\Strategies\IndicatorField;
 use App\Desk\Strategies\JsonRuleEvaluator;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -191,5 +192,87 @@ class JsonRuleEvaluatorIndicatorFieldsTest extends TestCase
 
         $this->assertSame(42.5, JsonRuleEvaluator::value('indicators.rsi14', $s, null, $ctx));
         $this->assertTrue(JsonRuleEvaluator::fires(['field' => 'indicators.rsi14', 'op' => '<', 'value' => 50], $s, null, $ctx));
+    }
+
+    #[Test]
+    public function ind_smx_div_bull_and_div_bear_resolve_instead_of_null(): void
+    {
+        $now = strtotime('2026-01-01T00:00:00Z');
+        $ctx = $this->ctxWithBars(['1h' => $this->syntheticBars(400, $now)], $now);
+        $s = $this->stats();
+
+        $this->assertNotNull(JsonRuleEvaluator::value('ind.smx.div_bull', $s, null, $ctx, '1h'));
+        $this->assertNotNull(JsonRuleEvaluator::value('ind.smx.div_bear', $s, null, $ctx, '1h'));
+        $this->assertIsBool(JsonRuleEvaluator::value('ind.smx.div_bull', $s, null, $ctx, '1h'));
+    }
+
+    #[Test]
+    public function every_declared_indicator_output_resolves_non_null_on_a_long_series(): void
+    {
+        $now = strtotime('2026-01-01T00:00:00Z');
+        $ctx = $this->ctxWithBars(['1h' => $this->syntheticBars(400, $now)], $now);
+        $s = $this->stats();
+
+        foreach (IndicatorField::table() as $name => $spec) {
+            $args = match ($name) {
+                'macd' => [12, 26, 9],
+                'bb' => [20, 2],
+                default => $spec['arity'] > 0 ? [14] : [],
+            };
+            $field = $spec['arity'] > 0 ? "ind.{$name}(".implode(',', $args).')' : "ind.{$name}";
+
+            foreach ($spec['outputs'] as $output) {
+                $this->assertNotNull(
+                    JsonRuleEvaluator::value("{$field}.{$output}", $s, null, $ctx, '1h'),
+                    "{$field}.{$output} resolved null"
+                );
+            }
+        }
+    }
+
+    #[Test]
+    public function an_indicator_never_sees_the_bar_it_is_standing_inside(): void
+    {
+        $now = strtotime('2026-01-01T06:00:00Z');
+        $bars = $this->hourlyBars([100, 101], $now);
+        // A bar that starts exactly "now" is still open -- it must never leak into the series.
+        $bars[] = ['start' => $now, 'open' => 9999.0, 'high' => 9999.0, 'low' => 9999.0, 'close' => 9999.0, 'volume' => 10.0];
+        $ctx = $this->ctxWithBars(['1h' => $bars], $now);
+
+        $this->assertEqualsWithDelta(101.0, JsonRuleEvaluator::value('ind.sma(1)', $this->stats(), null, $ctx, '1h'), 1e-9);
+    }
+
+    #[Test]
+    public function crosses_above_does_not_refire_on_the_bar_after_the_cross(): void
+    {
+        // Bar 6 is the crossing bar (see crosses_above_fires_only_on_the_bar_it_crosses); bar 7
+        // keeps trending the same direction, so sma(2) is already above sma(4) on both bars
+        // compared -- no new crossing event, and the rule must not fire again.
+        $now = strtotime('2026-01-01T07:00:00Z');
+        $ctx = $this->ctxWithBars(['1h' => $this->hourlyBars([1, 1, 1, 1, 1, 10, 11], $now)], $now);
+
+        $rule = ['field' => 'ind.sma(2)', 'op' => 'crosses_above', 'value' => ['field' => 'ind.sma(4)']];
+        $this->assertFalse(JsonRuleEvaluator::fires($rule, $this->stats(), null, $ctx));
+    }
+
+    /** @return array<int, array{start:int,open:float,high:float,low:float,close:float,volume:float}> */
+    private function syntheticBars(int $n, int $nowTs): array
+    {
+        $bars = [];
+        for ($i = 0; $i < $n; $i++) {
+            $start = $nowTs - ($n - $i) * 3600;
+            $close = 100 + 10 * sin($i / 9) + $i * 0.02;
+            $open = 100 + 10 * sin(($i - 1) / 9) + ($i - 1) * 0.02;
+            $bars[] = [
+                'start' => $start,
+                'open' => $open,
+                'high' => max($open, $close) + 0.5,
+                'low' => min($open, $close) - 0.5,
+                'close' => $close,
+                'volume' => 100.0 + $i,
+            ];
+        }
+
+        return $bars;
     }
 }

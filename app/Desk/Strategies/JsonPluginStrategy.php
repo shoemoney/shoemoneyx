@@ -107,12 +107,22 @@ class JsonPluginStrategy extends BaseDeskStrategy
 
         $tf = self::defaultTf($def);
         foreach ($def['entry']['confirm'] ?? [] as $rule) {
-            // A rule on missing data is skipped here (fail-open): scan already
-            // excluded unmeasurable rows, and vet must not reject on unknown data.
             $field = (string) ($rule['field'] ?? '');
             $ruleTf = is_string($rule['tf'] ?? null) && $rule['tf'] !== '' ? $rule['tf'] : $tf;
             if (JsonRuleEvaluator::value($field, $candidate->stats, null, $ctx, $ruleTf) === null) {
-                continue;
+                // A v1 stats field on missing data is skipped (fail-open): scan already
+                // excluded unmeasurable rows. An `ind.*` field never went through that scan
+                // filter, so an unmeasurable confirmation blocks the entry instead (fail closed).
+                if (! str_starts_with($field, 'ind.')) {
+                    continue;
+                }
+
+                return Verdict::reject(
+                    $candidate,
+                    'json.'.$field,
+                    (string) ($rule['reason'] ?? "indicator unavailable: {$field}"),
+                    [...$verdict->checksRun, 'json'],
+                );
             }
             if (! JsonRuleEvaluator::fires($rule, $candidate->stats, null, $ctx, $tf)) {
                 return Verdict::reject(
