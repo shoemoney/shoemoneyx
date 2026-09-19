@@ -14,9 +14,6 @@
     @if ($current)
         <link rel="preload" as="image" type="image/webp" fetchpriority="high" href="{{ $current['path'] === '/' ? '/brand/shoegpt-robot-typing-wide.webp' : '/brand/shoegpt-robot-armor.webp' }}">
     @endif
-    <script src="/charting_library/charting_library.min.js"></script>
-    <script src="/datafeeds/udf/dist/polyfills.js"></script>
-    <script src="/datafeeds/udf/dist/bundle.js"></script>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body class="antialiased {{ $current ? 'smx-app' : '' }}" data-shell-mode="{{ ! $current ? 'gallery' : ($current['path'] === '/' ? 'home' : 'desk') }}">
