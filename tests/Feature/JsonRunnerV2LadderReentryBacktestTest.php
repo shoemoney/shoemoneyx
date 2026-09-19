@@ -169,4 +169,31 @@ class JsonRunnerV2LadderReentryBacktestTest extends TestCase
         // is fully determined by the walk above, not tuned.
         $this->assertEqualsWithDelta(1_990_018.05, (float) $bt->ending_equity, 0.02);
     }
+
+    public function test_the_stop_and_ladder_are_both_bar_range_aware_at_the_default_1h_step(): void
+    {
+        $this->setUpProduct();
+        $def = $this->definePlugin();
+        $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
+        [$ts, , $fill] = $this->warmupAndEntry($from);
+
+        // A single probe bar whose CLOSE stays flat (+0.2%) but whose HIGH clears rung 0's +1.5%
+        // target AND whose LOW pierces the 2.5% fail-safe below avg — review round 2 regression: at
+        // the default 1H step, extra.bar_high/bar_low were only ever attached on a sub-hour step, so
+        // both the ladder and the stop evaluated on the close alone and this bar traded through the
+        // fail-safe (and past a rung) with the backtest reporting neither.
+        $ts->addHour();
+        Candle::create([
+            'product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(),
+            'open' => $fill, 'high' => $fill * 1.05, 'low' => $fill * 0.95, 'close' => $fill * 1.002, 'volume' => 230,
+        ]);
+        $to = $ts->copy()->addHour();
+
+        $bt = app(Backtester::class)->run('json', ['BTC-USD'], $from, $to, 2_000_000.0, $this->overrides($def['key']));
+
+        $this->assertSame('done', $bt->status);
+        $trade = $bt->trades[0];
+        $this->assertSame('stop.pct_from_avg', $trade['rule'], 'the fail-safe catches the bar before the ladder gets a look (RISK\'s evaluation order)');
+        $this->assertSame(0, $trade['trims'], 'no rung banked despite the high clearing rung 0 intrabar');
+    }
 }

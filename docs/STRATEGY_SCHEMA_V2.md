@@ -485,7 +485,7 @@ see a change.
 | Phase | Scope | Proof |
 |---|---|---|
 | A. Indicators | `ind.*` parametric fields on any stored timeframe, `crosses_*`, field-to-field values, per-rule `tf`, v1 aliases | unit tests per indicator against known series; a rule test for each op |
-| B. Schema | validator v2, formula parser, `params` substitution, `SchemaMigrator::v1ToV2`, docs | every v1 example round-trips to identical backtest fills; fuzz the formula parser |
+| B. Schema | validator v2, formula parser, `params` substitution, `SchemaMigrator::v1ToV2`, docs | every v1 example round-trips to a valid v2 definition (`SchemaMigratorTest::v1_to_v2_round_trips_every_shipped_v1_example_to_a_valid_v2_definition`); no fills equivalence, see "Migration v1 → v2"; fuzz the formula parser |
 | C. Engine | `take_profit` ladder (percent-of-original, reset on add), `stop` anchor, `reentry` + `cash_out`, runner TTP, lot tracking in `Desk` and `Backtester` | the π strategy backtests on a synthetic tape that exercises every rung, re-buy, cash-out, and the stop; closed-form ending equity asserted |
 | D. Agent + templates | `strategy_json` accepts v2, `smx-pi-take-profit.json` v2 ships in `shoemoneyx-strategies`, poster JSON block switches to v2 | agent round-trip test: paste → validate → backtest |
 | E. Card builder | Vue editor over v2: section board, typed cards, signal references, formula field with variable chips, live validation, JSON view | e2e: build the π strategy by drag and drop, export, diff against the shipped file |

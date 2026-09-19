@@ -116,9 +116,10 @@ class StrategyAgentTest extends TestCase
             StrategyPluginVersion::where('strategy_plugin_id', $plugin->id)->where('version', '1.0.0')->count(),
         );
 
-        // ...and the saved plugin actually runs: a 30-bar warmup, a +2.5% high-volume jump SCAN
-        // reads as its candidate, then a clean run-up past every rung and the runner's giveback —
-        // same tape shape as JsonRunnerV2LadderReentryBacktestTest, trimmed to just prove a trade.
+        // ...and the saved plugin actually runs the v2 ladder end to end: a 30-bar warmup, a +2.5%
+        // high-volume jump SCAN reads as its candidate, then a run-up through all four rungs to a
+        // peak (+10%) and a 1%+ giveback that fires the runner — same tape shape as
+        // JsonRunnerV2LadderReentryBacktestTest, trimmed to just this one leg of it.
         $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
         $ts = $from->copy();
         $price = 100.0;
@@ -136,7 +137,7 @@ class StrategyAgentTest extends TestCase
         $ts->addHour();
         Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $fill, 'high' => $fill, 'low' => $fill, 'close' => $fill, 'volume' => 230]);
         $prev = $fill;
-        foreach ([1.016, 1.030, 1.045, 1.060, 1.075, 1.09] as $r) {
+        foreach ([1.016, 1.030, 1.045, 1.060, 1.075, 1.09, 1.10, 1.08] as $r) {
             $close = $fill * $r;
             $ts->addHour();
             Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $prev, 'high' => max($prev, $close), 'low' => min($prev, $close), 'close' => $close, 'volume' => 230]);
@@ -153,7 +154,8 @@ class StrategyAgentTest extends TestCase
         ]);
 
         $this->assertSame('done', $bt->status);
-        $this->assertGreaterThanOrEqual(1, count($bt->trades), 'the saved v2 plugin must have produced at least one trade');
+        $this->assertSame(4, $bt->trades[0]['trims'], 'all four take_profit rungs fired');
+        $this->assertSame('take_profit.runner.ttp', $bt->trades[0]['rule'], 'the runner closes the remainder after the giveback');
     }
 
     public function test_set_phase_tool_call_updates_the_conversation_phase(): void

@@ -101,9 +101,13 @@ final class SchemaMigrator
      * (a percent of the position at the moment the ladder was armed).
      *
      * Exact per docs/STRATEGY_SCHEMA_V2.md, "Migration v1 → v2":
-     * sell_pct_of_original_i = f_i × Π(1 − f_j, j<i) × 100. Pairing this
-     * with `reset_on_add: false` is what makes the conversion produce
-     * byte-identical fills to the v1 ladder — see the class docblock.
+     * sell_pct_of_original_i = f_i × Π(1 − f_j, j<i) × 100 — this is only the
+     * *sizing* arithmetic (v1 fraction-of-remaining → v2 percent-of-original).
+     * Pairing it with `reset_on_add: false` sells the same fraction of the
+     * position at each rung, on paper; it is not a fills-equivalence
+     * guarantee, since v1 and v2 trigger and fill rungs differently
+     * regardless of the sizing conversion (docs/STRATEGY_SCHEMA_V2.md,
+     * "Migration v1 → v2").
      *
      * @param  array<int, array{pct?: mixed, fraction?: mixed}>  $partials
      * @return array<int, array{at_pct: mixed, sell_pct_of_original: float}>

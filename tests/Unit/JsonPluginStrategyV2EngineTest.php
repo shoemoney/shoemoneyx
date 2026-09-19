@@ -612,4 +612,48 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $this->step($p, $ctx, 98.9);   // confirms the pending adds rung
         $this->assertSame(1, $p->meta['v2']['adds_fired']);
     }
+
+    #[Test]
+    public function an_adds_rung_that_lowers_avg_does_not_stale_arm_the_runner(): void
+    {
+        // Review round 2: runnerTtpDecision() measured peakPct off position->peak_price, an
+        // ALL-TIME high that survives an `adds` rearm. Pyramiding into a dip lowers avg with no
+        // price move, which raises peakPct against the stale peak and can close the whole
+        // remaining position on the very next RISK call. Not reachable with the shipped SMX pi
+        // example (reentry.stay_above_avg means a re-buy only ever raises avg) but reachable for
+        // any v2 definition combining `adds` with `take_profit.runner.ttp` — exactly what
+        // v1ToV2() produces from `management.adds` + `management.trailing`.
+        $this->plugin('smx-pi-adds-peak', [
+            'reentry' => null,
+            'stop' => ['pct_from_avg' => 20],
+            'take_profit' => [
+                'ladder' => [['at_pct' => 50.0, 'sell_pct_of_original' => 100]],
+                'runner' => ['ttp' => ['activate_pct' => 5.0, 'giveback_pct' => 1.0]],
+            ],
+            'adds' => [['trigger' => ['field' => 'price', 'op' => '<', 'value' => 97], 'size_pct' => 80]],
+        ]);
+        $ctx = $this->ctx('smx-pi-adds-peak');
+        $p = $this->freshPosition();
+
+        // Peak reaches +5.9% from avg (100) -- past activate_pct (5.0) but still inside the 1-point
+        // giveback, so the runner arms without closing.
+        $dPeak = $this->step($p, $ctx, 105.9);
+        $this->assertFalse($dPeak->shouldClose());
+
+        // A hard dip below 97 triggers the adds rung (80% of entry_usd, bought at 96) -- this call
+        // returns the ADD itself, never reaching runnerTtpDecision.
+        $dAdd = $this->step($p, $ctx, 96.0);
+        $this->assertTrue($dAdd->shouldAdd());
+        $avgAfterAdd = $p->entry_price;
+        $this->assertLessThan(100.0, $avgAfterAdd, 'pyramiding into the dip pulled the average down');
+
+        // The add confirms and avg's move rearms the ladder on this call. Pre-fix, peakPct is
+        // computed against the stale 105.9 peak and the old (now lower) avg, which reads as a
+        // giveback well past 1 point and closes the position outright -- with no new high ever
+        // printed after the add. Post-fix, the ladder's own peak was rebased to the add's own
+        // dip price, so peakPct is negative and the runner stays unarmed.
+        $dAfterAdd = $this->step($p, $ctx, 96.0);
+        $this->assertFalse($dAfterAdd->shouldClose(), 'the runner must not fire off a peak that predates the rearm');
+        $this->assertNotSame('take_profit.runner.ttp', $dAfterAdd->ruleFired);
+    }
 }

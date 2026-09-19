@@ -525,6 +525,16 @@ class Backtester
                     $row['price'] = $sb['close'];
                     $row['extra'] = ($row['extra'] ?? []) + ['bar_high' => $sb['high'], 'bar_low' => $sb['low']];
                     $s = ProductStats::fromArray($row);
+                } else {
+                    // 1H IS the step here, so the hour bar closing at $ts is the one to range-check
+                    // against — same bar_high/bar_low contract the sub-hour branch above attaches,
+                    // so the v2 ladder and stop.pct_from_avg fail-safe are intrabar-aware at every step.
+                    $hb = $this->barAt($bars[$pid], $ts);
+                    if ($hb) {
+                        $row = $s->jsonSerialize();
+                        $row['extra'] = ($row['extra'] ?? []) + ['bar_high' => $hb['high'], 'bar_low' => $hb['low']];
+                        $s = ProductStats::fromArray($row);
+                    }
                 }
                 if ($s->price > 0) {
                     $stats[$pid] = $s;

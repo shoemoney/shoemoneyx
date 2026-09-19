@@ -710,7 +710,8 @@ class JsonPluginStrategy extends BaseDeskStrategy
      * re-based on the current quantity) and `false` (fired rungs and `original_qty` stay; only the
      * stored `avg` used to price the remaining rungs moves). Absent `reset_on_add` defaults to true,
      * matching the shipped SMX π example and "an add starts a new ladder" being the more intuitive
-     * v2 default (v1->v2 migration always writes `false` explicitly for exact-fill equivalence).
+     * v2 default (v1->v2 migration always writes `false` explicitly, matching v1's own "fired rungs
+     * stay fired" behaviour — see SchemaMigrator::partialsToLadder(), not a fills-equivalence claim).
      *
      * @return array{avg: float, original_qty: float, fired: array<int, int>, sold: array<int, array{qty: float, price: float}>}
      */
@@ -720,14 +721,22 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $ladder = is_array($meta['v2']['ladder'] ?? null) ? $meta['v2']['ladder'] : null;
         $avg = self::avg($position);
         $resetOnAdd = ! array_key_exists('reset_on_add', $takeProfit) || (bool) $takeProfit['reset_on_add'];
+        $mark = (float) ($position->last_price ?: $avg);
 
         if ($ladder === null) {
-            $ladder = ['avg' => $avg, 'original_qty' => (float) $position->quantity, 'fired' => [], 'sold' => []];
+            $ladder = ['avg' => $avg, 'original_qty' => (float) $position->quantity, 'fired' => [], 'sold' => [], 'peak_price' => $mark];
         } elseif (abs($avg - (float) $ladder['avg']) > abs($avg) * 1e-9) {
             $ladder = $resetOnAdd
-                ? ['avg' => $avg, 'original_qty' => (float) $position->quantity, 'fired' => [], 'sold' => []]
-                : ['avg' => $avg, 'original_qty' => (float) $ladder['original_qty'], 'fired' => $ladder['fired'], 'sold' => $ladder['sold']];
+                // A true rearm (reset_on_add: true, the branch that clears fired/sold) re-bases the
+                // runner's own peak to the current mark too — otherwise an `adds` rung that lowers
+                // avg raises peakPct with no price move, since position->peak_price is an ALL-TIME
+                // high that survives the rearm (review round 2, runnerTtpDecision()).
+                ? ['avg' => $avg, 'original_qty' => (float) $position->quantity, 'fired' => [], 'sold' => [], 'peak_price' => $mark]
+                : ['avg' => $avg, 'original_qty' => (float) $ladder['original_qty'], 'fired' => $ladder['fired'], 'sold' => $ladder['sold'], 'peak_price' => $ladder['peak_price'] ?? $mark];
         }
+
+        $priorPeak = (float) ($ladder['peak_price'] ?? $mark);
+        $ladder['peak_price'] = $priorPeak <= 0 ? $mark : ($position->isShort() ? min($priorPeak, $mark) : max($priorPeak, $mark));
 
         $meta['v2']['ladder'] = $ladder;
         $position->meta = $meta;
@@ -904,11 +913,20 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if (isset($stop['pct_from_avg']) && is_numeric($stop['pct_from_avg'])) {
             $anchor = $stop['anchor'] ?? 'avg';
             $anchorPrice = $anchor === 'entry' ? (float) ($position->meta['v2']['entry_price'] ?? $position->entry_price) : self::avg($position);
-            $pnlPct = $anchorPrice > 0 ? $position->dir() * ($stats->price / $anchorPrice - 1) * 100 : 0.0;
-            if ($pnlPct <= -(float) $stop['pct_from_avg']) {
+            $dir = $position->dir();
+            // Bar-range aware, mirroring the ladder's own high/low check (docs/STRATEGY_SCHEMA_V2.md,
+            // "Evaluation order" — "bar high/low aware in backtests"): live stats carry no bar_high/
+            // bar_low, so $extreme falls back to $stats->price and this is byte-identical to the old
+            // close-only check there.
+            $stopPrice = $anchorPrice > 0 ? $anchorPrice * (1 - $dir * (float) $stop['pct_from_avg'] / 100) : null;
+            $extreme = (float) ($dir === 1 ? ($stats->extra['bar_low'] ?? $stats->price) : ($stats->extra['bar_high'] ?? $stats->price));
+            $touched = $stopPrice !== null && ($dir === 1 ? $extreme <= $stopPrice : $extreme >= $stopPrice);
+            if ($touched) {
+                $pnlPct = $anchorPrice > 0 ? $dir * ($stats->price / $anchorPrice - 1) * 100 : 0.0;
+
                 return RiskDecision::close(
                     'stop.pct_from_avg', $stats->volumeH6Usd, $stats->volumeH24Usd / 4, $stats->volumeRatio6h(),
-                    sprintf('pnl %.2f%% <= -%.2f%% from %s', $pnlPct, (float) $stop['pct_from_avg'], $anchor),
+                    sprintf('%s %.6f touched stop %.6f (close pnl %.2f%% from %s)', $dir === 1 ? 'bar low' : 'bar high', $extreme, $stopPrice, $pnlPct, $anchor),
                 );
             }
         }
@@ -1254,7 +1272,9 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $activatePct = is_numeric($runner['activate_pct'] ?? null) ? (float) $runner['activate_pct'] : $defaultActivate;
 
         $avg = self::avg($position);
-        $peak = (float) ($position->peak_price ?? $avg);
+        // The ladder's own peak (rebuildLadderState(), rebased on every reset_on_add:true rearm) —
+        // $position->peak_price is only the seed for a ladder that has never been rebuilt yet.
+        $peak = (float) ($ladder['peak_price'] ?? $position->peak_price ?? $avg);
         $peakPct = $avg > 0 ? $position->dir() * ($peak / $avg - 1) * 100 : 0.0;
         if ($peakPct < $activatePct) {
             return null;
