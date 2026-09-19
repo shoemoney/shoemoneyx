@@ -183,26 +183,33 @@ final class SchemaMigrator
             $signals['trigger'] = ['all' => $trigger['rules'] ?? []];
             $when[] = 'trigger';
         }
+        if ($when === []) {
+            // v1 allowed no setup/trigger at all (a plugin that only narrows risk/sizing and
+            // leaves scanning to the base pipeline). An empty `all` group is vacuously true,
+            // the same semantics v1 gave a rule-less scan.
+            $signals['setup'] = ['all' => []];
+            $when[] = 'setup';
+        }
         if ($signals !== []) {
             $out['signals'] = $signals;
         }
 
-        $out['entry'] = ['side' => $entry['side'] ?? 'long'];
-        if ($when !== []) {
-            $out['entry']['when'] = $when;
-        }
+        $out['entry'] = ['side' => $entry['side'] ?? 'long', 'when' => $when];
         if (isset($trigger['max_candidates'])) {
             $out['entry']['max_candidates'] = $trigger['max_candidates'];
         }
         if (isset($entry['confirm'])) {
             $out['entry']['confirm'] = $entry['confirm'];
         }
-        if ($sizing !== []) {
-            $out['entry']['size'] = [
-                'mode' => 'kelly',
-                'fraction' => $sizing['kelly_fraction'] ?? null,
-                'max_pct_book' => $sizing['max_pct_book'] ?? null,
-            ];
+        // Every v1 definition sized through the Kelly fallback even when it declared no
+        // `entry.sizing` at all, or a sizing block without `kelly_fraction` — write that
+        // implicit default down explicitly so v2 validation doesn't require guessing it.
+        $out['entry']['size'] = [
+            'mode' => 'kelly',
+            'fraction' => $sizing['kelly_fraction'] ?? 0.5,
+        ];
+        if (isset($sizing['max_pct_book'])) {
+            $out['entry']['size']['max_pct_book'] = $sizing['max_pct_book'];
         }
 
         if (! empty($management['adds'])) {

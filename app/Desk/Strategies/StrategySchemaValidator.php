@@ -67,17 +67,21 @@ final class StrategySchemaValidator
      * suffix (the "value" output). `arity` = required numeric argument count.
      */
     private const IND_TABLE = [
-        'rsi' => ['arity' => 1, 'bare' => true, 'outputs' => []],
-        'sma' => ['arity' => 1, 'bare' => true, 'outputs' => []],
-        'ema' => ['arity' => 1, 'bare' => true, 'outputs' => []],
-        'atr' => ['arity' => 1, 'bare' => true, 'outputs' => ['pct']],
-        'adx' => ['arity' => 1, 'bare' => true, 'outputs' => []],
-        'macd' => ['arity' => 3, 'bare' => false, 'outputs' => ['macd', 'signal', 'hist']],
-        'bb' => ['arity' => 2, 'bare' => false, 'outputs' => ['upper', 'lower', 'mid', 'pos']],
-        'vwap' => ['arity' => 0, 'bare' => true, 'outputs' => []],
-        'obv' => ['arity' => 0, 'bare' => true, 'outputs' => []],
-        'smx' => ['arity' => 0, 'bare' => false, 'outputs' => ['wt1', 'wt2', 'wt_cross', 'rsi_mfi', 'buy', 'sell', 'gold_buy', 'div_bull', 'div_bear']],
+        'rsi' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
+        'sma' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
+        'ema' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
+        'atr' => ['arity' => 1, 'bare' => true, 'outputs' => ['pct'], 'args' => ['period']],
+        'adx' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
+        'macd' => ['arity' => 3, 'bare' => false, 'outputs' => ['macd', 'signal', 'hist'], 'args' => ['period', 'period', 'period']],
+        'bb' => ['arity' => 2, 'bare' => false, 'outputs' => ['upper', 'lower', 'mid', 'pos'], 'args' => ['period', 'multiplier']],
+        'vwap' => ['arity' => 0, 'bare' => true, 'outputs' => [], 'args' => []],
+        'obv' => ['arity' => 0, 'bare' => true, 'outputs' => [], 'args' => []],
+        'smx' => ['arity' => 0, 'bare' => false, 'outputs' => ['wt1', 'wt2', 'wt_cross', 'rsi_mfi', 'buy', 'sell', 'gold_buy', 'div_bull', 'div_bear'], 'args' => []],
     ];
+
+    /** Lowercased; matched case-insensitively since meta.timeframe is written lowercase ("1h") while
+     * CoinbaseMarketData::GRANULARITY_MAP keys are uppercase ("1H") — same set, both are seen. */
+    private const KNOWN_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '6h', '1d'];
 
     /** @return array{valid: bool, errors: array<int, array{path: string, message: string}>} */
     public static function validate(mixed $definition): array
@@ -138,8 +142,8 @@ final class StrategySchemaValidator
         if (isset($meta['tags']) && (! is_array($meta['tags']) || array_any($meta['tags'], fn ($t) => ! is_string($t)))) {
             $errors[] = ['path' => 'meta.tags', 'message' => 'meta.tags must be an array of strings'];
         }
-        if (isset($meta['timeframe']) && ! is_string($meta['timeframe'])) {
-            $errors[] = ['path' => 'meta.timeframe', 'message' => 'meta.timeframe must be a string'];
+        if (isset($meta['timeframe']) && (! is_string($meta['timeframe']) || ! in_array(strtolower($meta['timeframe']), self::KNOWN_TIMEFRAMES, true))) {
+            $errors[] = ['path' => 'meta.timeframe', 'message' => 'meta.timeframe must be one of: '.implode(', ', self::KNOWN_TIMEFRAMES)];
         }
         if (isset($meta['assets']) && (! is_array($meta['assets']) || array_any($meta['assets'], fn ($a) => ! is_string($a)))) {
             $errors[] = ['path' => 'meta.assets', 'message' => 'meta.assets must be an array of strings'];
@@ -459,8 +463,14 @@ final class StrategySchemaValidator
         self::checkMeta($definition['meta'] ?? null, $errors);
         self::checkParams($definition['params'] ?? null, $errors);
 
-        $signalNames = self::checkSignals($definition['signals'] ?? null, $errors);
+        $groups = [];
+        $signalNames = self::checkSignals($definition['signals'] ?? null, $errors, $groups);
         self::checkEntryV2($definition['entry'] ?? null, $signalNames, $errors);
+        // position.* is fine in a signal used by reentry.when/stop (a position already exists
+        // there); it's only meaningless in entry.when, since scan runs with no position yet —
+        // checked here, against entry.when specifically, rather than at signal declaration.
+        $entryWhen = is_array($definition['entry'] ?? null) ? ($definition['entry']['when'] ?? null) : null;
+        self::checkNoPositionFieldsInScanSignals($entryWhen, $groups, $errors);
         self::checkAddsV2($definition['adds'] ?? null, $errors);
         self::checkTakeProfitV2($definition['take_profit'] ?? null, $errors);
         self::checkReentryV2($definition['reentry'] ?? null, $definition['take_profit'] ?? null, $signalNames, $errors);
@@ -472,9 +482,11 @@ final class StrategySchemaValidator
 
     /**
      * @param  array<int, array{path: string, message: string}>  $errors
+     * @param  array<string, array<string, mixed>>  $groups  output: name => raw {all, any} group, for
+     *                                                        checkNoPositionFieldsInScanSignals()
      * @return array<int, string> every declared signal name, for entry.when / reentry.when existence checks
      */
-    private static function checkSignals(mixed $signals, array &$errors): array
+    private static function checkSignals(mixed $signals, array &$errors, array &$groups = []): array
     {
         if ($signals === null) {
             return [];
@@ -498,6 +510,7 @@ final class StrategySchemaValidator
 
                 continue;
             }
+            $groups[$name] = $group;
             if (! array_key_exists('all', $group) && ! array_key_exists('any', $group)) {
                 $errors[] = ['path' => $path, 'message' => "{$path} requires 'all' and/or 'any'"];
             }
@@ -511,12 +524,50 @@ final class StrategySchemaValidator
                     continue;
                 }
                 foreach ($group[$k] as $i => $rule) {
+                    // Permissive here (allowPosition: true): a signal is just a name until
+                    // something references it, and position.* is legal from reentry.when/stop.
+                    // checkNoPositionFieldsInScanSignals() re-checks the entry.when subset.
                     self::checkRuleV2($rule, "{$path}.{$k}[{$i}]", true, $errors);
                 }
             }
         }
 
         return $names;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $groups
+     * @param  array<int, array{path: string, message: string}>  $errors
+     */
+    private static function checkNoPositionFieldsInScanSignals(mixed $when, array $groups, array &$errors): void
+    {
+        if (! is_array($when)) {
+            return;
+        }
+        foreach ($when as $name) {
+            if (! is_string($name) || ! isset($groups[$name])) {
+                continue;
+            }
+            foreach (['all', 'any'] as $k) {
+                $rules = $groups[$name][$k] ?? null;
+                if (! is_array($rules)) {
+                    continue;
+                }
+                foreach ($rules as $i => $rule) {
+                    if (! is_array($rule)) {
+                        continue;
+                    }
+                    $path = "signals.{$name}.{$k}[{$i}]";
+                    if (is_string($rule['field'] ?? null) && str_starts_with($rule['field'], 'position.')) {
+                        $errors[] = ['path' => "{$path}.field", 'message' => 'position.* fields are not allowed here'];
+                    }
+                    $value = $rule['value'] ?? null;
+                    if (is_array($value) && is_string($value['field'] ?? null) && str_starts_with($value['field'], 'position.')) {
+                        $errors[] = ['path' => "{$path}.value.field", 'message' => 'position.* fields are not allowed here'];
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -542,7 +593,7 @@ final class StrategySchemaValidator
             $errors[] = ['path' => 'entry.max_candidates', 'message' => 'entry.max_candidates must be a positive integer'];
         }
         self::checkRuleListV2($entry['confirm'] ?? null, 'entry.confirm', false, $errors);
-        self::checkSizingObject($entry['size'] ?? null, 'entry.size', 'entry', $errors, false);
+        self::checkSizingObject($entry['size'] ?? null, 'entry.size', 'entry', $errors, true);
     }
 
     /** @param array<int, array{path: string, message: string}> $errors */
@@ -583,6 +634,9 @@ final class StrategySchemaValidator
             }
             if ($hasSize) {
                 self::checkSizingObject($rung['size'], "{$path}.size", 'adds', $errors, false);
+            }
+            if ($hasSizePct && $hasSize) {
+                $errors[] = ['path' => "{$path}.size", 'message' => 'adds[i] takes size_pct or size, not both'];
             }
         }
     }
@@ -895,8 +949,8 @@ final class StrategySchemaValidator
                 $errors[] = ['path' => "{$path}.field", 'message' => $msg];
             }
         }
-        if (isset($rule['tf']) && (! is_string($rule['tf']) || $rule['tf'] === '')) {
-            $errors[] = ['path' => "{$path}.tf", 'message' => 'tf must be a non-empty timeframe string'];
+        if (isset($rule['tf']) && (! is_string($rule['tf']) || ! in_array(strtolower($rule['tf']), self::KNOWN_TIMEFRAMES, true))) {
+            $errors[] = ['path' => "{$path}.tf", 'message' => 'tf must be one of: '.implode(', ', self::KNOWN_TIMEFRAMES)];
         }
 
         $opsV2 = [...JsonRuleEvaluator::OPS, ...self::CROSSES_OPS];
@@ -1007,9 +1061,14 @@ final class StrategySchemaValidator
             if (count($args) !== $spec['arity']) {
                 return "ind.{$name} takes {$spec['arity']} argument(s), got ".count($args);
             }
-            foreach ($args as $a) {
-                if (! preg_match('/^\d+(\.\d+)?$/', $a)) {
-                    return "ind.{$name} arguments must be numbers";
+            foreach ($args as $i => $a) {
+                $role = $spec['args'][$i] ?? 'period';
+                if ($role === 'multiplier') {
+                    if (! preg_match('/^\d+(\.\d+)?$/', $a) || (float) $a <= 0) {
+                        return "ind.{$name} multiplier arguments must be a positive number";
+                    }
+                } elseif (! preg_match('/^\d+$/', $a) || (int) $a < 2) {
+                    return "ind.{$name} period arguments must be integers >= 2";
                 }
             }
         } elseif ($argsStr !== null && trim($argsStr) !== '') {
@@ -1029,6 +1088,6 @@ final class StrategySchemaValidator
     /** A rule value / formula token like "$fail_safe_pct" that ParamSubstitutor left unresolved because the name isn't in `params`. */
     private static function unresolvedParamName(mixed $value): ?string
     {
-        return is_string($value) && preg_match('/^\$([A-Za-z_][A-Za-z0-9_]*)$/', $value, $m) === 1 ? $m[1] : null;
+        return is_string($value) && preg_match('/\$([A-Za-z_][A-Za-z0-9_]*)/', $value, $m) === 1 ? $m[1] : null;
     }
 }

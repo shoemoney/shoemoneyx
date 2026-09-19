@@ -279,6 +279,75 @@ class StrategySchemaValidatorV2Test extends TestCase
     }
 
     #[Test]
+    public function ind_field_period_argument_of_zero_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['liquid']['all'][] = ['field' => 'ind.rsi(0)', 'op' => '<', 'value' => 50];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].field', $this->paths($result));
+    }
+
+    #[Test]
+    public function ind_bb_rejects_a_zero_multiplier_but_allows_a_fractional_one(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['liquid']['all'][] = ['field' => 'ind.bb(20,0).mid', 'op' => '>', 'value' => 0];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].field', $this->paths($result));
+
+        $def2 = $this->validDefinition();
+        $def2['signals']['liquid']['all'][] = ['field' => 'ind.bb(20,1.5).mid', 'op' => '>', 'value' => 0];
+
+        $this->assertTrue(StrategySchemaValidator::validate($def2)['valid']);
+    }
+
+    #[Test]
+    public function an_unknown_per_rule_tf_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['liquid']['all'][] = ['field' => 'ind.rsi(14)', 'op' => '<', 'value' => 50, 'tf' => 'banana'];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].tf', $this->paths($result));
+    }
+
+    #[Test]
+    public function an_embedded_unresolved_param_reference_in_a_rule_value_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['liquid']['all'][] = ['field' => 'price', 'op' => '>', 'value' => 'over $nope threshold'];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].value', $this->paths($result));
+    }
+
+    #[Test]
+    public function adds_rung_rejects_both_size_pct_and_size_at_once(): void
+    {
+        $def = $this->validDefinition();
+        $def['adds'] = [[
+            'trigger' => ['field' => 'position.pnl_pct', 'op' => '<', 'value' => -1],
+            'size_pct' => 50,
+            'size' => ['mode' => 'usd', 'value' => 100],
+        ]];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('adds[0].size', $this->paths($result));
+    }
+
+    #[Test]
     public function v1_indicator_aliases_still_validate_in_v2(): void
     {
         $def = $this->validDefinition();
@@ -290,12 +359,25 @@ class StrategySchemaValidatorV2Test extends TestCase
     }
 
     #[Test]
-    public function position_fields_are_rejected_in_signals_scanning_context_placeholder_kept_permissive(): void
+    public function position_fields_are_rejected_in_a_signal_referenced_from_entry_when(): void
     {
-        // Design choice: signals are shared across entry/reentry/stop, so position.* is allowed
-        // in signal rules (see StrategySchemaValidator::checkSignals). This documents that.
+        // `liquid` is in the shipped example's entry.when, and scan runs with no position yet,
+        // so a position.* field there can never hold and would silently kill the strategy.
         $def = $this->validDefinition();
         $def['signals']['liquid']['all'][] = ['field' => 'position.pnl_pct', 'op' => '>', 'value' => 0];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].field', $this->paths($result));
+    }
+
+    #[Test]
+    public function position_fields_stay_permitted_in_a_signal_referenced_only_from_reentry_when(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['re_only'] = ['all' => [['field' => 'position.pnl_pct', 'op' => '>', 'value' => 0]]];
+        $def['reentry']['when'] = ['re_only'];
 
         $result = StrategySchemaValidator::validate($def);
 

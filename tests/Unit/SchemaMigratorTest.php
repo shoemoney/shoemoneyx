@@ -201,6 +201,7 @@ class SchemaMigratorTest extends TestCase
     #[Test]
     public function v1_to_v2_round_trips_every_shipped_v1_example_to_a_valid_v2_definition(): void
     {
+        $checked = 0;
         foreach (glob(base_path('resources/strategies/examples/*.json')) as $file) {
             $def = json_decode(file_get_contents($file), true);
             if (($def['schema_version'] ?? 1) !== 1) {
@@ -211,11 +212,14 @@ class SchemaMigratorTest extends TestCase
             $result = StrategySchemaValidator::validate($v2);
 
             $this->assertTrue($result['valid'], basename($file).': '.json_encode($result['errors']));
+            $checked++;
         }
+
+        $this->assertGreaterThan(0, $checked, 'no v1 examples found to round-trip');
     }
 
     #[Test]
-    public function v1_to_v2_omits_entry_size_when_v1_declared_no_sizing_and_still_validates(): void
+    public function v1_to_v2_defaults_entry_size_to_half_kelly_when_v1_declared_no_sizing_and_still_validates(): void
     {
         $v1 = [
             'schema_version' => 1,
@@ -227,7 +231,42 @@ class SchemaMigratorTest extends TestCase
 
         $v2 = SchemaMigrator::v1ToV2($v1);
 
-        $this->assertArrayNotHasKey('size', $v2['entry']);
+        $this->assertSame(['mode' => 'kelly', 'fraction' => 0.5], $v2['entry']['size']);
+        $this->assertTrue(StrategySchemaValidator::validate($v2)['valid'], json_encode(StrategySchemaValidator::validate($v2)['errors']));
+    }
+
+    #[Test]
+    public function v1_to_v2_defaults_fraction_when_v1_sizing_declared_only_max_pct_book(): void
+    {
+        $v1 = [
+            'schema_version' => 1,
+            'key' => 'max-pct-book-only',
+            'meta' => ['name' => 'Max Pct Book Only'],
+            'entry' => ['side' => 'long', 'sizing' => ['max_pct_book' => 6]],
+            'trigger' => ['rules' => [['field' => 'price', 'op' => '>', 'value' => 1]]],
+        ];
+
+        $v2 = SchemaMigrator::v1ToV2($v1);
+
+        $this->assertSame(['mode' => 'kelly', 'fraction' => 0.5, 'max_pct_book' => 6], $v2['entry']['size']);
+        $this->assertTrue(StrategySchemaValidator::validate($v2)['valid'], json_encode(StrategySchemaValidator::validate($v2)['errors']));
+    }
+
+    #[Test]
+    public function v1_to_v2_synthesises_entry_when_for_a_v1_definition_with_no_setup_or_trigger(): void
+    {
+        $v1 = [
+            'schema_version' => 1,
+            'key' => 'kk',
+            'meta' => ['name' => 'K'],
+            'entry' => ['side' => 'long'],
+            'management' => ['partials' => [['pct' => 5, 'fraction' => 1]]],
+        ];
+
+        $v2 = SchemaMigrator::v1ToV2($v1);
+
+        $this->assertSame(['setup'], $v2['entry']['when']);
+        $this->assertSame(['all' => []], $v2['signals']['setup']);
         $this->assertTrue(StrategySchemaValidator::validate($v2)['valid'], json_encode(StrategySchemaValidator::validate($v2)['errors']));
     }
 
