@@ -7,6 +7,7 @@ namespace App\Desk\Strategies;
 use App\Desk\Data\ProductStats;
 use App\Desk\DeskContext;
 use App\Models\Position;
+use App\Services\Indicators\IndicatorCache;
 
 /**
  * Evaluates one strategy-plugin rule ({field, op, value}) against a live row.
@@ -16,9 +17,13 @@ use App\Models\Position;
 final class JsonRuleEvaluator
 {
     /** Ops every rule grammar consumer (validators, exporters) can rely on. */
-    public const OPS = ['<', '<=', '>', '>=', '==', '!=', 'between', 'in', 'not_in'];
+    public const OPS = ['<', '<=', '>', '>=', '==', '!=', 'between', 'in', 'not_in', 'crosses_above', 'crosses_below'];
 
-    public static function value(string $field, ProductStats $s, ?Position $p, DeskContext $ctx): mixed
+    /**
+     * @param  string  $tf  timeframe an `ind.*` field computes on; the caller resolves the
+     *                      rule's own `tf` override / the strategy's meta.timeframe / '1h'.
+     */
+    public static function value(string $field, ProductStats $s, ?Position $p, DeskContext $ctx, string $tf = '1h'): mixed
     {
         if ($field === 'position.pnl_pct' && $p !== null) {
             return $p->unrealisedPnlPct($s->price);
@@ -35,6 +40,9 @@ final class JsonRuleEvaluator
         if ($field === 'time.weekday') {
             // PHP's `w`: 0 = Sunday … 6 = Saturday.
             return (int) $ctx->now()->format('w');
+        }
+        if (str_starts_with($field, 'ind.')) {
+            return self::indicatorValue($field, $s, $ctx, $tf, false);
         }
 
         $row = $s->jsonSerialize();
@@ -60,19 +68,36 @@ final class JsonRuleEvaluator
         return null;
     }
 
-    /** True when the rule fires (field present and comparison holds). */
-    public static function fires(array $rule, ProductStats $s, ?Position $p, DeskContext $ctx): bool
+    /**
+     * True when the rule fires (field present and comparison holds).
+     *
+     * @param  string  $defaultTf  the strategy's meta.timeframe (or '1h'); overridden by the rule's own "tf".
+     */
+    public static function fires(array $rule, ProductStats $s, ?Position $p, DeskContext $ctx, string $defaultTf = '1h'): bool
     {
-        $actual = self::value((string) ($rule['field'] ?? ''), $s, $p, $ctx);
+        $field = (string) ($rule['field'] ?? '');
+        $tf = is_string($rule['tf'] ?? null) && $rule['tf'] !== '' ? $rule['tf'] : $defaultTf;
+
+        $actual = self::value($field, $s, $p, $ctx, $tf);
         if ($actual === null) {
             return false;
         }
-        $expected = $rule['value'] ?? null;
+
+        // {value: {field: "..."}} — compare against another field instead of a literal (v2 rules grammar).
+        $raw = $rule['value'] ?? null;
+        $isFieldRef = is_array($raw) && is_string($raw['field'] ?? null);
+        $expected = $isFieldRef ? self::value($raw['field'], $s, $p, $ctx, $tf) : $raw;
         if ($expected === null) {
             return false;
         }
 
-        return match ($rule['op'] ?? null) {
+        $op = $rule['op'] ?? null;
+
+        if ($op === 'crosses_above' || $op === 'crosses_below') {
+            return self::crosses($op, $field, $isFieldRef ? $raw['field'] : null, $actual, $expected, $s, $ctx, $tf);
+        }
+
+        return match ($op) {
             '<' => $actual < $expected,
             '<=' => $actual <= $expected,
             '>' => $actual > $expected,
@@ -87,5 +112,51 @@ final class JsonRuleEvaluator
             'not_in' => is_array($expected) && $expected !== [] && ! in_array($actual, $expected, false),
             default => false,
         };
+    }
+
+    /**
+     * crosses_above: field was <= value on the previous bar and is > value now; crosses_below
+     * mirrors it. "Previous" only exists for `ind.*` fields (they alone have a bar series
+     * behind them) — a rule against anything else, or a strategy with no previous bar yet
+     * (its first evaluation), never fires: fail-closed, per the class-level contract.
+     */
+    private static function crosses(string $op, string $field, ?string $expectedField, mixed $actual, mixed $expected, ProductStats $s, DeskContext $ctx, string $tf): bool
+    {
+        if (! is_numeric($actual) || ! is_numeric($expected)) {
+            return false;
+        }
+        $prevActual = self::previousValue($field, $ctx, $tf, $s);
+        $prevExpected = $expectedField !== null ? self::previousValue($expectedField, $ctx, $tf, $s) : $expected;
+        if (! is_numeric($prevActual) || ! is_numeric($prevExpected)) {
+            return false;
+        }
+
+        return $op === 'crosses_above'
+            ? ((float) $prevActual <= (float) $prevExpected && (float) $actual > (float) $expected)
+            : ((float) $prevActual >= (float) $prevExpected && (float) $actual < (float) $expected);
+    }
+
+    /** The same field's value as of the bar before the latest closed one — null (never fires) for anything but an `ind.*` field. */
+    private static function previousValue(string $field, DeskContext $ctx, string $tf, ProductStats $s): mixed
+    {
+        return str_starts_with($field, 'ind.') ? self::indicatorValue($field, $s, $ctx, $tf, true) : null;
+    }
+
+    private static function indicatorValue(string $field, ProductStats $s, DeskContext $ctx, string $tf, bool $previous): mixed
+    {
+        try {
+            $parsed = IndicatorField::parse($field);
+        } catch (\InvalidArgumentException) {
+            return null;   // malformed/unknown ind.* field: fail closed, never a runtime guess
+        }
+        if ($parsed === null) {
+            return null;
+        }
+
+        $values = $previous
+            ? IndicatorCache::previous($ctx, $s->productId, $tf, $parsed, $s->price)
+            : IndicatorCache::current($ctx, $s->productId, $tf, $parsed, $s->price);
+
+        return $values[$parsed->output] ?? null;
     }
 }

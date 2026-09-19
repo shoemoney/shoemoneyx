@@ -81,9 +81,10 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
 
         $rules = [...($def['setup']['rules'] ?? []), ...($def['trigger']['rules'] ?? [])];
+        $tf = self::defaultTf($def);
         $filtered = array_values(array_filter(
             $universe,
-            fn (ProductStats $s) => array_all($rules, fn ($rule) => JsonRuleEvaluator::fires($rule, $s, null, $ctx)),
+            fn (ProductStats $s) => array_all($rules, fn ($rule) => JsonRuleEvaluator::fires($rule, $s, null, $ctx, $tf)),
         ));
 
         $max = $def['trigger']['max_candidates'] ?? null;
@@ -104,14 +105,26 @@ class JsonPluginStrategy extends BaseDeskStrategy
             return $verdict;
         }
 
+        $tf = self::defaultTf($def);
         foreach ($def['entry']['confirm'] ?? [] as $rule) {
-            // A rule on missing data is skipped here (fail-open): scan already
-            // excluded unmeasurable rows, and vet must not reject on unknown data.
             $field = (string) ($rule['field'] ?? '');
-            if (JsonRuleEvaluator::value($field, $candidate->stats, null, $ctx) === null) {
-                continue;
+            $ruleTf = is_string($rule['tf'] ?? null) && $rule['tf'] !== '' ? $rule['tf'] : $tf;
+            if (JsonRuleEvaluator::value($field, $candidate->stats, null, $ctx, $ruleTf) === null) {
+                // A v1 stats field on missing data is skipped (fail-open): scan already
+                // excluded unmeasurable rows. An `ind.*` field never went through that scan
+                // filter, so an unmeasurable confirmation blocks the entry instead (fail closed).
+                if (! str_starts_with($field, 'ind.')) {
+                    continue;
+                }
+
+                return Verdict::reject(
+                    $candidate,
+                    'json.'.$field,
+                    (string) ($rule['reason'] ?? "indicator unavailable: {$field}"),
+                    [...$verdict->checksRun, 'json'],
+                );
             }
-            if (! JsonRuleEvaluator::fires($rule, $candidate->stats, null, $ctx)) {
+            if (! JsonRuleEvaluator::fires($rule, $candidate->stats, null, $ctx, $tf)) {
                 return Verdict::reject(
                     $candidate,
                     'json.'.$field,
@@ -205,8 +218,9 @@ class JsonPluginStrategy extends BaseDeskStrategy
             }
         }
 
+        $tf = self::defaultTf($def);
         foreach ($def['exit']['stop']['rules'] ?? [] as $rule) {
-            if (JsonRuleEvaluator::fires($rule, $stats, $position, $ctx)) {
+            if (JsonRuleEvaluator::fires($rule, $stats, $position, $ctx, $tf)) {
                 $avg6 = $stats->volumeH24Usd / 4;
 
                 return RiskDecision::close(
@@ -271,7 +285,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             $rung = $adds[$idx] ?? null;
             if (is_array($rung)) {
                 $trigger = $rung['trigger'] ?? null;
-                if (is_array($trigger) && JsonRuleEvaluator::fires($trigger, $stats, $position, $ctx)) {
+                if (is_array($trigger) && JsonRuleEvaluator::fires($trigger, $stats, $position, $ctx, $tf)) {
                     $basis = (float) ($position->meta['initial_cost_usd'] ?? $position->entry_usd);
                     $sizePct = (float) ($rung['size_pct'] ?? 0);
                     $dollars = $basis * $sizePct / 100;
@@ -288,6 +302,14 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
 
         return parent::risk($position, $stats, $ctx);
+    }
+
+    /** `ind.*` fields default to the strategy's own meta.timeframe, falling back to 1h when unset. */
+    private static function defaultTf(array $def): string
+    {
+        $tf = $def['meta']['timeframe'] ?? null;
+
+        return is_string($tf) && $tf !== '' ? $tf : '1h';
     }
 
     private function peakPct(Position $p): float

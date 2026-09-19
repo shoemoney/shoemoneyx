@@ -19,6 +19,21 @@ class Candle extends Model
     /** Timeframes Coinbase does not serve; built by resampling the 1m store. */
     public const DERIVED = ['90s' => '30s', '2m' => '1m', '3m' => '1m', '4m' => '1m', '10m' => '5m'];
 
+    /**
+     * Case-insensitive match against DURATIONS's own keys ("1h" in a strategy's JSON is "1H" in
+     * the candle store). Null when $tf names no known timeframe at all.
+     */
+    public static function canonicalTimeframe(string $tf): ?string
+    {
+        foreach (array_keys(self::DURATIONS) as $canonical) {
+            if (strcasecmp($canonical, $tf) === 0) {
+                return $canonical;
+            }
+        }
+
+        return null;
+    }
+
     /** Built from the raw trade tape (feeder live, market:backfill-trades for history). */
     public const FROM_TRADES = ['13s', '15s', '20s', '25s', '30s', '33s', '41s', '45s', '49s'];
 
