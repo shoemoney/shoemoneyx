@@ -141,7 +141,11 @@ class DeskZeroPriceRiskSweepTest extends TestCase
         $out = $desk->runRiskSweep($strategy, $this->fakeExecutor());
 
         $this->assertFalse($strategy->riskCalled, 'a price-0 stats row must be skipped before the strategy ever sees it');
-        $this->assertCount(0, $out, 'a skipped position is not reported as any action for this sweep');
+        // Round-7 review, MAJOR: a skipped position used to be reported as nothing at all, which
+        // made desk:risk print "no open positions" while one sat unmanaged. It must now show up
+        // as a "stale" row so the sweep output stops implying the position doesn't exist.
+        $this->assertCount(1, $out, 'a skipped position must be reported as a stale row, not silently dropped');
+        $this->assertSame(['position' => 'BTC-USD', 'action' => 'stale', 'rule' => null], $out[0]);
 
         $position->refresh();
         $this->assertEqualsWithDelta(105.0, $position->last_price, 1e-9, 'a price-0 stats row must never overwrite a real last_price with 0');

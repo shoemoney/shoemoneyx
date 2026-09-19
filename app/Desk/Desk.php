@@ -706,16 +706,41 @@ class Desk
                     // closed 1H bars yet, and statsWithRetries() passes it straight through — a
                     // real (non-null) stats row that is still useless. Skipped before
                     // markPrice(0.0) can stamp a zero last_price onto the position (round-6 review).
-                    $this->reporter->warn('RISK', "{$p->product_id}: stats price is {$stats->price}, skipping this position this sweep");
+                    // Round-7 review, MAJOR: that skip was unbounded — a position whose stats price
+                    // never recovers (a halted/delisted product, or a stalled candle feeder) was
+                    // never risk-evaluated again and desk:risk kept reporting "no open positions"
+                    // while it sat unmanaged. Bounded here the same way a null stats row already
+                    // is: after risk.max_zero_price_sweeps consecutive price-0 sweeps, force-close
+                    // it instead of skipping an (N+1)th time.
+                    $zeroSweeps = ((int) ($p->meta['zero_price_sweeps'] ?? 0)) + 1;
+                    $maxZeroSweeps = (int) $ctx->param('risk.max_zero_price_sweeps', 5);
 
-                    continue;
+                    if ($zeroSweeps < $maxZeroSweeps) {
+                        // error(), not warn() — warn() never reaches Telegram (Reporter.php), and this
+                        // runs on desk:risk's everyMinute schedule, so a warn() here is functionally silent.
+                        $this->reporter->error('RISK', "{$p->product_id}: stats price is {$stats->price}, skipping this position this sweep ({$zeroSweeps}/{$maxZeroSweeps} before force-close)");
+                        $p->meta = array_merge($p->meta ?? [], ['zero_price_sweeps' => $zeroSweeps]);
+                        $p->save();
+                        // So desk:risk stops printing "no open positions" (DeskRisk.php) and the sweep
+                        // output stops implying this position doesn't exist while it sits unmanaged.
+                        $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
+
+                        continue;
+                    }
+
+                    $decision = RiskDecision::close('unmeasurable', null, null, null, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold");
                 } else {
                     $p->markPrice($stats->price);
                     $decision = $strategy->risk($p, $stats, $ctx);
+                    if (($p->meta['zero_price_sweeps'] ?? 0) !== 0) {
+                        $p->meta = array_merge($p->meta ?? [], ['zero_price_sweeps' => 0]);
+                    }
                     $p->save();
                 }
 
-                $price = $stats?->price ?? (float) ($p->last_price ?? $p->entry_price);
+                // A price-0 stats row (handled above) must not stamp $price to 0 for the escalated
+                // close below — fall back to the last known price exactly like the null-stats case.
+                $price = ($stats !== null && $stats->price > 0) ? $stats->price : (float) ($p->last_price ?? $p->entry_price);
                 if ($executor instanceof PaperExecutor && Perps::enabled()) {
                     $this->accrueFunding($p, $price);
                 }
