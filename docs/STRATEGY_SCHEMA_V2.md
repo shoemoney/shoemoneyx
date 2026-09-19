@@ -155,13 +155,18 @@ Used by `entry.size`, `adds[].size`, `reentry.size`.
 
 | `mode` | Keys | Meaning |
 |---|---|---|
-| `pct_equity` | `value` | percent of current equity (cash + open positions marked) |
+| `pct_equity` | `value` | percent of current equity (cash + open positions marked). **`entry.size` only** |
 | `usd` | `value` | a fixed dollar notional |
-| `kelly` | `fraction`, `max_pct_book` | v1 sizing, kept for migration |
+| `kelly` | `fraction`, `max_pct_book` | v1 sizing, kept for migration. **`entry.size` only** |
 | `formula` | `expr` | a bounded expression, see **Formulas** |
 
 Every mode is still clamped by `risk.leverage_cap`, `size.min_ticket_usd`, and available cash.
 A size that clamps to below the minimum ticket produces no order.
+
+`pct_equity` and `kelly` need a Bank (cash + marked positions), which the Strategy contract only
+ever hands to SIZE (`entry`) — RISK (`adds[].size`, `reentry.size`) has none. The validator rejects
+both modes there; use `usd` or `formula` (which cannot name `equity`/`cash` outside `entry` either,
+see **Formulas**) for an add or a re-entry.
 
 ### `take_profit`
 
@@ -315,8 +320,8 @@ section are available there:
 
 | Variable | Meaning | entry | adds | reentry |
 |---|---|---|---|---|
-| `equity` | cash + marked open positions | ✓ | ✓ | ✓ |
-| `cash` | free cash | ✓ | ✓ | ✓ |
+| `equity` | cash + marked open positions | ✓ | | |
+| `cash` | free cash | ✓ | | |
 | `price` | current mark | ✓ | ✓ | ✓ |
 | `pi` | 3.14159… | ✓ | ✓ | ✓ |
 | `fees_rt_pct` | round-trip fee % (taker in + taker out, or maker if the desk is post-only) | ✓ | ✓ | ✓ |
@@ -380,10 +385,24 @@ one exists. `meta.fees.taker_pct` is read now, in percent (0.6, not 0.006).
 | `exit.take_profit.rules` | `take_profit.rules` (close-only rules, kept for compatibility) |
 | `risk` | `risk` |
 
-The partials conversion is exact: a v1 fraction-of-remaining ladder produces the same fills as
-the equivalent percent-of-original ladder as long as nothing re-arms it, and `reset_on_add:
-false` guarantees that. Every v1 example in `resources/strategies/examples` must round-trip
-through the migrator and produce byte-identical backtest fills. That is a test.
+The partials conversion is exact in one narrow sense: the *sizing arithmetic* (v1 fraction-of-
+remaining → v2 percent-of-original, `reset_on_add: false`) sells the same fraction of the position
+at each rung, on paper. It is not exact end to end, and nothing round-trips a v1 example to
+byte-identical backtest fills — the two engines trigger and fill rungs differently regardless of
+the sizing conversion:
+
+- **Trigger:** v1 partials fire on `position.pnl_pct` (close-based); the v2 ladder fires on bar
+  high/low against `avg` (docs/STRATEGY_SCHEMA_V2.md, "Evaluation order" — "bar high/low aware in
+  backtests"). A rung can touch intrabar in v2 and not yet show in v1's close-based check, or the
+  reverse, on the exact same tape.
+- **Fill price and fee tier:** v1's `limitPrice` is `null` → a market fill at the taker rate; v2's
+  ladder sends `limitPrice: $target` → a maker fill at the rung price when the bar trades through
+  it (`Backtester.php`, the trim branch). Different price, different fee, on every rung.
+
+Every v1 example in `resources/strategies/examples` is checked to round-trip through the migrator
+to a *valid* v2 definition (`SchemaMigratorTest::v1_to_v2_round_trips_every_shipped_v1_example_to_a_valid_v2_definition`).
+That is the test that exists. There is no fills-equivalence test, and none is planned until the
+migrator carries the trigger/fill semantics forward as well as the sizing numbers.
 
 ## Validation
 
@@ -412,6 +431,7 @@ Every error is `{path, message}`. Exact wording, by `path` shape:
 | `entry.when[i]` / `reentry.when[i]` | `unknown signal "<name>"` |
 | `entry.size` (or `reentry.size`) | `<path> is required (a sizing object)` |
 | `<path>.mode` | `mode must be one of: pct_equity, usd, kelly, formula` |
+| `<path>.mode` (adds/reentry) | `mode "<mode>" is not usable in <section> (no equity figure available outside entry)` |
 | `<path>.value` | `value is required and must be a positive number` |
 | `<path>.fraction` | `fraction is required and must be a positive number` |
 | `<path>.expr` | `expr is required and must be a non-empty string` |

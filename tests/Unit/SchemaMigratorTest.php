@@ -216,6 +216,12 @@ class SchemaMigratorTest extends TestCase
         $this->assertSame($v1['suggest'], $view['suggest']);
     }
 
+    /**
+     * Checks migrator output validity only, not fill equivalence — the v1 and v2 engines trigger
+     * and fill take-profit rungs differently (close-based/market/taker vs bar-high-low/limit/maker;
+     * see docs/STRATEGY_SCHEMA_V2.md, "Migration v1 → v2"), so there is no byte-identical-fills
+     * assertion to make here, only "every shipped v1 example still migrates to something valid".
+     */
     #[Test]
     public function v1_to_v2_round_trips_every_shipped_v1_example_to_a_valid_v2_definition(): void
     {

@@ -1007,6 +1007,12 @@ class Desk
                 $soldFraction = min(1.0, $result->filledQty / max($qtyBefore, 1e-12));
                 $netPnl = $this->bookExit($p, $result);
                 $p->trims_count = $p->trims_count + 1;
+                // v2's ladder reconciles its rung price from this, not the rung's computed target
+                // (JsonPluginStrategy::reconcilePendingRung(), docs/STRATEGY_SCHEMA_V2.md review round 1)
+                // — a live/paper trim fills at market, not at the target.
+                $meta = $p->meta ?? [];
+                $meta['v2']['last_trim_fill_price'] = (float) $result->fillPrice;
+                $p->meta = $meta;
 
                 if ($p->quantity > self::QTY_EPSILON) {
                     $p->save();

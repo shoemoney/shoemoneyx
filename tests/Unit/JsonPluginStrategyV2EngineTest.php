@@ -583,4 +583,33 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $d = $this->step($p, $ctx, 100.7);
         $this->assertFalse($d->shouldAdd(), 'size.min_ticket_usd must still clamp a reentry order to nothing');
     }
+
+    #[Test]
+    public function an_adds_rung_still_fires_after_a_confirmed_reentry_consumed_the_shared_counter(): void
+    {
+        // Both `adds` and `reentry` book through Desk::bookAdd() and so both advance the same
+        // `position.adds_count` — addsDecisionV2() must index its own rungs by `meta.v2.adds_fired`,
+        // not that shared counter, or a confirmed reentry silently consumes (skips) an adds rung.
+        $this->plugin('smx-pi-adds-reentry', [
+            'adds' => [['trigger' => ['field' => 'price', 'op' => '<', 'value' => 99], 'size_pct' => 5]],
+        ]);
+        $ctx = $this->ctx('smx-pi-adds-reentry');
+        $p = $this->freshPosition();
+
+        $this->step($p, $ctx, 101.5);   // rung 0 fires
+        $dReentry = $this->step($p, $ctx, 100.7);   // reentry arms and buys
+        $this->assertTrue($dReentry->shouldAdd());
+        $this->assertSame(1, $p->adds_count, 'the reentry buy advanced the SHARED adds_count counter');
+        $this->step($p, $ctx, 100.7);   // confirms the reentry lot; adds_fired is still 0 — nothing has fired yet
+
+        // Before the fix, addsDecisionV2() indexed by position.adds_count (already 1 here) and
+        // looked up adds[1], which does not exist — silently skipping adds[0] forever.
+        $dAdds = $this->step($p, $ctx, 98.9);
+        $this->assertTrue($dAdds->shouldAdd(), 'adds[0] must still fire — its trigger is met and it has never fired');
+        $this->assertSame('adds.0', $dAdds->ruleFired);
+        $this->assertSame(2, $p->adds_count, 'adds also books through the shared counter');
+
+        $this->step($p, $ctx, 98.9);   // confirms the pending adds rung
+        $this->assertSame(1, $p->meta['v2']['adds_fired']);
+    }
 }

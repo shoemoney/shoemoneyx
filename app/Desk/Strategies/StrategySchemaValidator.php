@@ -900,6 +900,15 @@ final class StrategySchemaValidator
 
             return;
         }
+        // RISK (adds, reentry) never has a Bank to price equity/cash from — only SIZE (entry) does
+        // (JsonPluginStrategy::sizingDollars()'s own docblock) — so pct_equity/kelly there would
+        // validate clean and then never produce an order. Rejected here rather than left to fail
+        // silently at runtime (docs/STRATEGY_SCHEMA_V2.md review round 1).
+        if (($section === 'adds' || $section === 'reentry') && in_array($mode, ['pct_equity', 'kelly'], true)) {
+            $errors[] = ['path' => "{$path}.mode", 'message' => "mode \"{$mode}\" is not usable in {$section} (no equity figure available outside entry)"];
+
+            return;
+        }
         switch ($mode) {
             case 'pct_equity':
             case 'usd':
@@ -1078,6 +1087,16 @@ final class StrategySchemaValidator
         }
         if (is_array($value) || is_object($value)) {
             $errors[] = ['path' => "{$path}.value", 'message' => 'value must be a scalar, null, or {field: "..."}'];
+
+            return;
+        }
+        // Not reachable for crosses_*/field-ref values above (both already returned): a bare
+        // literal against ind.obv is the same meaningless comparison checkRules() (v1) rejects —
+        // OBV is a running sum over IndicatorCache's sliding window, so its level drifts as bars
+        // age out (docs/STRATEGY_SCHEMA_V2.md review round 1: this was previously waved through on
+        // the v2/schema_version:2 save path while v1 blocked it).
+        if (is_numeric($value) && self::isBareObvField($rule['field'] ?? null)) {
+            $errors[] = ['path' => "{$path}.value", 'message' => 'ind.obv drifts with the lookback window; compare it with crosses_above/crosses_below or against another field, not a literal'];
         }
     }
 

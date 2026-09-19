@@ -575,6 +575,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
     {
         $this->ensureV2EntryPriceRecorded($position);
         $this->reconcilePendingReentry($position);
+        $this->reconcilePendingAddsRung($position);
         $this->reconcilePendingRung($position);
         $this->reconcilePendingCashOut($position);
         $this->reconcileV2Avg($position);
@@ -785,6 +786,29 @@ class JsonPluginStrategy extends BaseDeskStrategy
     }
 
     /**
+     * A pending `adds` rung shares `position.adds_count` with a confirmed re-entry buy — both go
+     * through Desk::bookAdd() — so `adds_fired` (the counter addsDecisionV2() actually indexes by,
+     * fixing the round-1 finding that a confirmed re-entry silently skipped an `adds` rung) is only
+     * advanced here, once `adds_count` has moved past what it was when THIS rung's ADD was emitted.
+     * Confirmed the same way reconcilePendingReentry()/reconcilePendingRung() confirm theirs: dropped
+     * (not advanced) when the counter never moved, so a fill that was rejected re-arms the same rung
+     * next call instead of being silently marked fired.
+     */
+    private function reconcilePendingAddsRung(Position $position): void
+    {
+        $meta = $position->meta ?? [];
+        $pending = $meta['v2']['adds_pending'] ?? null;
+        if (! is_array($pending)) {
+            return;
+        }
+        if ((int) $position->adds_count > (int) ($pending['adds_count_at_emit'] ?? -1)) {
+            $meta['v2']['adds_fired'] = max((int) ($meta['v2']['adds_fired'] ?? 0), (int) $pending['idx'] + 1);
+        }
+        unset($meta['v2']['adds_pending']);
+        $position->meta = $meta;
+    }
+
+    /**
      * A pending ladder rung (docs/STRATEGY_SCHEMA_V2.md, take_profit "Engine state") is promoted to
      * `fired`/`sold` only once `position.trims_count` has advanced past what it was when RISK
      * emitted the TRIM — the fill actually happened — or dropped so the same rung re-fires next
@@ -796,6 +820,12 @@ class JsonPluginStrategy extends BaseDeskStrategy
      * `$sellQty` the rung asked for: on a whole-contract product, Desk::trim() floors to whole
      * contracts (Lot::forQty()), so a rung asking for 3.7 contracts can fill only 3 — recording 3.7
      * would let the re-entry formula buy back more than was actually sold.
+     *
+     * `sold.price` is likewise the REAL fill price (`meta.v2.last_trim_fill_price`, stamped by
+     * Desk::trim()/Backtester from the same fill the position's own books were updated with), not
+     * the rung's computed target: live/paper fills at market, not at the target, so pricing
+     * `retrace_pct`/`sold_usd` off the target overstates the retrace on any slip between the two.
+     * Falls back to the target only for a fill that predates this fix (no stamp recorded).
      */
     private function reconcilePendingRung(Position $position): void
     {
@@ -808,8 +838,10 @@ class JsonPluginStrategy extends BaseDeskStrategy
             $idx = (int) $pending['idx'];
             $qtyAtEmit = (float) ($pending['qty_at_emit'] ?? $pending['qty']);
             $actualQty = max(0.0, min((float) $pending['qty'], $qtyAtEmit - (float) $position->quantity));
+            $fillPrice = is_numeric($meta['v2']['last_trim_fill_price'] ?? null)
+                ? (float) $meta['v2']['last_trim_fill_price'] : (float) $pending['price'];
             $meta['v2']['ladder']['fired'][] = $idx;
-            $meta['v2']['ladder']['sold'][$idx] = ['qty' => $actualQty, 'price' => (float) $pending['price']];
+            $meta['v2']['ladder']['sold'][$idx] = ['qty' => $actualQty, 'price' => $fillPrice];
         }
         unset($meta['v2']['ladder']['pending']);
         $position->meta = $meta;
@@ -1027,6 +1059,13 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if (array_any($reentries, fn ($r) => is_array($r) && ($r['confirmed'] ?? true) === false)) {
             return null;   // still waiting on the last one to confirm or drop
         }
+        if (is_array($position->meta['v2']['adds_pending'] ?? null)) {
+            // Mirrors the guard in addsDecisionV2(): an unconfirmed `adds` rung is waiting on this
+            // same adds_count counter (reconcilePendingAddsRung()) — arming a re-entry here would
+            // advance it for the wrong reason. Same defence-in-depth: reconcile already runs first
+            // each call, so this window is normally already closed.
+            return null;
+        }
         $maxPer = self::isPositiveInt($reentry['max_per_position'] ?? null) ? (int) $reentry['max_per_position'] : 3;
         if (count($reentries) >= $maxPer) {
             return null;
@@ -1140,7 +1179,12 @@ class JsonPluginStrategy extends BaseDeskStrategy
         return array_all($names, fn ($name) => self::evalSignal($signals[$name] ?? null, $stats, $position, $ctx, $tf));
     }
 
-    /** `adds`, as v1: the next rung, indexed by `position.adds_count` (also advanced by a reentry buy — see the class docblock on that overlap). */
+    /**
+     * `adds`, as v1: the next rung, indexed by its own `meta.v2.adds_fired` counter, not the shared
+     * `position.adds_count` a confirmed re-entry buy also advances (both go through
+     * Desk::bookAdd()) — indexing by the shared counter let every confirmed re-entry silently
+     * consume (skip) one `adds` rung.
+     */
     private function addsDecisionV2(Position $position, ProductStats $stats, array $adds, array $def, DeskContext $ctx, string $tf): ?RiskDecision
     {
         if ($adds === []) {
@@ -1150,13 +1194,17 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if (array_any($reentries, fn ($r) => is_array($r) && ($r['confirmed'] ?? true) === false)) {
             // An unconfirmed re-entry lot is waiting on THIS SAME adds_count counter to advance
             // (reconcilePendingReentry()). Firing an unrelated `adds` rung here would advance it for
-            // the wrong reason and confirm the re-entry lot with the adds fill's own qty/cost instead
-            // of dropping it — reconcilePendingReentry() cannot tell the two apart from the counter
-            // alone. In practice this window is already closed by the time this runs (reconcile runs
-            // first each call), kept as a second line of defence against reordering either function.
+            // the wrong reason, muddying which pending record the next confirm belongs to —
+            // reconcilePendingAddsRung()/reconcilePendingReentry() cannot tell the two apart from
+            // the counter alone. In practice this window is already closed by the time this runs
+            // (reconcile runs first each call), kept as a second line of defence against reordering
+            // either function.
             return null;
         }
-        $idx = (int) $position->adds_count;
+        if (is_array($position->meta['v2']['adds_pending'] ?? null)) {
+            return null;   // still waiting on the last adds rung to confirm or drop
+        }
+        $idx = (int) ($position->meta['v2']['adds_fired'] ?? 0);
         $rung = $adds[$idx] ?? null;
         if (! is_array($rung)) {
             return null;
@@ -1181,6 +1229,10 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if ($dollars < (float) $ctx->param('size.min_ticket_usd', 10)) {
             return null;
         }
+
+        $meta = $position->meta ?? [];
+        $meta['v2']['adds_pending'] = ['idx' => $idx, 'adds_count_at_emit' => (int) $position->adds_count];
+        $position->meta = $meta;
 
         return RiskDecision::add("adds.{$idx}", $dollars, $stats->price, sprintf('add rung %d triggered — $%.2f', $idx, $dollars));
     }

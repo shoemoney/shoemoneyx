@@ -19,8 +19,13 @@ final class Formula
 {
     /** @var array<string, array<int, string>> variable name => sections it's allowed in */
     private const VARIABLES = [
-        'equity' => ['entry', 'adds', 'reentry'],
-        'cash' => ['entry', 'adds', 'reentry'],
+        // 'equity'/'cash' need a Bank, which the Strategy contract only ever hands to SIZE (entry) —
+        // RISK (adds, reentry) has none (see JsonPluginStrategy::sizingDollars()'s own docblock), so
+        // a formula naming either here would validate clean and then return null forever. Kept out
+        // of both lists rather than left to silently never fire (docs/STRATEGY_SCHEMA_V2.md review
+        // round 1).
+        'equity' => ['entry'],
+        'cash' => ['entry'],
         'price' => ['entry', 'adds', 'reentry'],
         'pi' => ['entry', 'adds', 'reentry'],
         'fees_rt_pct' => ['entry', 'adds', 'reentry'],

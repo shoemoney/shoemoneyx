@@ -16,6 +16,7 @@ use App\Models\Backtest;
 use App\Models\Candle;
 use App\Models\Position;
 use App\Models\Product;
+use App\Services\Indicators\IndicatorCache;
 use App\Services\Market\CandleStore;
 use App\Services\Market\ProductStatsBuilder;
 use App\Support\DeadlockRetry;
@@ -143,6 +144,11 @@ class Backtester
 
     private function simulate(Strategy $strategy, array $products, Carbon $from, Carbon $to, float $cash, array $overrides, ?callable $progress): array
     {
+        // The cache is keyed on (product, timeframe, series, bar bucket) alone, with nothing
+        // identifying which run computed it — an optimizer sweep or a queue worker that reuses
+        // this process across backtests would otherwise read a previous run's entries for the
+        // same product/timeframe/bucket (docs/STRATEGY_SCHEMA_V2.md review round 1).
+        IndicatorCache::forgetAll();
         $params = $this->paramsFor($strategy, $products, $overrides);
         $taker = (float) ($params['fees']['taker_rate'] ?? 0.006);
         $maker = (float) ($params['fees']['maker_rate'] ?? 0.004);
@@ -626,6 +632,11 @@ class Backtester
                     $p->trims_count = ($p->trims_count ?? 0) + 1;
                     $m = $p->meta ?? [];
                     $m['cost_trimmed'] = (float) ($m['cost_trimmed'] ?? 0) + $costSold;
+                    // v2's ladder reconciles its rung price from this, not the rung's computed target
+                    // (JsonPluginStrategy::reconcilePendingRung(), docs/STRATEGY_SCHEMA_V2.md review
+                    // round 1) — $px is $filledAtRung ? the rung price : a slipped market price, so
+                    // stamping it here (rather than the target) carries any slip through.
+                    $m['v2']['last_trim_fill_price'] = $px;
                     $p->meta = $m;
                     $trims++;
                     if ($p->quantity <= 1e-12) {

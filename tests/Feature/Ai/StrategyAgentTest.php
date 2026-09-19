@@ -9,10 +9,14 @@ use App\Ai\ChatResponse;
 use App\Ai\Contracts\ChatClient;
 use App\Ai\StrategyAgent;
 use App\Ai\Tools\CompareVersionsTool;
+use App\Desk\Backtester;
 use App\Desk\Strategies\JsonPluginValidator;
 use App\Models\AgentConversation;
+use App\Models\Candle;
+use App\Models\Product;
 use App\Models\StrategyPlugin;
 use App\Models\StrategyPluginVersion;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Feature\Fixtures\FakeChatClient;
 use Tests\TestCase;
@@ -74,6 +78,82 @@ class StrategyAgentTest extends TestCase
         $plugin = StrategyPlugin::first();
         $this->assertSame('1.0.0', $plugin->current_version);
         $this->assertSame(1, StrategyPluginVersion::where('strategy_plugin_id', $plugin->id)->count());
+    }
+
+    /**
+     * Phase D's proof (docs/STRATEGY_SCHEMA_V2.md, "Build order"): paste -> validate -> backtest,
+     * for a real schema_version:2 payload — the only strategy_json tool test before this one fed
+     * a legacy flat-shape definition, so SchemaMigrator::validateForSave()'s v2 branch, and the
+     * saved-then-run path the phase is about, went untested on the v2 branch.
+     */
+    public function test_strategy_json_tool_call_saves_and_backtests_a_v2_definition(): void
+    {
+        config(['cache.default' => 'array']);
+        Product::create(['product_id' => 'BTC-USD', 'base_currency' => 'BTC', 'quote_currency' => 'USD']);
+
+        $conversation = AgentConversation::create(['messages' => [], 'phase' => 1]);
+        $def = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
+
+        $fake = new FakeChatClient([
+            new ChatResponse(
+                content: null,
+                toolCalls: [['id' => 'call_1', 'name' => 'strategy_json', 'arguments' => ['definition' => $def]]],
+                model: 'fake',
+            ),
+            new ChatResponse(content: 'Saved as v1.0.0.', toolCalls: [], model: 'fake'),
+        ]);
+        $agent = $this->makeAgent($fake);
+
+        $result = $agent->turn($conversation->id, 'here is my v2 strategy');
+
+        $this->assertSame('Saved as v1.0.0.', $result['content']);
+        $plugin = StrategyPlugin::where('key', $def['key'])->first();
+        $this->assertNotNull($plugin, 'the v2 definition must have saved a plugin');
+        $this->assertSame(2, $plugin->definition['schema_version']);
+        $this->assertSame('1.0.0', $plugin->current_version);
+        $this->assertSame(
+            1,
+            StrategyPluginVersion::where('strategy_plugin_id', $plugin->id)->where('version', '1.0.0')->count(),
+        );
+
+        // ...and the saved plugin actually runs: a 30-bar warmup, a +2.5% high-volume jump SCAN
+        // reads as its candidate, then a clean run-up past every rung and the runner's giveback —
+        // same tape shape as JsonRunnerV2LadderReentryBacktestTest, trimmed to just prove a trade.
+        $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
+        $ts = $from->copy();
+        $price = 100.0;
+        for ($i = 0; $i < 30; $i++) {
+            $ts->addHour();
+            $open = $price;
+            $price *= 1 + ($i % 2 === 0 ? 0.003 : -0.003);
+            Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => max($open, $price), 'low' => min($open, $price), 'close' => $price, 'volume' => 230]);
+        }
+        $ts->addHour();
+        $open = $price;
+        $jump = $price * 1.025;
+        Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => max($open, $jump), 'low' => min($open, $jump), 'close' => $jump, 'volume' => 900]);
+        $fill = $jump * 0.995;
+        $ts->addHour();
+        Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $fill, 'high' => $fill, 'low' => $fill, 'close' => $fill, 'volume' => 230]);
+        $prev = $fill;
+        foreach ([1.016, 1.030, 1.045, 1.060, 1.075, 1.09] as $r) {
+            $close = $fill * $r;
+            $ts->addHour();
+            Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $prev, 'high' => max($prev, $close), 'low' => min($prev, $close), 'close' => $close, 'volume' => 230]);
+            $prev = $close;
+        }
+        $to = $ts->copy()->addHour();
+
+        $bt = app(Backtester::class)->run('json', ['BTC-USD'], $from, $to, 2_000_000.0, [
+            'json.plugin_key' => $def['key'],
+            'fees.taker_rate' => 0.0, 'fees.maker_rate' => 0.0, 'fees.funding_hourly_pct' => 0.0,
+            'fees.per_contract_usd' => 0.0, 'fees.contract_usd' => 0.0,
+            'paper.slippage_bps' => 0.0,
+            'vet.max_pct_of_volume_24h' => 100.0,
+        ]);
+
+        $this->assertSame('done', $bt->status);
+        $this->assertGreaterThanOrEqual(1, count($bt->trades), 'the saved v2 plugin must have produced at least one trade');
     }
 
     public function test_set_phase_tool_call_updates_the_conversation_phase(): void
