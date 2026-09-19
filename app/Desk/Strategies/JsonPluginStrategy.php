@@ -200,14 +200,18 @@ class JsonPluginStrategy extends BaseDeskStrategy
                 // A v1 stats field on missing data is skipped (fail-open): scan already
                 // excluded unmeasurable rows. An `ind.*` field never went through that scan
                 // filter, so an unmeasurable confirmation blocks the entry instead (fail closed).
-                if (! str_starts_with($field, 'ind.')) {
+                // v2 fails closed on ANY missing confirm field (docs/STRATEGY_SCHEMA_V2.md, design
+                // rule 4 — "a rule on a missing value never fires"): a v2 confirm field need not
+                // appear in any entry.when signal, so the scan-already-excluded-it justification
+                // that lets v1 skip doesn't hold for it.
+                if (! self::isV2($def) && ! str_starts_with($field, 'ind.')) {
                     continue;
                 }
 
                 return Verdict::reject(
                     $candidate,
                     'json.'.$field,
-                    (string) ($rule['reason'] ?? "indicator unavailable: {$field}"),
+                    (string) ($rule['reason'] ?? "unmeasurable: {$field}"),
                     [...$verdict->checksRun, 'json'],
                 );
             }
@@ -847,8 +851,12 @@ class JsonPluginStrategy extends BaseDeskStrategy
             $idx = (int) $pending['idx'];
             $qtyAtEmit = (float) ($pending['qty_at_emit'] ?? $pending['qty']);
             $actualQty = max(0.0, min((float) $pending['qty'], $qtyAtEmit - (float) $position->quantity));
-            $fillPrice = is_numeric($meta['v2']['last_trim_fill_price'] ?? null)
-                ? (float) $meta['v2']['last_trim_fill_price'] : (float) $pending['price'];
+            // 0.0 IS numeric: a stamp of exactly zero (CoinbaseExecutor can report that on a poll
+            // with filled_size > 0 but no filled_value) must fall back to the target price too, or
+            // sold[idx]['price'] records 0 and reentryArmDecision() bails forever on $salePrice <= 0.
+            $stampedFill = $meta['v2']['last_trim_fill_price'] ?? null;
+            $fillPrice = (is_numeric($stampedFill) && (float) $stampedFill > 0)
+                ? (float) $stampedFill : (float) $pending['price'];
             $meta['v2']['ladder']['fired'][] = $idx;
             $meta['v2']['ladder']['sold'][$idx] = ['qty' => $actualQty, 'price' => $fillPrice];
         }
@@ -864,6 +872,19 @@ class JsonPluginStrategy extends BaseDeskStrategy
      * that never fills (whole-contract flooring, a rejected order) permanently retired the lot's
      * risk with nothing sold. An unconfirmed cash-out is dropped (not re-tried blindly) so the next
      * call re-evaluates green-after-fees fresh, exactly like a dropped rung re-fires.
+     *
+     * The REAL filled quantity (`qty_at_emit - position.quantity`, mirroring
+     * reconcilePendingRung()) can fall short of the intended `sell_qty` on a whole-contract product
+     * (Desk::trim()/Backtester's Lot::forQty floor) — the shortfall is what silently joined
+     * `cash_out.remainder` instead of being sold. The lot still retires on any fill (mirrors
+     * reconcilePendingRung(): a rung that floors short of its target is accepted as fired, not
+     * chased) — re-deriving a fresh `sell_pct_of_reentry` off a shrinking remainder every call
+     * converges toward a sub-contract dust amount Lot::forQty can never fill, which would starve
+     * ladderDecision()/reentryArmDecision()/runnerTtpDecision() forever (cashOutDecision() has
+     * evaluation priority over all of them). What's fixed here is the accounting: the
+     * `remainder: "ladder"` fold below used the INTENDED `sell_qty`, silently crediting the ladder's
+     * `original_qty` with less than what actually stayed in the position whenever a fill came up
+     * short — it now folds in the REAL unsold amount (`lot_qty - soldQty`).
      */
     private function reconcilePendingCashOut(Position $position): void
     {
@@ -879,10 +900,11 @@ class JsonPluginStrategy extends BaseDeskStrategy
                 continue;
             }
             if ((int) $position->trims_count > (int) ($pending['trims_count_at_emit'] ?? -1)) {
+                $soldQty = max(0.0, (float) ($pending['qty_at_emit'] ?? $lot['qty'] ?? 0) - (float) $position->quantity);
                 $list[$i]['cashed_out'] = true;
                 if (($pending['remainder'] ?? 'runner') === 'ladder' && ! ($pending['reset_on_add'] ?? true)) {
                     $meta['v2']['ladder']['original_qty'] = (float) ($meta['v2']['ladder']['original_qty'] ?? 0)
-                        + ((float) $pending['lot_qty'] - (float) $pending['sell_qty']);
+                        + ((float) $pending['lot_qty'] - $soldQty);
                 }
             }
             unset($list[$i]['cash_out_pending']);
@@ -924,9 +946,13 @@ class JsonPluginStrategy extends BaseDeskStrategy
             if ($touched) {
                 $pnlPct = $anchorPrice > 0 ? $dir * ($stats->price / $anchorPrice - 1) * 100 : 0.0;
 
+                // Carries the stop level through so a backtest fills AT the stop (or worse, if the bar
+                // closed through it) instead of at the bar's close — see Backtester::simulate()'s
+                // $stopMeta clamp, which reads this same key.
                 return RiskDecision::close(
                     'stop.pct_from_avg', $stats->volumeH6Usd, $stats->volumeH24Usd / 4, $stats->volumeRatio6h(),
                     sprintf('%s %.6f touched stop %.6f (close pnl %.2f%% from %s)', $dir === 1 ? 'bar low' : 'bar high', $extreme, $stopPrice, $pnlPct, $anchor),
+                    ['stop_price' => $stopPrice],
                 );
             }
         }
@@ -1005,6 +1031,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             $meta = $position->meta ?? [];
             $meta['v2']['reentries'][$i]['cash_out_pending'] = [
                 'trims_count_at_emit' => (int) $position->trims_count,
+                'qty_at_emit' => (float) $position->quantity,
                 'lot_qty' => $lotQty, 'sell_qty' => $sellQty,
                 'remainder' => $cashOut['remainder'] ?? 'runner', 'reset_on_add' => $resetOnAdd,
             ];

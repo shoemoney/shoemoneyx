@@ -655,5 +655,12 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $dAfterAdd = $this->step($p, $ctx, 96.0);
         $this->assertFalse($dAfterAdd->shouldClose(), 'the runner must not fire off a peak that predates the rearm');
         $this->assertNotSame('take_profit.runner.ttp', $dAfterAdd->ruleFired);
+
+        // position.peak_pct (JsonRuleEvaluator::value()) must read the same rebased peak the runner
+        // just did, not $p->peak_price's stale all-time high -- a stop.rules/take_profit.rules rule
+        // written against position.peak_pct is otherwise stale-armed by the exact bug this test
+        // covers for the runner.
+        $peakPct = JsonRuleEvaluator::value('position.peak_pct', $this->stats(96.0), $p, $ctx);
+        $this->assertLessThan(0.0, $peakPct, 'position.peak_pct must read the rebased ladder peak, not the stale all-time high');
     }
 }

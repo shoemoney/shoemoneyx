@@ -645,8 +645,13 @@ class Backtester
                     // v2's ladder reconciles its rung price from this, not the rung's computed target
                     // (JsonPluginStrategy::reconcilePendingRung(), docs/STRATEGY_SCHEMA_V2.md review
                     // round 1) — $px is $filledAtRung ? the rung price : a slipped market price, so
-                    // stamping it here (rather than the target) carries any slip through.
-                    $m['v2']['last_trim_fill_price'] = $px;
+                    // stamping it here (rather than the target) carries any slip through. Guarded the
+                    // same way Desk::trim() is: a zero (or lower) $px must fall back to the rung's
+                    // target rather than stamp a sale price reconcilePendingRung()/reentryArmDecision()
+                    // would treat as "no fill".
+                    if ($px > 0) {
+                        $m['v2']['last_trim_fill_price'] = $px;
+                    }
                     $p->meta = $m;
                     $trims++;
                     if ($p->quantity <= 1e-12) {
@@ -657,7 +662,15 @@ class Backtester
                     continue;
                 }
                 if ($d->shouldClose() || $forceStopClose) {
-                    $px = ($forceStopClose ? $stopFillPrice : $s->price) * (1 - $p->dir() * $slip);
+                    // A CLOSE carrying meta['stop_price'] (JsonPluginStrategy::stopDecision(), the
+                    // pct_from_avg fail-safe) fills at the stop level, or worse if the bar closed
+                    // through it — the fail-safe triggers off bar_low/bar_high, so filling at $s->price
+                    // (the bar's close) can book a profit on a trade the fail-safe stopped out of.
+                    $stopMeta = $d->meta['stop_price'] ?? null;
+                    $base = $forceStopClose
+                        ? $stopFillPrice
+                        : ($stopMeta !== null ? ($p->isShort() ? max((float) $stopMeta, $s->price) : min((float) $stopMeta, $s->price)) : $s->price);
+                    $px = $base * (1 - $p->dir() * $slip);
                     if ($lotFor($pid) !== null) {
                         $lot = Lot::forQty($pid, $p->quantity, $px, $taker, $perContract, true);
                         if ($lot->contracts === 0 && $lot->qty === 0.0) {

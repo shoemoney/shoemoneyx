@@ -195,5 +195,8 @@ class JsonRunnerV2LadderReentryBacktestTest extends TestCase
         $trade = $bt->trades[0];
         $this->assertSame('stop.pct_from_avg', $trade['rule'], 'the fail-safe catches the bar before the ladder gets a look (RISK\'s evaluation order)');
         $this->assertSame(0, $trade['trims'], 'no rung banked despite the high clearing rung 0 intrabar');
+        // The stop fires off bar_low/bar_high, but the bar's CLOSE is +0.2% — a fill at the close
+        // would book a profit on a stopped-out trade. It must fill at (or worse than) the stop level.
+        $this->assertLessThan(2_000_000.0, (float) $bt->ending_equity, 'the stop must fill at the stop level, not the bar close');
     }
 }

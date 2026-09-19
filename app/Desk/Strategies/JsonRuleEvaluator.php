@@ -38,8 +38,13 @@ final class JsonRuleEvaluator
                 // reentry.when) see a different, fee-polluted number than stop.pct_from_avg, the
                 // ladder targets, and runnerTtpDecision() all read from the same position.
                 'position.avg' => JsonPluginStrategy::avg($p),
+                // Reads the ladder's own rebased peak (JsonPluginStrategy::runnerTtpDecision(),
+                // docs/STRATEGY_SCHEMA_V2.md review round 2) — $p->peak_price is the position's
+                // ALL-TIME high and is stale after an add that lowers avg without a new price move,
+                // which would stale-arm a stop.rules/take_profit.rules/reentry.when rule reading
+                // position.peak_pct the same way it once stale-armed the runner.
                 'position.peak_pct' => ($avg = JsonPluginStrategy::avg($p)) > 0
-                    ? $p->dir() * ((float) ($p->peak_price ?? $avg) / $avg - 1) * 100
+                    ? $p->dir() * ((float) ($p->meta['v2']['ladder']['peak_price'] ?? $p->peak_price ?? $avg) / $avg - 1) * 100
                     : 0.0,
                 'position.rungs_fired' => count($p->meta['v2']['ladder']['fired'] ?? []),
                 'position.reentries' => count($p->meta['v2']['reentries'] ?? []),

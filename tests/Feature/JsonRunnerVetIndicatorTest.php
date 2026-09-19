@@ -38,6 +38,20 @@ class JsonRunnerVetIndicatorTest extends TestCase
         ]);
     }
 
+    private function v2Plugin(string $key, array $confirm): StrategyPlugin
+    {
+        return StrategyPlugin::create([
+            'key' => $key,
+            'name' => 'Vet indicator test v2',
+            'definition' => [
+                'schema_version' => 2,
+                'key' => $key,
+                'meta' => ['name' => 'Vet indicator test v2', 'timeframe' => '1h'],
+                'entry' => ['side' => 'long', 'confirm' => $confirm, 'size' => ['mode' => 'usd', 'value' => 100]],
+            ],
+        ]);
+    }
+
     private function candidate(): Candidate
     {
         $stats = ProductStats::fromArray([
@@ -106,5 +120,23 @@ class JsonRunnerVetIndicatorTest extends TestCase
         $verdict = (new JsonPluginStrategy)->vet($this->candidate(), new Bank(1000, 0, 0.2, 0, 0), $ctx);
 
         $this->assertTrue($verdict->passed());
+    }
+
+    public function test_a_v2_confirm_on_an_absent_stats_key_rejects_rather_than_passes(): void
+    {
+        // schema_version:2 fails closed on ANY missing confirm field (docs/STRATEGY_SCHEMA_V2.md,
+        // design rule 4), not only `ind.*` -- a v2 confirm field need not appear in any entry.when
+        // signal, so v1's "scan already excluded unmeasurable rows" justification for skipping
+        // doesn't hold.
+        $this->v2Plugin('vet-ind-3', [
+            ['field' => 'extra.indicators.rsi14', 'op' => '<', 'value' => 30, 'reason' => 'rsi unavailable'],
+        ]);
+        $ctx = $this->ctx('vet-ind-3', []);
+
+        $verdict = (new JsonPluginStrategy)->vet($this->candidate(), new Bank(1000, 0, 0.2, 0, 0), $ctx);
+
+        $this->assertFalse($verdict->passed());
+        $this->assertSame('json.extra.indicators.rsi14', $verdict->failedCheck);
+        $this->assertSame('rsi unavailable', $verdict->why);
     }
 }
