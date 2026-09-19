@@ -41,7 +41,7 @@
     "after_rungs": 1,
     "retrace": { "of": "rung_spacing", "min": 0.5, "stay_above_avg": true },
     "size": { "mode": "formula", "expr": "sold_qty * min(1, retrace_pct * pi / spacing_pct)" },
-    "min_spacing_x_fees": 3,
+    "min_spacing_x_fees": 0.4,
     "cash_out": {
       "when": "green_after_fees",
       "sell_pct_of_reentry": 80,

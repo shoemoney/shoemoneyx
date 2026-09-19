@@ -751,8 +751,13 @@ final class StrategySchemaValidator
             if (! is_array($ttp)) {
                 $errors[] = ['path' => 'take_profit.runner.ttp', 'message' => 'runner.ttp is required: {activate_pct?, giveback_pct}'];
             } else {
+                $hasLadder = is_array($tp['ladder'] ?? null) && $tp['ladder'] !== [];
                 if (isset($ttp['activate_pct']) && ! is_numeric($ttp['activate_pct'])) {
                     $errors[] = ['path' => 'take_profit.runner.ttp.activate_pct', 'message' => 'activate_pct must be a number'];
+                } elseif (! $hasLadder && ! isset($ttp['activate_pct'])) {
+                    // Without a ladder there is no last rung to default activate_pct to, and the
+                    // runner would otherwise arm the instant peak pnl clears zero.
+                    $errors[] = ['path' => 'take_profit.runner.ttp.activate_pct', 'message' => 'activate_pct is required when take_profit.ladder is absent'];
                 }
                 if (! isset($ttp['giveback_pct']) || ! is_numeric($ttp['giveback_pct']) || $ttp['giveback_pct'] <= 0) {
                     $errors[] = ['path' => 'take_profit.runner.ttp.giveback_pct', 'message' => 'giveback_pct is required and must be a positive number'];

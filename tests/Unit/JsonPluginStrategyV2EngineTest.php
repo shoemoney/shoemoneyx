@@ -148,7 +148,8 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $this->assertTrue($dRearmed->shouldTrim());
         $this->assertEqualsWithDelta(0.02, $dRearmed->fraction, 1e-9, 'rung 0 of the RE-ARMED ladder: 2% of the new original (860)');
         $ladder = $p->meta['v2']['ladder'];
-        $this->assertSame([0], $ladder['fired']);
+        $this->assertSame([], $ladder['fired'], 'rung 0 is only PENDING until the trim confirms next call (reconcilePendingRung)');
+        $this->assertSame(0, $ladder['pending']['idx']);
         $this->assertEqualsWithDelta(860.0, $ladder['original_qty'], 1e-9);
         $this->assertEqualsWithDelta($qtyAtRearm, $ladder['original_qty'], 1e-9);
         $this->assertTrue($p->meta['v2']['reentries'][0]['confirmed']);
@@ -220,7 +221,7 @@ class JsonPluginStrategyV2EngineTest extends TestCase
 
         $d0 = $this->step($p, $ctx, 100.5);
         $this->assertTrue($d0->shouldTrim());
-        $this->assertSame([0], $p->meta['v2']['ladder']['fired']);
+        $this->assertSame(0, $p->meta['v2']['ladder']['pending']['idx'], 'rung 0 is pending — apply()\'s trims_count++ confirms it next call');
 
         // A manual add (bypassing reentry — this definition still has one, but we're isolating
         // reset_on_add here) moves the average without touching the ladder's own bookkeeping.
@@ -254,5 +255,199 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         // Fail-closed on garbage inputs rather than dividing by zero or flipping sign.
         $this->assertFalse(JsonPluginStrategy::greenAfterFees($long, 101.0, 0.0, 10.0, 0.001));
         $this->assertFalse(JsonPluginStrategy::greenAfterFees($long, 101.0, 100.0, 0.0, 0.001));
+    }
+
+    #[Test]
+    public function runner_ttp_does_not_arm_just_because_there_is_no_ladder_to_exhaust(): void
+    {
+        $def = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
+        $def['key'] = 'smx-pi-no-ladder';
+        $def['take_profit']['ladder'] = [];
+        $def['take_profit']['runner']['ttp'] = ['activate_pct' => 2.0, 'giveback_pct' => 1.0];
+        unset($def['reentry']);
+        StrategyPlugin::create(['key' => $def['key'], 'name' => $def['meta']['name'], 'definition' => $def]);
+        $ctx = $this->ctx('smx-pi-no-ladder');
+        $p = $this->freshPosition();
+
+        $this->step($p, $ctx, 100.1);   // a tiny peak, nowhere near the 2% activate_pct
+        // Before the fix, an empty ladder counted as "exhausted" and armed the runner outright, so
+        // a hard crash from that tiny peak closed the position long before activate_pct was ever
+        // reached. It must still just hold.
+        $d = $this->step($p, $ctx, 98.0);
+        $this->assertFalse($d->shouldClose(), 'an empty ladder is not "exhausted" into an armed runner');
+    }
+
+    #[Test]
+    public function cash_out_remainder_ladder_only_folds_the_leftover_when_reset_on_add_is_false(): void
+    {
+        $this->plugin('smx-pi-remainder-reset', ['reentry' => ['cash_out' => ['remainder' => 'ladder']]]);
+        $pReset = $this->freshPosition();
+        $this->runRungReentryCashOut($pReset, $this->ctx('smx-pi-remainder-reset'));
+        // reset_on_add:true (the default) already rebuilt the ladder from the CURRENT quantity —
+        // which already includes the whole re-bought lot — when the reentry buy moved avg. Folding
+        // the un-cashed remainder in again here would double-count it.
+        $this->assertEqualsWithDelta(1000.0, $pReset->meta['v2']['ladder']['original_qty'], 1e-9);
+
+        $this->plugin('smx-pi-remainder-noreset', [
+            'take_profit' => ['reset_on_add' => false],
+            'reentry' => ['cash_out' => ['remainder' => 'ladder']],
+        ]);
+        $pNoReset = $this->freshPosition();
+        $this->runRungReentryCashOut($pNoReset, $this->ctx('smx-pi-remainder-noreset'));
+        // reset_on_add:false never rebases original_qty on an add, so the 4 units of the re-bought
+        // lot (20 bought, 16 cashed out) must be folded in by hand.
+        $this->assertEqualsWithDelta(1004.0, $pNoReset->meta['v2']['ladder']['original_qty'], 1e-9);
+    }
+
+    /** Rung 0 fires (sells 20 of 1000), a reentry buys back 20 units at a half-rung retrace, then a flat tick cashes out 80% (16 of 20) of that lot green after (zero) fees. */
+    private function runRungReentryCashOut(Position $p, DeskContext $ctx): void
+    {
+        $this->step($p, $ctx, 100.5);
+        $dAdd = $this->step($p, $ctx, 100.2);
+        $this->assertTrue($dAdd->shouldAdd());
+        $dCashOut = $this->step($p, $ctx, 100.25);
+        $this->assertTrue($dCashOut->shouldTrim());
+        $this->assertStringContainsString('reentry.cash_out', $dCashOut->ruleFired);
+    }
+
+    #[Test]
+    public function min_spacing_x_fees_does_not_block_the_shipped_example_at_the_default_taker_rate(): void
+    {
+        $this->plugin('smx-pi-real-fees');
+        $ctx = $this->ctx('smx-pi-real-fees', 0.006);   // desk.fees.taker_rate default
+        $p = $this->freshPosition();
+
+        $this->step($p, $ctx, 100.5);   // rung 0 fires
+        // min_spacing_x_fees 0.4 x the 1.2% round-trip fee = 0.48%, which the 0.5%-wide rungs clear.
+        $d = $this->step($p, $ctx, 100.2);
+        $this->assertTrue($d->shouldAdd(), 'the acceptance strategy\'s re-entry must still arm at the desk\'s real default fee rate');
+    }
+
+    #[Test]
+    public function max_per_position_refuses_a_second_reentry_even_when_every_other_gate_passes(): void
+    {
+        $this->plugin('smx-pi-maxpos', ['reentry' => ['cash_out' => null, 'max_per_position' => 1]]);
+        $ctx = $this->ctx('smx-pi-maxpos');
+        $p = $this->freshPosition();
+
+        $this->step($p, $ctx, 100.5);            // rung 0 fires
+        $dAdd = $this->step($p, $ctx, 100.2);    // reentry #1 arms
+        $this->assertTrue($dAdd->shouldAdd());
+        $this->step($p, $ctx, 100.2);            // confirms it; avg moves, the ladder re-arms from it
+
+        $this->step($p, $ctx, 100.51);           // rearmed rung 0 fires again
+        $dSecond = $this->step($p, $ctx, 100.2); // every reentry gate would otherwise pass again
+        $this->assertFalse($dSecond->shouldAdd(), 'max_per_position:1 must refuse a second reentry');
+        $this->assertCount(1, $p->meta['v2']['reentries']);
+    }
+
+    #[Test]
+    public function stop_anchor_entry_stays_pinned_to_the_first_fill_after_a_reentry_buy(): void
+    {
+        $this->plugin('smx-pi-anchor-entry', ['stop' => ['anchor' => 'entry']]);
+        $ctx = $this->ctx('smx-pi-anchor-entry');
+        $p = $this->freshPosition();
+
+        $this->step($p, $ctx, 100.5);          // rung 0 fires, avg stays 100
+        $dAdd = $this->step($p, $ctx, 100.2);  // reentry buys, moving avg
+        $this->assertTrue($dAdd->shouldAdd());
+        $this->step($p, $ctx, 100.2);          // confirms the add
+
+        $this->assertGreaterThan(100.0, $p->entry_price, 'avg did move');
+        $this->assertEqualsWithDelta(100.0, $p->meta['v2']['entry_price'], 1e-9, 'anchor:"entry" stays pinned to the first fill, unlike avg');
+
+        $stopPrice = 100.0 * (1 - 0.025);
+        $dHold = $this->step($p, $ctx, $stopPrice + 0.01);
+        $this->assertFalse($dHold->shouldClose(), 'still above the fixed entry anchor');
+
+        $dStop = $this->step($p, $ctx, $stopPrice - 0.01);
+        $this->assertTrue($dStop->shouldClose());
+        $this->assertSame('stop.pct_from_avg', $dStop->ruleFired);
+    }
+
+    #[Test]
+    public function retrace_of_pct_measures_an_absolute_move_not_a_multiple_of_rung_spacing(): void
+    {
+        $this->plugin('smx-pi-retrace-pct', ['reentry' => ['retrace' => ['of' => 'pct', 'min' => 0.4, 'stay_above_avg' => true]]]);
+        $ctx = $this->ctx('smx-pi-retrace-pct');
+        $p = $this->freshPosition();
+
+        $this->step($p, $ctx, 100.5);   // rung 0 fires at avg 100, sale price 100.5
+
+        // A 0.3% retrace: under the (wrong) rung_spacing reading this would be 0.4 x 0.5% = 0.2%,
+        // comfortably cleared — retrace.of:"pct" must require the full 0.4% directly instead.
+        $dShort = $this->step($p, $ctx, 100.2);
+        $this->assertFalse($dShort->shouldAdd(), 'retrace.of:"pct" needs the full 0.4%, not 0.4 x the rung spacing');
+
+        // A 0.41% retrace clears that same 0.4% absolute bar.
+        $dEnough = $this->step($p, $ctx, 100.09);
+        $this->assertTrue($dEnough->shouldAdd());
+    }
+
+    #[Test]
+    public function reentry_lot_confirms_from_the_actual_post_fill_state_not_the_pre_fill_intent(): void
+    {
+        $this->plugin('smx-pi-real-fill');
+        $ctx = $this->ctx('smx-pi-real-fill');
+        $p = $this->freshPosition();
+        $strategy = new JsonPluginStrategy;
+
+        $this->step($p, $ctx, 100.5);   // rung 0 fires
+
+        $p->markPrice(100.2);
+        $dAdd = $strategy->risk($p, $this->stats(100.2), $ctx);
+        $this->assertTrue($dAdd->shouldAdd());
+        $intendedPrice = $dAdd->limitPrice;
+        $intendedQty = $dAdd->dollars / $intendedPrice;
+
+        // A real fill worse than the naive intent — slippage on price, a taker fee shaving the
+        // filled quantity — exactly what Backtester::bookAdd() does and the old code ignored
+        // entirely (it recorded $dAdd's own pre-fill price/qty verbatim).
+        $qtyBefore = $p->quantity;
+        $usdBefore = $p->entry_usd;
+        $filledPx = $intendedPrice * 1.001;
+        $fee = $dAdd->dollars * 0.006;
+        $filledQty = ($dAdd->dollars - $fee) / $filledPx;
+        $p->quantity = $qtyBefore + $filledQty;
+        $p->entry_usd = $usdBefore + $dAdd->dollars;
+        $p->entry_price = $p->entry_usd / $p->quantity;
+        $p->adds_count++;
+        $this->assertNotEqualsWithDelta($intendedQty, $filledQty, 1e-9, 'the simulated fill must differ from the naive intent or this test proves nothing');
+
+        $p->markPrice(100.2);
+        $strategy->risk($p, $this->stats(100.2), $ctx);   // confirms the lot
+        $lot = $p->meta['v2']['reentries'][0];
+        $this->assertTrue($lot['confirmed']);
+        $this->assertEqualsWithDelta($filledQty, $lot['qty'], 1e-9, 'the lot must record the REAL filled quantity');
+        $this->assertEqualsWithDelta($dAdd->dollars / $filledQty, $lot['price'], 1e-9, 'and the real per-unit cost, not the pre-fill intent');
+        $this->assertNotEqualsWithDelta($intendedPrice, $lot['price'], 1e-6, 'which must differ from the naive intended price');
+    }
+
+    #[Test]
+    public function ladder_trim_carries_the_stop_price_for_the_conservative_touch_policy(): void
+    {
+        $this->plugin('smx-pi-stopmeta');
+        $ctx = $this->ctx('smx-pi-stopmeta');
+        $p = $this->freshPosition();
+
+        $d = $this->step($p, $ctx, 100.5);   // rung 0 fires
+        $this->assertTrue($d->shouldTrim());
+        // shipped example: stop.pct_from_avg 2.5, anchor "avg" (100) -> stop price 97.5. Backtester's
+        // own conservative exit_touch_policy reads this to race the rung against the stop intrabar.
+        $this->assertEqualsWithDelta(97.5, $d->meta['stop_price'] ?? null, 1e-9);
+    }
+
+    #[Test]
+    public function reentry_below_min_ticket_usd_produces_no_order(): void
+    {
+        $this->plugin('smx-pi-tinyreentry', ['reentry' => ['size' => ['mode' => 'formula', 'expr' => 'sold_qty * 0.0000001']]]);
+        $ctx = $this->ctx('smx-pi-tinyreentry');
+        $p = $this->freshPosition();
+
+        $this->step($p, $ctx, 100.5);   // rung 0 fires
+        // Every other reentry gate passes here (same retrace as the other tests) — the ticket
+        // itself is a fraction of a cent and must be refused, not booked.
+        $d = $this->step($p, $ctx, 100.2);
+        $this->assertFalse($d->shouldAdd(), 'size.min_ticket_usd must still clamp a reentry order to nothing');
     }
 }

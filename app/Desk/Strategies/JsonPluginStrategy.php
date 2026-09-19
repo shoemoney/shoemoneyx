@@ -533,6 +533,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
     {
         $this->ensureV2EntryPriceRecorded($position);
         $this->reconcilePendingReentry($position);
+        $this->reconcilePendingRung($position);
         $takeProfit = is_array($def['take_profit'] ?? null) ? $def['take_profit'] : [];
         $ladder = $this->rebuildLadderState($position, $takeProfit);
         $tf = self::defaultTf($def);
@@ -547,7 +548,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             return $d;
         }
 
-        if (($d = $this->ladderDecision($position, $stats, $takeProfit, $ladder)) !== null) {
+        if (($d = $this->ladderDecision($position, $stats, $takeProfit, $ladder, $stop)) !== null) {
             return $d;
         }
 
@@ -635,12 +636,45 @@ class JsonPluginStrategy extends BaseDeskStrategy
             return;
         }
         if ((int) $position->adds_count > (int) ($last['adds_count_at_emit'] ?? -1)) {
+            // The lot's real fill: the position's own post-add qty/cost delta, which already carries
+            // slippage (bookAdd() fills at the slipped mark) and the fee-adjusted quantity — not the
+            // pre-fill price/qty this lot was recorded with when RISK emitted the ADD.
+            $qtyFilled = (float) $position->quantity - (float) ($last['qty_at_emit'] ?? 0.0);
+            $usdFilled = (float) $position->entry_usd - (float) ($last['entry_usd_at_emit'] ?? 0.0);
+            if ($qtyFilled > 0) {
+                $list[$lastIdx]['qty'] = $qtyFilled;
+                $list[$lastIdx]['price'] = $usdFilled / $qtyFilled;
+            }
             $list[$lastIdx]['confirmed'] = true;
         } else {
             unset($list[$lastIdx]);
             $list = array_values($list);
         }
         $meta['v2']['reentries'] = $list;
+        $position->meta = $meta;
+    }
+
+    /**
+     * A pending ladder rung (docs/STRATEGY_SCHEMA_V2.md, take_profit "Engine state") is promoted to
+     * `fired`/`sold` only once `position.trims_count` has advanced past what it was when RISK
+     * emitted the TRIM — the fill actually happened — or dropped so the same rung re-fires next
+     * call. Without this, a trim that Desk/Backtester silently drops (a sub-contract skip, a failed
+     * close/trim, a swallowed lock timeout) would permanently consume the rung and feed a phantom
+     * `sold` qty into the re-entry formula.
+     */
+    private function reconcilePendingRung(Position $position): void
+    {
+        $meta = $position->meta ?? [];
+        $pending = $meta['v2']['ladder']['pending'] ?? null;
+        if (! is_array($pending)) {
+            return;
+        }
+        if ((int) $position->trims_count > (int) ($pending['trims_count_at_emit'] ?? -1)) {
+            $idx = (int) $pending['idx'];
+            $meta['v2']['ladder']['fired'][] = $idx;
+            $meta['v2']['ladder']['sold'][$idx] = ['qty' => (float) $pending['qty'], 'price' => (float) $pending['price']];
+        }
+        unset($meta['v2']['ladder']['pending']);
         $position->meta = $meta;
     }
 
@@ -695,6 +729,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if ($cashOut === null) {
             return null;
         }
+        $takeProfit = is_array($def['take_profit'] ?? null) ? $def['take_profit'] : [];
         $list = $position->meta['v2']['reentries'] ?? null;
         if (! is_array($list)) {
             return null;
@@ -719,7 +754,13 @@ class JsonPluginStrategy extends BaseDeskStrategy
 
             $meta = $position->meta ?? [];
             $meta['v2']['reentries'][$i]['cashed_out'] = true;
-            if (($cashOut['remainder'] ?? 'runner') === 'ladder') {
+            // With reset_on_add (the default), the reentry buy that created this lot already moved
+            // `avg`, so rebuildLadderState() has re-based original_qty to the CURRENT quantity —
+            // which already includes this whole lot. Adding the un-cashed remainder here again would
+            // double-count it. Only reset_on_add:false leaves original_qty untouched by that add, so
+            // only then does the remainder need folding in by hand.
+            $resetOnAdd = ! array_key_exists('reset_on_add', $takeProfit) || (bool) $takeProfit['reset_on_add'];
+            if (($cashOut['remainder'] ?? 'runner') === 'ladder' && ! $resetOnAdd) {
                 $meta['v2']['ladder']['original_qty'] = (float) ($meta['v2']['ladder']['original_qty'] ?? 0) + ($lotQty - $sellQty);
             }
             $position->meta = $meta;
@@ -734,7 +775,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
     }
 
     /** The next unfired ladder rung, if the bar reached it (bar high/low aware in backtests — $stats->extra['bar_high'/'bar_low']). */
-    private function ladderDecision(Position $position, ProductStats $stats, array $takeProfit, array $ladder): ?RiskDecision
+    private function ladderDecision(Position $position, ProductStats $stats, array $takeProfit, array $ladder, array $stop = []): ?RiskDecision
     {
         $rungs = is_array($takeProfit['ladder'] ?? null) ? $takeProfit['ladder'] : [];
         $nextIdx = count($ladder['fired']);
@@ -761,13 +802,25 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
 
         $meta = $position->meta ?? [];
-        $meta['v2']['ladder']['fired'][] = $nextIdx;
-        $meta['v2']['ladder']['sold'][$nextIdx] = ['qty' => $sellQty, 'price' => $target];
+        $meta['v2']['ladder']['pending'] = [
+            'idx' => $nextIdx, 'qty' => $sellQty, 'price' => $target, 'trims_count_at_emit' => (int) $position->trims_count,
+        ];
         $position->meta = $meta;
+
+        // Attach the fail-safe's price level (not a decision — Backtester's own conservative touch
+        // policy decides whether it beat this rung to the punch intrabar) so a bar whose low pierced
+        // the stop but closed above it doesn't silently bank the rung's profit instead of the loss.
+        $decisionMeta = [];
+        if (isset($stop['pct_from_avg']) && is_numeric($stop['pct_from_avg'])) {
+            $anchor = $stop['anchor'] ?? 'avg';
+            $anchorPrice = $anchor === 'entry' ? (float) ($position->meta['v2']['entry_price'] ?? $position->entry_price) : $avg;
+            $decisionMeta['stop_price'] = $anchorPrice * (1 - $dir * (float) $stop['pct_from_avg'] / 100);
+        }
 
         return RiskDecision::trim(
             "take_profit.ladder.{$nextIdx}", $sellQty / $position->quantity, $target,
             sprintf('rung %d reached (%+.2f%% from avg) — selling %.0f%% of the original position', $nextIdx, $atPct, $sellPct),
+            $decisionMeta,
         );
     }
 
@@ -846,13 +899,24 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if ($dollars === null || $dollars <= 0) {
             return null;
         }
+        // size.min_ticket_usd applies here exactly as it does at entry (docs/STRATEGY_SCHEMA_V2.md,
+        // "Sizing objects"); risk.leverage_cap does not — clamping it needs the book's equity and
+        // exposure (Bank), which the Strategy contract never hands to risk() (see sizingDollars()'s
+        // own docblock on that same gap).
+        if ($dollars < (float) $ctx->param('size.min_ticket_usd', 10)) {
+            return null;
+        }
         $qty = $dollars / $price;   // sizingDollars() always returns dollars; the pending-lot record keeps the quantity
 
         $meta = $position->meta ?? [];
         $list = is_array($meta['v2']['reentries'] ?? null) ? $meta['v2']['reentries'] : [];
         $list[] = [
+            // 'qty'/'price' are the INTENDED fill, informational only until reconcilePendingReentry()
+            // overwrites them from the position's actual post-fill state (real slippage + fee-adjusted
+            // qty) — nothing reads them while 'confirmed' is false.
             'qty' => $qty, 'price' => $price, 'fees_usd' => $qty * $price * ($this->takerFeePct($def, $ctx) / 100),
             'cashed_out' => false, 'rung' => $lastFiredIdx, 'adds_count_at_emit' => (int) $position->adds_count,
+            'qty_at_emit' => (float) $position->quantity, 'entry_usd_at_emit' => (float) $position->entry_usd,
             'confirmed' => false,
         ];
         $meta['v2']['reentries'] = $list;
@@ -904,6 +968,11 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if ($dollars === null || $dollars <= 0) {
             return null;
         }
+        // size.min_ticket_usd applies here exactly as it does at entry — see the matching comment in
+        // reentryArmDecision() for why risk.leverage_cap does not.
+        if ($dollars < (float) $ctx->param('size.min_ticket_usd', 10)) {
+            return null;
+        }
 
         return RiskDecision::add("adds.{$idx}", $dollars, $stats->price, sprintf('add rung %d triggered — $%.2f', $idx, $dollars));
     }
@@ -921,14 +990,13 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
 
         $rungs = is_array($takeProfit['ladder'] ?? null) ? $takeProfit['ladder'] : [];
-        $ladderExhausted = $rungs === [] || count($ladder['fired']) >= count($rungs);
         $defaultActivate = $rungs !== [] ? (float) end($rungs)['at_pct'] : 0.0;
         $activatePct = is_numeric($runner['activate_pct'] ?? null) ? (float) $runner['activate_pct'] : $defaultActivate;
 
         $avg = (float) $position->entry_price;
         $peak = (float) ($position->peak_price ?? $avg);
         $peakPct = $avg > 0 ? $position->dir() * ($peak / $avg - 1) * 100 : 0.0;
-        if (! ($ladderExhausted || $peakPct >= $activatePct)) {
+        if ($peakPct < $activatePct) {
             return null;
         }
 

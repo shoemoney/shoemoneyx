@@ -90,7 +90,7 @@ same JSON, and the hub can render a "how this works" poster from it without a hu
     "after_rungs": 1,
     "retrace": { "of": "rung_spacing", "min": 0.5, "stay_above_avg": true },
     "size": { "mode": "formula", "expr": "sold_qty * min(1, retrace_pct * pi / spacing_pct)" },
-    "min_spacing_x_fees": 3,
+    "min_spacing_x_fees": 0.4,
     "cash_out": {
       "when": "green_after_fees",
       "sell_pct_of_reentry": 80,
@@ -201,7 +201,7 @@ whenever `avg` differs from the stored `avg` (that check is what implements `res
   "after_rungs": 1,
   "retrace": { "of": "rung_spacing", "min": 0.5, "stay_above_avg": true },
   "size": { "mode": "formula", "expr": "sold_qty * min(1, retrace_pct * pi / spacing_pct)" },
-  "min_spacing_x_fees": 3,
+  "min_spacing_x_fees": 0.4,
   "cash_out": { "when": "green_after_fees", "sell_pct_of_reentry": 80, "remainder": "runner" },
   "max_per_position": 3
 }
