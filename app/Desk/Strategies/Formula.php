@@ -85,7 +85,9 @@ final class Formula
     /** @param array<string, float|int> $vars */
     public static function evaluate(array $ast, array $vars): ?float
     {
-        return self::evalNode($ast, $vars);
+        $v = self::evalNode($ast, $vars);
+
+        return ($v === null || ! is_finite($v) || $v <= 0.0) ? null : $v;
     }
 
     /** @param array<string, float|int> $vars */

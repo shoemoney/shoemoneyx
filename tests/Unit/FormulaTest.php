@@ -28,9 +28,22 @@ class FormulaTest extends TestCase
     #[Test]
     public function unary_minus_binds_tighter_than_multiplication(): void
     {
-        $this->assertSame(-8.0, Formula::evaluate(Formula::parse('-(3 + 5)'), []));
+        // evaluate() fails closed on a non-positive result (see below), so the
+        // negative-result cases are asserted through abs() to keep exercising
+        // the grouping/precedence itself.
+        $this->assertSame(8.0, Formula::evaluate(Formula::parse('abs(-(3 + 5))'), []));
         $this->assertSame(1.0, Formula::evaluate(Formula::parse('-3 + 4'), []));
-        $this->assertSame(-8.0, Formula::evaluate(Formula::parse('-2 * 4'), []));
+        $this->assertSame(8.0, Formula::evaluate(Formula::parse('abs(-2 * 4)'), []));
+    }
+
+    #[Test]
+    public function evaluate_fails_closed_on_a_non_positive_or_non_finite_result(): void
+    {
+        $this->assertNull(Formula::evaluate(Formula::parse('0'), []));
+        $this->assertNull(Formula::evaluate(Formula::parse('sold_qty * (0 - 5)'), ['sold_qty' => 10]));
+
+        $overflow = implode(' * ', array_fill(0, 31, '99999999999999999'));
+        $this->assertNull(Formula::evaluate(Formula::parse($overflow), []));
     }
 
     #[Test]
@@ -135,7 +148,7 @@ class FormulaTest extends TestCase
         mt_srand(1337);
 
         for ($i = 0; $i < 200; $i++) {
-            $tokenCount = random_int(1, 8);
+            $tokenCount = mt_rand(1, 8);
             $expr = '';
             for ($j = 0; $j < $tokenCount; $j++) {
                 $expr .= $alphabet[array_rand($alphabet)].' ';
@@ -143,12 +156,12 @@ class FormulaTest extends TestCase
 
             try {
                 $ast = Formula::parse($expr);
-                Formula::evaluate($ast, ['avg' => 1, 'price' => 2, 'pi' => M_PI]);
-            } catch (FormulaParseError) {
-                // expected for most random strings
+                $result = Formula::evaluate($ast, ['avg' => 1, 'price' => 2, 'pi' => M_PI]);
+                $this->assertTrue($result === null || is_float($result));
+            } catch (FormulaParseError $e) {
+                $this->assertGreaterThanOrEqual(0, $e->offset);
+                $this->assertLessThanOrEqual(strlen($expr), $e->offset);
             }
         }
-
-        $this->addToAssertionCount(1);
     }
 }

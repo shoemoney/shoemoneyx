@@ -31,9 +31,35 @@ final class SchemaMigrator
 
     public const V2_VERSION = 2;
 
+    /**
+     * The one dispatch every save path (StrategyPluginController::store/validate,
+     * StrategySync::import, StrategyJsonTool::run) runs a definition through.
+     * schema_version:2 validates structurally fine (StrategySchemaValidatorV2Test
+     * covers that in isolation) but is refused here while `strategies.v2_engine`
+     * is off, since migrate() will not run it either — see the class docblock.
+     *
+     * @return array{valid: bool, errors: array<int, array{path: string, message: string}>}
+     */
+    public static function validateForSave(array $definition): array
+    {
+        if (($definition['schema_version'] ?? null) === self::V2_VERSION && ! config('strategies.v2_engine')) {
+            return ['valid' => false, 'errors' => [
+                ['path' => 'schema_version', 'message' => 'schema_version 2 has no engine yet (phase C) and cannot be saved'],
+            ]];
+        }
+
+        return isset($definition['schema_version'])
+            ? StrategySchemaValidator::validate($definition)
+            : JsonPluginValidator::validate($definition);
+    }
+
     /** @return array<string, mixed> */
     public static function migrate(array $definition): array
     {
+        if (($definition['schema_version'] ?? null) === self::V2_VERSION) {
+            throw new \LogicException('schema_version 2 has no engine yet (phase C)');
+        }
+
         if (isset($definition['schema_version'])) {
             return $definition;
         }
@@ -101,10 +127,13 @@ final class SchemaMigrator
         $remaining = 1.0;
         foreach ($partials as $rung) {
             $fraction = (float) ($rung['fraction'] ?? 0);
-            $ladder[] = [
-                'at_pct' => $rung['pct'] ?? null,
-                'sell_pct_of_original' => $fraction * $remaining * 100,
-            ];
+            $sellPct = $fraction * $remaining * 100;
+            if (round($sellPct, 8) > 0) {
+                $ladder[] = [
+                    'at_pct' => $rung['pct'] ?? null,
+                    'sell_pct_of_original' => $sellPct,
+                ];
+            }
             $remaining *= 1 - $fraction;
         }
 
@@ -168,11 +197,13 @@ final class SchemaMigrator
         if (isset($entry['confirm'])) {
             $out['entry']['confirm'] = $entry['confirm'];
         }
-        $out['entry']['size'] = [
-            'mode' => 'kelly',
-            'fraction' => $sizing['kelly_fraction'] ?? null,
-            'max_pct_book' => $sizing['max_pct_book'] ?? null,
-        ];
+        if ($sizing !== []) {
+            $out['entry']['size'] = [
+                'mode' => 'kelly',
+                'fraction' => $sizing['kelly_fraction'] ?? null,
+                'max_pct_book' => $sizing['max_pct_book'] ?? null,
+            ];
+        }
 
         if (! empty($management['adds'])) {
             $out['adds'] = $management['adds'];
@@ -236,8 +267,11 @@ final class SchemaMigrator
         // v1's legacy view only ever exported `trigger.rules` as `scan.filters` (see
         // toLegacyView() below) — `setup` and any other named signal has no legacy bucket,
         // so only the signal literally named "trigger" (the v1ToV2() convention) maps back.
+        // `any` groups are OR'd in v2 but every v1/exporter consumer of `scan.filters` ANDs
+        // the list, so an `any` group is dropped rather than misrepresented as AND — v1 has
+        // no field for "one of these", same "best-effort" contract as the ladder/reentry.
         $triggerGroup = is_array($signals['trigger'] ?? null) ? $signals['trigger'] : [];
-        $triggerRules = [...($triggerGroup['all'] ?? []), ...($triggerGroup['any'] ?? [])];
+        $triggerRules = $triggerGroup['all'] ?? [];
 
         return [
             'schema_version' => self::CURRENT_VERSION,

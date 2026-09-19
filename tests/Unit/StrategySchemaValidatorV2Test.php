@@ -51,6 +51,30 @@ class StrategySchemaValidatorV2Test extends TestCase
     }
 
     #[Test]
+    public function entry_when_missing_is_rejected_rather_than_treated_as_buy_everything(): void
+    {
+        $def = $this->validDefinition();
+        unset($def['entry']['when']);
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('entry.when', $this->paths($result));
+    }
+
+    #[Test]
+    public function entry_when_empty_is_rejected_rather_than_treated_as_buy_everything(): void
+    {
+        $def = $this->validDefinition();
+        $def['entry']['when'] = [];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('entry.when', $this->paths($result));
+    }
+
+    #[Test]
     public function signal_name_entry_is_reserved(): void
     {
         $def = $this->validDefinition();
@@ -72,6 +96,30 @@ class StrategySchemaValidatorV2Test extends TestCase
 
         $this->assertFalse($result['valid']);
         $this->assertContains('take_profit.ladder[1].at_pct', $this->paths($result));
+    }
+
+    #[Test]
+    public function ladder_at_pct_of_zero_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['take_profit']['ladder'][0]['at_pct'] = 0;
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('take_profit.ladder[0].at_pct', $this->paths($result));
+    }
+
+    #[Test]
+    public function ladder_at_pct_negative_is_rejected(): void
+    {
+        $def = $this->validDefinition();
+        $def['take_profit']['ladder'][0]['at_pct'] = -1;
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('take_profit.ladder[0].at_pct', $this->paths($result));
     }
 
     #[Test]

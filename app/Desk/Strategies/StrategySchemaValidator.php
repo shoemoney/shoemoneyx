@@ -533,12 +533,16 @@ final class StrategySchemaValidator
         if (isset($entry['side']) && ! in_array($entry['side'], self::SIDES, true)) {
             $errors[] = ['path' => 'entry.side', 'message' => 'entry.side must be one of: '.implode(', ', self::SIDES)];
         }
-        self::checkSignalRefs($entry['when'] ?? null, 'entry.when', $signalNames, $errors);
+        if (! isset($entry['when']) || ! is_array($entry['when']) || $entry['when'] === []) {
+            $errors[] = ['path' => 'entry.when', 'message' => 'entry.when is required: at least one signal name'];
+        } else {
+            self::checkSignalRefs($entry['when'], 'entry.when', $signalNames, $errors);
+        }
         if (isset($entry['max_candidates']) && ! self::isPositiveInt($entry['max_candidates'])) {
             $errors[] = ['path' => 'entry.max_candidates', 'message' => 'entry.max_candidates must be a positive integer'];
         }
         self::checkRuleListV2($entry['confirm'] ?? null, 'entry.confirm', false, $errors);
-        self::checkSizingObject($entry['size'] ?? null, 'entry.size', 'entry', $errors, true);
+        self::checkSizingObject($entry['size'] ?? null, 'entry.size', 'entry', $errors, false);
     }
 
     /** @param array<int, array{path: string, message: string}> $errors */
@@ -611,8 +615,8 @@ final class StrategySchemaValidator
                         continue;
                     }
                     $atPct = $rung['at_pct'] ?? null;
-                    if (! is_numeric($atPct)) {
-                        $errors[] = ['path' => "{$path}.at_pct", 'message' => 'at_pct is required and must be a number'];
+                    if (! is_numeric($atPct) || $atPct <= 0) {
+                        $errors[] = ['path' => "{$path}.at_pct", 'message' => 'at_pct is required and must be a positive number'];
                     } else {
                         if ($prevPct !== null && $atPct <= $prevPct) {
                             $errors[] = ['path' => "{$path}.at_pct", 'message' => 'at_pct must strictly increase along the ladder'];

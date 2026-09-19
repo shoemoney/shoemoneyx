@@ -54,6 +54,37 @@ class SchemaMigratorTest extends TestCase
     }
 
     #[Test]
+    public function migrate_refuses_schema_version_2_because_phase_c_has_no_engine_yet(): void
+    {
+        $this->expectException(\LogicException::class);
+
+        SchemaMigrator::migrate(['schema_version' => 2, 'key' => 'k', 'meta' => ['name' => 'K'], 'entry' => ['when' => ['a']]]);
+    }
+
+    #[Test]
+    public function validate_for_save_refuses_schema_version_2_while_the_engine_flag_is_off(): void
+    {
+        config(['strategies.v2_engine' => false]);
+        $v2 = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
+
+        $result = SchemaMigrator::validateForSave($v2);
+
+        $this->assertFalse($result['valid']);
+        $this->assertSame('schema_version', $result['errors'][0]['path']);
+    }
+
+    #[Test]
+    public function validate_for_save_runs_the_v2_validator_once_the_engine_flag_is_on(): void
+    {
+        config(['strategies.v2_engine' => true]);
+        $v2 = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
+
+        $result = SchemaMigrator::validateForSave($v2);
+
+        $this->assertTrue($result['valid'], json_encode($result['errors']));
+    }
+
+    #[Test]
     public function to_legacy_view_projects_canonical_definitions_back_to_the_flat_shape(): void
     {
         $canonical = SchemaMigrator::migrate($this->legacyDefinition());
@@ -165,5 +196,121 @@ class SchemaMigratorTest extends TestCase
         $this->assertSame('spread_bps', $legacy['vet']['rules'][0]['field']);
         $this->assertSame(0.25, $legacy['size']['kelly_fraction']);
         $this->assertSame('volume_ratio_6h', $legacy['risk']['rules'][0]['field']);
+    }
+
+    #[Test]
+    public function v1_to_v2_round_trips_every_shipped_v1_example_to_a_valid_v2_definition(): void
+    {
+        foreach (glob(base_path('resources/strategies/examples/*.json')) as $file) {
+            $def = json_decode(file_get_contents($file), true);
+            if (($def['schema_version'] ?? 1) !== 1) {
+                continue;
+            }
+
+            $v2 = SchemaMigrator::v1ToV2($def);
+            $result = StrategySchemaValidator::validate($v2);
+
+            $this->assertTrue($result['valid'], basename($file).': '.json_encode($result['errors']));
+        }
+    }
+
+    #[Test]
+    public function v1_to_v2_omits_entry_size_when_v1_declared_no_sizing_and_still_validates(): void
+    {
+        $v1 = [
+            'schema_version' => 1,
+            'key' => 'no-sizing',
+            'meta' => ['name' => 'No Sizing'],
+            'entry' => ['side' => 'long'],
+            'trigger' => ['rules' => [['field' => 'price', 'op' => '>', 'value' => 1]]],
+        ];
+
+        $v2 = SchemaMigrator::v1ToV2($v1);
+
+        $this->assertArrayNotHasKey('size', $v2['entry']);
+        $this->assertTrue(StrategySchemaValidator::validate($v2)['valid'], json_encode(StrategySchemaValidator::validate($v2)['errors']));
+    }
+
+    #[Test]
+    public function v1_to_v2_drops_a_partials_rung_that_would_round_to_a_zero_percent_ladder_step(): void
+    {
+        $v1 = [
+            'schema_version' => 1,
+            'key' => 'full-fraction-then-more',
+            'meta' => ['name' => 'Full Fraction Then More'],
+            'entry' => ['side' => 'long'],
+            'management' => [
+                'partials' => [
+                    ['pct' => 1, 'fraction' => 1.0],
+                    ['pct' => 2, 'fraction' => 0.5],
+                ],
+            ],
+        ];
+
+        $ladder = SchemaMigrator::v1ToV2($v1)['take_profit']['ladder'];
+
+        $this->assertCount(1, $ladder);
+        $this->assertSame(1, $ladder[0]['at_pct']);
+        $this->assertSame(100.0, $ladder[0]['sell_pct_of_original']);
+    }
+
+    #[Test]
+    public function v2_to_v1_view_drops_any_rules_instead_of_and_ing_them_into_scan_filters(): void
+    {
+        $v2 = [
+            'schema_version' => 2,
+            'key' => 'any-only',
+            'meta' => ['name' => 'Any Only'],
+            'signals' => [
+                'trigger' => ['any' => [
+                    ['field' => 'spread_bps', 'op' => '<', 'value' => 10],
+                    ['field' => 'spread_bps', 'op' => '>', 'value' => 90],
+                ]],
+            ],
+            'entry' => ['side' => 'long', 'when' => ['trigger']],
+        ];
+
+        $view = SchemaMigrator::v2ToV1View($v2);
+        $legacy = SchemaMigrator::toLegacyView($v2);
+
+        $this->assertSame([], $view['trigger']['rules']);
+        $this->assertSame([], $legacy['scan']['filters']);
+    }
+
+    /**
+     * Placeholder for the spec's hard proof ("every v1 example round-trips ...
+     * produce byte-identical backtest fills") until phase C's ladder engine
+     * lands — Backtester has nothing to run a v2 take_profit.ladder against
+     * yet (SchemaMigrator::migrate() refuses schema_version:2 until then).
+     * Asserted here in closed form: the percent-of-original ladder computed
+     * from a 3-rung fraction-of-remaining v1 ladder sells the same absolute
+     * quantities, in order, as the v1 ladder would against a fixed starting
+     * position.
+     */
+    #[Test]
+    public function the_percent_of_original_ladder_implies_the_same_absolute_fills_as_the_v1_fraction_ladder(): void
+    {
+        $startingQty = 100.0;
+        $partials = [
+            ['pct' => 1, 'fraction' => 0.5],
+            ['pct' => 2, 'fraction' => 0.5],
+            ['pct' => 3, 'fraction' => 1.0],
+        ];
+
+        // v1: each rung sells `fraction` of whatever remains.
+        $remaining = $startingQty;
+        $v1Fills = [];
+        foreach ($partials as $rung) {
+            $sold = $remaining * $rung['fraction'];
+            $v1Fills[] = $sold;
+            $remaining -= $sold;
+        }
+
+        // v2: each rung sells `sell_pct_of_original` percent of the starting quantity.
+        $ladder = SchemaMigrator::v1ToV2(['schema_version' => 1, 'key' => 'k', 'meta' => ['name' => 'K'], 'entry' => ['side' => 'long'], 'management' => ['partials' => $partials]])['take_profit']['ladder'];
+        $v2Fills = array_map(fn ($rung) => $startingQty * $rung['sell_pct_of_original'] / 100, $ladder);
+
+        $this->assertEqualsWithDelta($v1Fills, $v2Fills, 0.0001);
+        $this->assertEqualsWithDelta([50.0, 25.0, 25.0], $v2Fills, 0.0001);
     }
 }
