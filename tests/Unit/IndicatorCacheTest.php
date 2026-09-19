@@ -56,7 +56,7 @@ class IndicatorCacheTest extends TestCase
     }
 
     #[Test]
-    public function the_memo_does_not_grow_across_backtest_steps(): void
+    public function the_memo_computes_once_per_bar_across_every_step_inside_it(): void
     {
         $base = strtotime('2026-01-01T00:00:00Z');
         $bars = [];
@@ -64,19 +64,54 @@ class IndicatorCacheTest extends TestCase
             $close = 100.0 + $i * 0.01;
             $bars[] = ['start' => $base + $i * 3600, 'open' => $close, 'high' => $close + 1, 'low' => $close - 1, 'close' => $close, 'volume' => 10.0];
         }
-        $provider = fn (string $pid, string $tf, int $from, int $to): array => $bars;
+        $calls = 0;
+        $provider = function (string $pid, string $tf, int $from, int $to) use ($bars, &$calls): array {
+            $calls++;
+
+            return $bars;
+        };
         $field = IndicatorField::parse('ind.sma(3)');
         $s = $this->stats();
 
-        for ($step = 0; $step < 1000; $step++) {
-            $now = $base + 500 * 3600 + $step * 60;
+        // 60 one-minute steps landing inside the same closed 1H bar -- keying the memo on $now
+        // instead of the bar bucket would recompute (and re-fetch bars) on every single one.
+        $hourStart = $base + 500 * 3600;
+        for ($minute = 0; $minute < 60; $minute++) {
+            $now = $hourStart + $minute * 60;
             $ctx = new DeskContext([], 'backtest', false, [], new \DateTimeImmutable('@'.$now), true, $provider);
-            IndicatorCache::snapshot($ctx, $s->productId, '1h', $field, $s->price);
+            IndicatorCache::current($ctx, $s->productId, '1h', $field, $s->price);
         }
 
-        // One product, one timeframe, one indicator -- the memo for the CURRENT bar holds one
-        // entry, however many of the 1000 steps landed on it. It must never reach anywhere near
-        // 1000.
+        $this->assertSame(1, $calls, 'one bar bucket must be computed once and reused for every step inside it');
         $this->assertLessThanOrEqual(2, $this->cacheSize());
+    }
+
+    #[Test]
+    public function previous_is_never_computed_unless_a_caller_actually_asks_for_it(): void
+    {
+        $base = strtotime('2026-01-01T00:00:00Z');
+        $bars = [];
+        for ($i = 0; $i < 500; $i++) {
+            $close = 100.0 + $i * 0.01;
+            $bars[] = ['start' => $base + $i * 3600, 'open' => $close, 'high' => $close + 1, 'low' => $close - 1, 'close' => $close, 'volume' => 10.0];
+        }
+        $calls = 0;
+        $provider = function (string $pid, string $tf, int $from, int $to) use ($bars, &$calls): array {
+            $calls++;
+
+            return $bars;
+        };
+        $field = IndicatorField::parse('ind.sma(3)');
+        $s = $this->stats();
+        $ctx = new DeskContext([], 'backtest', false, [], new \DateTimeImmutable('@'.($base + 500 * 3600)), true, $provider);
+
+        IndicatorCache::current($ctx, $s->productId, '1h', $field, $s->price);
+        IndicatorCache::current($ctx, $s->productId, '1h', $field, $s->price);
+
+        $this->assertSame(1, $calls, 'a literal/field-ref rule never triggers the previous-bar computation');
+
+        IndicatorCache::previous($ctx, $s->productId, '1h', $field, $s->price);
+
+        $this->assertSame(2, $calls, 'a crosses_* rule pays for the previous bar exactly once, on first ask');
     }
 }

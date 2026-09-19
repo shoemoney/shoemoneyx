@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Desk\Strategies;
 
+use App\Models\Candle;
+
 /**
  * Validates the formal `schema_version: 1` strategy-plugin definition (see
  * docs/STRATEGY_SCHEMA.md): sectioned meta/params/setup/trigger/entry/
@@ -91,8 +93,12 @@ final class StrategySchemaValidator
         if (isset($meta['tags']) && (! is_array($meta['tags']) || array_any($meta['tags'], fn ($t) => ! is_string($t)))) {
             $errors[] = ['path' => 'meta.tags', 'message' => 'meta.tags must be an array of strings'];
         }
-        if (isset($meta['timeframe']) && ! is_string($meta['timeframe'])) {
-            $errors[] = ['path' => 'meta.timeframe', 'message' => 'meta.timeframe must be a string'];
+        if (isset($meta['timeframe'])) {
+            if (! is_string($meta['timeframe'])) {
+                $errors[] = ['path' => 'meta.timeframe', 'message' => 'meta.timeframe must be a string'];
+            } elseif (Candle::canonicalTimeframe($meta['timeframe']) === null) {
+                $errors[] = ['path' => 'meta.timeframe', 'message' => 'meta.timeframe must be a known timeframe (e.g. 1m, 15m, 1h, 6h, 1d)'];
+            }
         }
         if (isset($meta['assets']) && (! is_array($meta['assets']) || array_any($meta['assets'], fn ($a) => ! is_string($a)))) {
             $errors[] = ['path' => 'meta.assets', 'message' => 'meta.assets must be an array of strings'];
@@ -355,28 +361,55 @@ final class StrategySchemaValidator
             if (! isset($rule['field']) || ! is_string($rule['field']) || ! self::isAllowedField($rule['field'], $allowPosition)) {
                 $errors[] = ['path' => "{$rulePath}.field", 'message' => 'field is unknown (stats key, indicators.*, time.*, or position.* where allowed)'];
             }
+            if (isset($rule['tf'])) {
+                if (! is_string($rule['tf']) || $rule['tf'] === '') {
+                    $errors[] = ['path' => "{$rulePath}.tf", 'message' => 'tf must be a non-empty string'];
+                } elseif (Candle::canonicalTimeframe($rule['tf']) === null) {
+                    $errors[] = ['path' => "{$rulePath}.tf", 'message' => 'tf must be a known timeframe (e.g. 1m, 15m, 1h, 6h, 1d)'];
+                }
+            }
             $op = $rule['op'] ?? null;
             $isCrosses = $op === 'crosses_above' || $op === 'crosses_below';
+            $value = $rule['value'] ?? null;
+            // {value: {field: "..."}} compares against another field instead of a literal, for any op (docs/STRATEGY_SCHEMA_V2.md).
+            $isFieldRef = is_array($value) && is_string($value['field'] ?? null);
             if (! in_array($op, JsonRuleEvaluator::OPS, true)) {
                 $errors[] = ['path' => "{$rulePath}.op", 'message' => 'op must be one of: '.implode(', ', JsonRuleEvaluator::OPS)];
-            } elseif (in_array($op, ['between', 'in', 'not_in'], true) && ! is_array($rule['value'] ?? null)) {
+            } elseif (in_array($op, ['between', 'in', 'not_in'], true) && ! is_array($value)) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => "value must be an array for op \"{$op}\""];
-            } elseif ($op === 'between' && is_array($rule['value'] ?? null) && count($rule['value']) !== 2) {
+            } elseif ($op === 'between' && is_array($value) && count($value) !== 2) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value must have exactly 2 elements [min, max] for op "between"'];
             } elseif ($isCrosses && ! str_starts_with((string) ($rule['field'] ?? ''), 'ind.')) {
                 $errors[] = ['path' => "{$rulePath}.field", 'message' => 'crosses_* needs an ind.* field on both sides'];
-            } elseif ($isCrosses) {
-                $value = $rule['value'] ?? null;
-                $isIndFieldRef = is_array($value) && is_string($value['field'] ?? null) && str_starts_with($value['field'], 'ind.');
-                if (! is_numeric($value) && ! $isIndFieldRef) {
-                    $errors[] = ['path' => "{$rulePath}.value", 'message' => 'crosses_* needs an ind.* field on both sides'];
-                }
+            } elseif ($isCrosses && ! is_numeric($value) && ! ($isFieldRef && str_starts_with($value['field'], 'ind.'))) {
+                $errors[] = ['path' => "{$rulePath}.value", 'message' => 'crosses_* needs an ind.* field on both sides'];
+            } elseif (! $isCrosses && ! $isFieldRef && is_numeric($value) && self::isBareObvField($rule['field'] ?? null)) {
+                // ind.obv is a running total over a sliding lookback window: its absolute level drifts
+                // as old bars age out, so a literal threshold can fire on nothing happening. crosses_*
+                // and field-to-field comparisons share the same window and stay meaningful.
+                $errors[] = ['path' => "{$rulePath}.value", 'message' => 'ind.obv drifts with the lookback window; compare it with crosses_above/crosses_below or against another field, not a literal'];
+            }
+            if ($isFieldRef && ! self::isAllowedField($value['field'], $allowPosition)) {
+                $errors[] = ['path' => "{$rulePath}.value.field", 'message' => 'value.field is unknown (stats key, indicators.*, time.*, or position.* where allowed)'];
             }
             if (! array_key_exists('value', $rule)) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value is required'];
-            } elseif (! $isCrosses && ! in_array($op, ['between', 'in', 'not_in'], true) && (is_array($rule['value']) || is_object($rule['value']))) {
+            } elseif (! $isFieldRef && ! in_array($op, ['between', 'in', 'not_in'], true) && (is_array($value) || is_object($value))) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value must be a scalar or null'];
             }
+        }
+    }
+
+    /** True for `ind.obv` (or `ind.obv.value`) specifically — the one indicator whose raw level is not window-invariant. */
+    private static function isBareObvField(mixed $field): bool
+    {
+        if (! is_string($field)) {
+            return false;
+        }
+        try {
+            return IndicatorField::parse($field)?->name === 'obv';
+        } catch (\InvalidArgumentException) {
+            return false;
         }
     }
 
@@ -390,6 +423,13 @@ final class StrategySchemaValidator
         }
         if (str_starts_with($field, 'extra.indicators.')) {
             return in_array(substr($field, strlen('extra.indicators.')), self::INDICATORS, true);
+        }
+        if (str_starts_with($field, 'ind.')) {
+            try {
+                return IndicatorField::parse($field) !== null;
+            } catch (\InvalidArgumentException) {
+                return false;
+            }
         }
 
         return $allowPosition && in_array($field, self::POSITION_FIELDS, true);

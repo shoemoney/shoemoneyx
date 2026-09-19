@@ -1005,13 +1005,7 @@ class Backtester
     /** Case-insensitive match against Candle::DURATIONS's own keys ("1h" in a strategy's JSON is Candle::DURATIONS's "1H"). */
     private static function canonicalTf(string $tf): string
     {
-        foreach (array_keys(Candle::DURATIONS) as $canonical) {
-            if (strcasecmp($canonical, $tf) === 0) {
-                return $canonical;
-            }
-        }
-
-        return $tf;
+        return Candle::canonicalTimeframe($tf) ?? $tf;
     }
 
     /** Bars with $from <= start <= $to (binary-searched; bars are sorted). */
