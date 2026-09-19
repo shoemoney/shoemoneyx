@@ -857,6 +857,12 @@ class JsonPluginStrategy extends BaseDeskStrategy
             $stampedFill = $meta['v2']['last_trim_fill_price'] ?? null;
             $fillPrice = (is_numeric($stampedFill) && (float) $stampedFill > 0)
                 ? (float) $stampedFill : (float) $pending['price'];
+            // Consumed once, right here: left in place, a stamp from THIS rung's fill would still
+            // be sitting in meta the next time a DIFFERENT rung's pending gets reconciled (e.g.
+            // this rung's own fill was guarded out to a zero/missing stamp) and get inherited as
+            // that rung's sale price (round-4 review — proven: rung 1 recorded rung 0's 110.0
+            // instead of falling back to its own 120.0 target).
+            unset($meta['v2']['last_trim_fill_price']);
             $meta['v2']['ladder']['fired'][] = $idx;
             $meta['v2']['ladder']['sold'][$idx] = ['qty' => $actualQty, 'price' => $fillPrice];
         }
