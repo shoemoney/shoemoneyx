@@ -143,6 +143,14 @@ final class SchemaMigrator
      */
     public static function v1ToV2(array $definition): array
     {
+        // Idempotent on an already-v2 doc: v1ToV2() otherwise reads it as if every v2-only key
+        // (stop, take_profit.ladder shape, reentry, signals) were v1 and silently strips them
+        // while still producing something StrategySchemaValidator::validate() accepts (round-4
+        // review — proven: stop/take_profit/reentry/signals all dropped, still valid).
+        if (($definition['schema_version'] ?? null) === self::V2_VERSION) {
+            return $definition;
+        }
+
         $params = is_array($definition['params'] ?? null) ? $definition['params'] : [];
         $setup = is_array($definition['setup'] ?? null) ? $definition['setup'] : null;
         $trigger = is_array($definition['trigger'] ?? null) ? $definition['trigger'] : null;
@@ -216,13 +224,26 @@ final class SchemaMigrator
         $trailing = is_array($management['trailing'] ?? null) ? $management['trailing'] : null;
         $tpRules = is_array($exitTakeProfit['rules'] ?? null) ? $exitTakeProfit['rules'] : [];
         if ($partials !== [] || $trailing !== null || $tpRules !== []) {
+            // reset_on_add is always false here, even when `management.adds` is also present (an
+            // add changes v1's own `position.pnl_pct` trigger point for free, since it moves avg —
+            // effectively re-basing v1's partials on every add, closer to v2's reset_on_add: true).
+            // Flipping this to true would ALSO re-size every unfired rung's sell_pct_of_original
+            // off the post-add quantity, a second, bigger sizing change on top of the fraction-of-
+            // remaining conversion partialsToLadder() already only approximates (its own docblock,
+            // and docs/STRATEGY_SCHEMA_V2.md "Migration v1 → v2"). Left an explicit, documented gap
+            // rather than silently changed, since this migrator isn't wired into any live path yet
+            // (v1 runs byte-identical) and there is no fills-equivalence test to catch either choice
+            // being wrong.
             $takeProfit = ['from' => 'avg', 'reset_on_add' => false];
             if ($partials !== []) {
                 $takeProfit['ladder'] = self::partialsToLadder($partials);
             }
             if ($trailing !== null) {
                 $takeProfit['runner'] = ['ttp' => [
-                    'activate_pct' => $trailing['activate_pct'] ?? null,
+                    // v1 treats a missing activate_pct as 0 (trail from entry) — null here would
+                    // make StrategySchemaValidator require it when no ladder rung can supply a
+                    // default (checkTakeProfitV2()), rejecting a definition v1 accepted as-is.
+                    'activate_pct' => (float) ($trailing['activate_pct'] ?? 0),
                     'giveback_pct' => $trailing['trail_pct'] ?? null,
                 ]];
             }

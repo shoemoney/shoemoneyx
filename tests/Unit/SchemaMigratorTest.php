@@ -159,8 +159,37 @@ class SchemaMigratorTest extends TestCase
 
         $takeProfit = SchemaMigrator::v1ToV2($v1)['take_profit'];
 
-        $this->assertSame(3, $takeProfit['runner']['ttp']['activate_pct']);
+        $this->assertSame(3.0, $takeProfit['runner']['ttp']['activate_pct']);
         $this->assertSame(1, $takeProfit['runner']['ttp']['giveback_pct']);
+    }
+
+    /** v1 treats a missing trailing.activate_pct as 0 (trail from entry) — v1ToV2() must write that down explicitly, not null, or a ladder-less migration fails StrategySchemaValidator's v2 check requiring activate_pct when there is no last rung to default it to. */
+    #[Test]
+    public function v1_to_v2_defaults_a_missing_trailing_activate_pct_to_zero_not_null(): void
+    {
+        $v1 = [
+            'schema_version' => 1,
+            'key' => 'trailing-no-activate',
+            'meta' => ['name' => 'Trailing No Activate'],
+            'entry' => ['side' => 'long'],
+            'management' => ['trailing' => ['trail_pct' => 1]],
+        ];
+
+        $v2 = SchemaMigrator::v1ToV2($v1);
+
+        $this->assertSame(0.0, $v2['take_profit']['runner']['ttp']['activate_pct']);
+        $result = StrategySchemaValidator::validate($v2);
+        $this->assertTrue($result['valid'], json_encode($result['errors']));
+    }
+
+    #[Test]
+    public function v1_to_v2_is_idempotent_on_an_already_v2_definition(): void
+    {
+        $v2 = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
+
+        $twice = SchemaMigrator::v1ToV2($v2);
+
+        $this->assertSame($v2, $twice, 'v1ToV2() must pass an already-v2 definition through unchanged, not strip stop/take_profit/reentry/signals');
     }
 
     #[Test]

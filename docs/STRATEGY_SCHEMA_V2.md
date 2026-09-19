@@ -370,7 +370,10 @@ one exists. `meta.fees.taker_pct` is read now, in percent (0.6, not 0.006).
 
 ## Migration v1 → v2
 
-`SchemaMigrator::v1ToV2()`, applied on read so nothing is rewritten on disk:
+`SchemaMigrator::v1ToV2()` is available but not applied on read yet — `JsonPluginStrategy::migrate()`
+only maps a legacy (no `schema_version`) definition forward to v1; a v1 definition runs as v1,
+byte-identical, until `v1ToV2()` is wired into that path. It is idempotent on an already-v2
+definition (returns it unchanged) so wiring it in later is safe to do unconditionally:
 
 | v1 | v2 |
 |---|---|
@@ -398,6 +401,14 @@ the sizing conversion:
 - **Fill price and fee tier:** v1's `limitPrice` is `null` → a market fill at the taker rate; v2's
   ladder sends `limitPrice: $target` → a maker fill at the rung price when the bar trades through
   it (`Backtester.php`, the trim branch). Different price, different fee, on every rung.
+- **Adds re-basing the ladder:** when `management.adds` is present, every add moves v1's own avg
+  and so re-bases what `position.pnl_pct` measures against for free — effectively re-arming v1's
+  partials on every add, closer to v2's `reset_on_add: true`. `v1ToV2()` always emits
+  `reset_on_add: false` anyway, anchoring the v2 ladder to the quantity at the moment it first
+  armed rather than after a later add: flipping it to `true` would also re-size every unfired
+  rung's `sell_pct_of_original` off the post-add quantity, a second sizing change on top of the
+  fraction-of-remaining conversion above. Left an explicit, documented gap rather than silently
+  changed either way.
 
 Every v1 example in `resources/strategies/examples` is checked to round-trip through the migrator
 to a *valid* v2 definition (`SchemaMigratorTest::v1_to_v2_round_trips_every_shipped_v1_example_to_a_valid_v2_definition`).
