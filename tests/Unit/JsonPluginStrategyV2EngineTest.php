@@ -356,6 +356,16 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         // reached. It must still just hold.
         $d = $this->step($p, $ctx, 98.0);
         $this->assertFalse($d->shouldClose(), 'an empty ladder is not "exhausted" into an armed runner');
+
+        // Positive control (round-4 review, finding 7): this test is negative-only above and would
+        // stay green even if runnerTtpDecision() were stubbed to always return null. A genuine new
+        // high past activate_pct, then a giveback past giveback_pct, must still close via the
+        // runner — proving the runner CAN fire, not just that it doesn't fire prematurely.
+        $dNewHigh = $this->step($p, $ctx, 105.0);   // +5%, past activate_pct (2.0); still at the peak, no giveback yet
+        $this->assertFalse($dNewHigh->shouldClose());
+        $dClose = $this->step($p, $ctx, 103.0);     // gives back 2 points from the 5% peak -- past giveback_pct (1.0)
+        $this->assertTrue($dClose->shouldClose(), 'a genuine new high followed by a giveback past giveback_pct must close via the runner');
+        $this->assertSame('take_profit.runner.ttp', $dClose->ruleFired);
     }
 
     #[Test]
@@ -662,5 +672,16 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         // covers for the runner.
         $peakPct = JsonRuleEvaluator::value('position.peak_pct', $this->stats(96.0), $p, $ctx);
         $this->assertLessThan(0.0, $peakPct, 'position.peak_pct must read the rebased ladder peak, not the stale all-time high');
+
+        // Positive control (round-4 review, finding 7): everything above is negative-only and
+        // would stay green even if runnerTtpDecision() were stubbed to always return null. A
+        // genuine new high measured off the REBASED avg, then a giveback past giveback_pct, must
+        // still close via the runner — proving the rebase arms it correctly, not that it disables
+        // the runner outright.
+        $dNewHigh = $this->step($p, $ctx, $avgAfterAdd * 1.10);   // +10% off the rebased avg, past activate_pct (5.0)
+        $this->assertFalse($dNewHigh->shouldClose());
+        $dClose = $this->step($p, $ctx, $avgAfterAdd * 1.03);     // +3% off the rebased avg -- past giveback_pct (1.0) below the +10% peak
+        $this->assertTrue($dClose->shouldClose(), 'a genuine post-rearm high followed by a giveback past giveback_pct must close via the runner');
+        $this->assertSame('take_profit.runner.ttp', $dClose->ruleFired);
     }
 }
