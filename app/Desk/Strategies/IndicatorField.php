@@ -84,9 +84,13 @@ final class IndicatorField
         if (count($args) !== $spec['arity']) {
             throw new \InvalidArgumentException(sprintf('ind.%s takes %d argument(s), got %d', $name, $spec['arity'], count($args)));
         }
-        foreach ($spec['int_args'] as $i) {
-            if (! self::isPositiveWholeNumber($args[$i])) {
-                throw new \InvalidArgumentException(sprintf('ind.%s argument %d must be a positive whole number, got %s', $name, $i + 1, self::formatArg($args[$i])));
+        foreach ($args as $i => $arg) {
+            if (in_array($i, $spec['int_args'], true)) {
+                if (! self::isPositiveWholeNumber($arg)) {
+                    throw new \InvalidArgumentException(sprintf('ind.%s argument %d must be a positive whole number, got %s', $name, $i + 1, self::formatArg($arg)));
+                }
+            } elseif ($arg <= 0.0) {
+                throw new \InvalidArgumentException(sprintf('ind.%s argument %d must be a positive number, got %s', $name, $i + 1, self::formatArg($arg)));
             }
         }
 

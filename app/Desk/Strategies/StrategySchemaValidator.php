@@ -16,10 +16,8 @@ use App\Models\Candle;
  * v2 (see docs/STRATEGY_SCHEMA_V2.md): signals/entry/adds/take_profit/
  * reentry/stop/risk. `params` are substituted (ParamSubstitutor) before any
  * other check runs, so a rule value or formula `expr` written as `$name`
- * validates as its default. ind.* fields are checked against a private
- * parser table here — phase A is writing IndicatorField in parallel; once
- * merged, validateIndField() should defer to IndicatorField::parse()
- * instead of duplicating the grammar.
+ * validates as its default. ind.* fields are checked via IndicatorField::parse(),
+ * the same parser JsonRuleEvaluator uses at runtime.
  *
  * Distinct from JsonPluginValidator, which keeps validating the legacy flat
  * shape (scan/vet/size/risk) that plugins saved before this schema existed
@@ -62,24 +60,6 @@ final class StrategySchemaValidator
     private const CROSSES_OPS = ['crosses_above', 'crosses_below'];
 
     private const SIZING_MODES = ['pct_equity', 'usd', 'kelly', 'formula'];
-
-    /**
-     * Local parser table for `ind.<name>(<args>)[.<output>]`, matching the
-     * spec's indicator table. `bare` = the field is valid with no `.output`
-     * suffix (the "value" output). `arity` = required numeric argument count.
-     */
-    private const IND_TABLE = [
-        'rsi' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
-        'sma' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
-        'ema' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
-        'atr' => ['arity' => 1, 'bare' => true, 'outputs' => ['pct'], 'args' => ['period']],
-        'adx' => ['arity' => 1, 'bare' => true, 'outputs' => [], 'args' => ['period']],
-        'macd' => ['arity' => 3, 'bare' => false, 'outputs' => ['macd', 'signal', 'hist'], 'args' => ['period', 'period', 'period']],
-        'bb' => ['arity' => 2, 'bare' => false, 'outputs' => ['upper', 'lower', 'mid', 'pos'], 'args' => ['period', 'multiplier']],
-        'vwap' => ['arity' => 0, 'bare' => true, 'outputs' => [], 'args' => []],
-        'obv' => ['arity' => 0, 'bare' => true, 'outputs' => [], 'args' => []],
-        'smx' => ['arity' => 0, 'bare' => false, 'outputs' => ['wt1', 'wt2', 'wt_cross', 'rsi_mfi', 'buy', 'sell', 'gold_buy', 'div_bull', 'div_bear'], 'args' => []],
-    ];
 
     /** Lowercased; matched case-insensitively since meta.timeframe is written lowercase ("1h") while
      * CoinbaseMarketData::GRANULARITY_MAP keys are uppercase ("1H") — same set, both are seen. */
@@ -1115,56 +1095,19 @@ final class StrategySchemaValidator
             return in_array(substr($field, strlen('extra.indicators.')), self::INDICATORS, true) ? null : 'unknown v1 indicator alias';
         }
         if (str_starts_with($field, 'ind.')) {
-            return self::validateIndField(substr($field, strlen('ind.')));
+            return self::validateIndField($field);
         }
 
         return 'field is unknown (stats key, ind.*, indicators.*, time.*, or position.* where allowed)';
     }
 
-    /**
-     * Parses `<name>(<args>)[.<output>]` (the part after `ind.`) against
-     * IND_TABLE. NOTE: once phase A's IndicatorField lands, this should
-     * delegate to IndicatorField::parse() instead of its own regex table.
-     */
-    private static function validateIndField(string $rest): ?string
+    /** Delegates `ind.<name>(<args>)[.<output>]` grammar and arity/output checks to IndicatorField, the same parser JsonRuleEvaluator uses at runtime, so save-time validation and evaluation never drift apart. */
+    private static function validateIndField(string $field): ?string
     {
-        if (! preg_match('/^([a-z_]+)(?:\(([^()]*)\))?(?:\.([a-z_]+))?$/', $rest, $m)) {
-            return "malformed ind.* field \"ind.{$rest}\"";
-        }
-        $name = $m[1];
-        $argsStr = $m[2] ?? null;
-        $output = $m[3] ?? null;
-        if (! isset(self::IND_TABLE[$name])) {
-            return "unknown indicator \"ind.{$name}\"";
-        }
-        $spec = self::IND_TABLE[$name];
-        if ($spec['arity'] > 0) {
-            if ($argsStr === null || trim($argsStr) === '') {
-                return "ind.{$name} requires {$spec['arity']} argument(s)";
-            }
-            $args = array_map('trim', explode(',', $argsStr));
-            if (count($args) !== $spec['arity']) {
-                return "ind.{$name} takes {$spec['arity']} argument(s), got ".count($args);
-            }
-            foreach ($args as $i => $a) {
-                $role = $spec['args'][$i] ?? 'period';
-                if ($role === 'multiplier') {
-                    if (! preg_match('/^\d+(\.\d+)?$/', $a) || (float) $a <= 0) {
-                        return "ind.{$name} multiplier arguments must be a positive number";
-                    }
-                } elseif (! preg_match('/^\d+$/', $a) || (int) $a < 2) {
-                    return "ind.{$name} period arguments must be integers >= 2";
-                }
-            }
-        } elseif ($argsStr !== null && trim($argsStr) !== '') {
-            return "ind.{$name} takes no arguments";
-        }
-        if ($output === null || $output === '') {
-            if (! $spec['bare']) {
-                return "ind.{$name} requires an output, one of: .".implode(', .', $spec['outputs']);
-            }
-        } elseif (! in_array($output, $spec['outputs'], true)) {
-            return "unknown output \".{$output}\" for ind.{$name}";
+        try {
+            IndicatorField::parse($field);
+        } catch (\InvalidArgumentException $e) {
+            return $e->getMessage();
         }
 
         return null;
