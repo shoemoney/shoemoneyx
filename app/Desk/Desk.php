@@ -689,51 +689,63 @@ class Desk
         }
 
         foreach ($this->openPositions($executor->mode()) as $p) {
-            $ctx = $this->context($strategy, false, $executor->mode());
-            $stats = $this->statsWithRetries($p->product_id, (int) $ctx->param('risk.stale_data_retries', 2));
-
-            if ($stats === null) {
-                $decision = RiskDecision::close('unmeasurable', null, null, null, 'no answer after retries — a position you cannot measure is a position you do not hold');
-            } else {
-                $p->markPrice($stats->price);
-                $decision = $strategy->risk($p, $stats, $ctx);
-                $p->save();
-            }
-
-            $price = $stats?->price ?? (float) ($p->last_price ?? $p->entry_price);
-            if ($executor instanceof PaperExecutor && Perps::enabled()) {
-                $this->accrueFunding($p, $price);
-            }
-            RiskCheck::create([
-                'position_id' => $p->id,
-                'action' => $decision->action,
-                'rule_fired' => $decision->ruleFired,
-                'volume_6h' => $decision->volume6h,
-                'avg_6h' => $decision->avg6h,
-                'ratio' => $decision->ratio,
-                'price' => $price,
-                'pnl_usd' => $p->unrealisedPnl($price),
-                'pnl_pct' => $p->unrealisedPnlPct($price),
-                'held_minutes' => $p->heldMinutes(),
-                'meta' => ['why' => $decision->why] + $decision->meta,
-            ]);
-
             try {
-                if ($decision->shouldClose()) {
-                    $this->close($p, $decision->ruleFired ?? 'risk', $price, $executor);
-                } elseif ($decision->shouldTrim()) {
-                    $this->trim($p, $decision->fraction, $decision->ruleFired ?? 'trim', $price, $executor, $decision->limitPrice);
-                } elseif ($decision->shouldAdd()) {
-                    $this->addFromRisk($p, $decision, $ctx, $executor);
-                }
-            } catch (LockTimeoutException $e) {
-                // A close/trim's mutate lock is held by someone else (a concurrent API close/trim, or a
-                // slow exchange call) — this position gets another chance next sweep; the ones after it
-                // in this loop must not go unmanaged because of it.
-                $this->reporter->warn('RISK', "{$p->product_id}: mutate lock timed out on {$decision->action}, will retry next sweep");
-            }
+                $ctx = $this->context($strategy, false, $executor->mode());
+                $stats = $this->statsWithRetries($p->product_id, (int) $ctx->param('risk.stale_data_retries', 2));
 
-            $out[] = ['position' => $p->product_id, 'action' => $decision->action, 'rule' => $decision->ruleFired];
+                if ($stats === null) {
+                    $decision = RiskDecision::close('unmeasurable', null, null, null, 'no answer after retries — a position you cannot measure is a position you do not hold');
+                } else {
+                    $p->markPrice($stats->price);
+                    $decision = $strategy->risk($p, $stats, $ctx);
+                    $p->save();
+                }
+
+                $price = $stats?->price ?? (float) ($p->last_price ?? $p->entry_price);
+                if ($executor instanceof PaperExecutor && Perps::enabled()) {
+                    $this->accrueFunding($p, $price);
+                }
+                RiskCheck::create([
+                    'position_id' => $p->id,
+                    'action' => $decision->action,
+                    'rule_fired' => $decision->ruleFired,
+                    'volume_6h' => $decision->volume6h,
+                    'avg_6h' => $decision->avg6h,
+                    'ratio' => $decision->ratio,
+                    'price' => $price,
+                    'pnl_usd' => $p->unrealisedPnl($price),
+                    'pnl_pct' => $p->unrealisedPnlPct($price),
+                    'held_minutes' => $p->heldMinutes(),
+                    'meta' => ['why' => $decision->why] + $decision->meta,
+                ]);
+
+                try {
+                    if ($decision->shouldClose()) {
+                        $this->close($p, $decision->ruleFired ?? 'risk', $price, $executor);
+                    } elseif ($decision->shouldTrim()) {
+                        $this->trim($p, $decision->fraction, $decision->ruleFired ?? 'trim', $price, $executor, $decision->limitPrice);
+                    } elseif ($decision->shouldAdd()) {
+                        $this->addFromRisk($p, $decision, $ctx, $executor);
+                    }
+                } catch (LockTimeoutException $e) {
+                    // A close/trim's mutate lock is held by someone else (a concurrent API close/trim, or a
+                    // slow exchange call) — this position gets another chance next sweep; the ones after it
+                    // in this loop must not go unmanaged because of it.
+                    $this->reporter->warn('RISK', "{$p->product_id}: mutate lock timed out on {$decision->action}, will retry next sweep");
+                }
+
+                $out[] = ['position' => $p->product_id, 'action' => $decision->action, 'rule' => $decision->ruleFired];
+            } catch (\Throwable $e) {
+                // Any unhandled failure evaluating ONE position (a strategy bug, a malformed stored
+                // definition reaching an unguarded runtime path, a division by zero) must not starve
+                // every position after it in the sweep — round-6 review, blockers 2 and 3 both proved
+                // a live way to trigger this from stored data the schema validator waved through.
+                $this->reporter->error('RISK', "{$p->product_id}: risk evaluation failed, skipping this position: ".$e->getMessage());
+                report($e);
+                $out[] = ['position' => $p->product_id, 'action' => 'error', 'rule' => null];
+
+                continue;
+            }
         }
 
         $this->notifyOnBigMove($executor);
