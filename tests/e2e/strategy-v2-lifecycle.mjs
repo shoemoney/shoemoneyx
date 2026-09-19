@@ -14,6 +14,15 @@
 // Needs a Playwright install: `npm i -D playwright && npx playwright install chromium`, or point
 // PLAYWRIGHT_PATH at an existing node_modules/playwright (a global install works fine). Exit 0
 // only when every assertion held.
+//
+// Perps sizing is part of THIS journey's contract, not ambient .env state: right after login the
+// journey PUTs perps.whole_contracts=false through /api/settings, regardless of what DESK_PERPS /
+// DESK_PERPS_WHOLE_CONTRACTS the desk booted with. Without it, a desk with the config default
+// whole_contracts=true (app/Desk/Backtester.php's Lot sizing is intentionally independent of
+// Perps::enabled() — several unit tests flip whole_contracts alone, so gating it there would
+// regress them) rejects every candidate as under_one_contract (5% of $1000 never reaches one
+// BTC-USD nano contract), and both the strict and relaxed strategy produce zero trades. No .env
+// lines are required for this journey to pass on a fresh worktree.
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -55,6 +64,20 @@ async function json(ctx, url, opts = {}) {
   return { status: r.status(), body };
 }
 function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
+
+/**
+ * The required outcome for this journey's subject (the schema-v2 take_profit/stop lifecycle):
+ * some trade must actually carry a take_profit./stop. rule with sane, non-placeholder numeric
+ * literals. Shared by the primary (trades1 > 0) and fallback (relaxed) paths so the assertion
+ * runs on every green pass instead of being dead code on the branch that normally executes.
+ */
+function assertTradeContent(label, trades) {
+  check(`[${label}] backtest produced trades (trades > 0)`, trades.length > 0, `trades=${trades.length}`);
+  const ruleHit = trades.find((t) => typeof t?.rule === 'string' && (t.rule.startsWith('take_profit.') || t.rule.startsWith('stop.')));
+  check(`[${label}] a trade's rule starts with 'take_profit.' or 'stop.'`, !!ruleHit, JSON.stringify(trades.map((t) => t.rule).slice(0, 10)));
+  const sane = trades.find((t) => Number(t?.entry) > 0 && Number(t?.exit) > 0 && Number.isFinite(Number(t?.pnl_pct)));
+  check(`[${label}] a trade has sane numeric literals (entry > 0, exit > 0, finite pnl_pct)`, !!sane, JSON.stringify({ entry: sane?.entry, exit: sane?.exit, pnl_pct: sane?.pnl_pct }));
+}
 
 async function pollBacktest(ctx, id, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -206,13 +229,19 @@ async function runLifecycle(fresh, p2, def, label) {
 try {
   const { fresh, p2 } = await onboardAndLogin();
 
+  // Precondition: force fractional (non-whole-contract) paper sizing so a $1000 backtest can
+  // actually fill BTC-USD, regardless of what DESK_PERPS/DESK_PERPS_WHOLE_CONTRACTS the desk
+  // booted with. See the file header for why this is part of the journey's contract.
+  const perpsOverride = await json(fresh, '/api/settings', { method: 'PUT', data: { key: 'perps.whole_contracts', value: false } });
+  check('desk settings: perps.whole_contracts forced to false for this backtest', perpsOverride.status === 200 && perpsOverride.body?.ok === true, JSON.stringify(perpsOverride.body));
+
   // ---- Original schema-v2 fixture -----------------------------------------------------------
   const original = await runLifecycle(fresh, p2, originalDef, 'original');
   const bt1 = original.backtest;
   const trades1 = Array.isArray(bt1?.trades) ? bt1.trades : [];
 
   if (trades1.length > 0) {
-    check('original strategy backtest produced trades (trades > 0)', true, `trades=${trades1.length}`);
+    assertTradeContent('original', trades1);
   } else {
     // The strict momentum gate (2%/24h + 1.5x volume surge, same bar) may legitimately never fire
     // against a short seeded tape — that is not a bug in the backtest, so fall back to asserting
@@ -224,9 +253,7 @@ try {
     const relaxed = await runLifecycle(fresh, p2, relaxedDef, 'relaxed');
     const bt2 = relaxed.backtest;
     const trades2 = Array.isArray(bt2?.trades) ? bt2.trades : [];
-    check('relaxed-momentum strategy backtest produced trades (trades > 0)', trades2.length > 0, `trades=${trades2.length}`);
-    const ruleHit = trades2.find((t) => typeof t?.rule === 'string' && (t.rule.startsWith('take_profit.') || t.rule.startsWith('stop.')));
-    check("relaxed backtest has a trade whose rule starts with 'take_profit.' or 'stop.'", !!ruleHit, JSON.stringify(trades2.map((t) => t.rule).slice(0, 10)));
+    assertTradeContent('relaxed', trades2);
   }
 
   await shot(p2, '99-final');
