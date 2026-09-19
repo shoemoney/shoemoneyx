@@ -179,4 +179,54 @@ class IndicatorCacheTest extends TestCase
         $second = IndicatorCache::current($ctxAt($now + 1800 + 5), 'SOL-USD', '1H', $field)['value'];
         $this->assertSame($first, $second, 'identical bars in the same bucket must hit, not recompute');
     }
+
+    /**
+     * Round-5 review, IMPORTANT 3: the fingerprint added in round 4 covered only
+     * start|close|volume — atr/adx read high and low directly (and smx folds them into its own
+     * series), so a correction that touches ONLY high/low left those indicators pinned to the
+     * bucket's first read (reproduced: ATR pinned at 2.2079 vs a true 680.6 after a high
+     * correction). Now start|open|high|low|close|volume.
+     */
+    #[Test]
+    public function a_high_low_only_correction_recomputes_atr_instead_of_staying_pinned(): void
+    {
+        $mk = function (float $base, int $dur): \Closure {
+            return function (int $now) use ($base, $dur): array {
+                $bars = [];
+                for ($i = 450; $i >= 0; $i--) {
+                    $s = $now - $i * $dur;
+                    $c = $base + ($i % 7) * 0.5;
+                    $bars[] = ['start' => $s, 'open' => $c, 'high' => $c + 1, 'low' => $c - 1, 'close' => $c, 'volume' => 10.0];
+                }
+
+                return $bars;
+            };
+        };
+        $data = $mk(500.0, 3600);
+        $atr = IndicatorField::parse('ind.atr(14)');
+        $now = 1_700_000_000 - (1_700_000_000 % 3600) + 5;
+
+        $ctxAt = function (int $ts, array $mutateClosed = []) use ($data): DeskContext {
+            $provider = function (string $pid, string $tf, int $from, int $to) use ($data, $mutateClosed): array {
+                $bars = $data($to);
+                $n = count($bars);
+                foreach ($mutateClosed as $k => $v) {
+                    $bars[$n - 2][$k] = $v; // the last CLOSED bar; the very last is still in-progress and excluded by fetchBars()
+                }
+
+                return $bars;
+            };
+
+            return new DeskContext([], 'live', false, [], new \DateTimeImmutable('@'.$ts), false, $provider);
+        };
+
+        IndicatorCache::forgetAll();
+        $first = IndicatorCache::current($ctxAt($now, ['high' => 501.0]), 'SOL-USD', '1H', $atr)['value'];
+        $sameBucketAfterCorrection = IndicatorCache::current($ctxAt($now + 1800, ['high' => 9999.0]), 'SOL-USD', '1H', $atr)['value'];
+        IndicatorCache::forgetAll();
+        $truth = IndicatorCache::current($ctxAt($now + 1800, ['high' => 9999.0]), 'SOL-USD', '1H', $atr)['value'];
+
+        $this->assertNotEqualsWithDelta($truth, $first, 0.01, 'the low-high read must differ from truth, or this test proves nothing');
+        $this->assertEqualsWithDelta($truth, $sameBucketAfterCorrection, 1e-9, 'a high-only correction in the same bucket must recompute, not stay pinned to the first read');
+    }
 }

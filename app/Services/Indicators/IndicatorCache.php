@@ -110,7 +110,11 @@ final class IndicatorCache
         }
         $last = end($bars);
 
-        return $last['start'].'|'.$last['close'].'|'.$last['volume'];
+        // start|open|high|low|close|volume: atr/adx read high and low directly, and smx folds them
+        // into its own series — a correction that only touches high/low (the close/volume-only
+        // fingerprint round-4 shipped) left those indicators pinned to the bucket's first read
+        // (round-5 review, reproduced: ATR pinned at 2.2079 vs a true 680.6 after a high correction).
+        return $last['start'].'|'.$last['open'].'|'.$last['high'].'|'.$last['low'].'|'.$last['close'].'|'.$last['volume'];
     }
 
     /** @return array<int, array{start:int,open:float,high:float,low:float,close:float,volume:float}> */
