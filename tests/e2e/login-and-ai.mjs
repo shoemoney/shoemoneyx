@@ -189,22 +189,14 @@ try {
   check('agent conversation persisted (GET by the id the page created is 200)', convStatus === 200, `id=${convId} status=${convStatus}`);
   await shot(p2, '08-agent-chat');
 
-  // ---- 4. Chart page: TradingView's own datafeed must carry the token ------------------------
+  // ---- 4. Chart page: lightweight-charts' history/marks fetches must carry the token ---------
   const udf = [];
   p2.on('response', (r) => { if (r.url().includes('/api/udf/')) udf.push({ path: new URL(r.url()).pathname, status: r.status() }); });
   await p2.goto(BASE + '/chart/BTC-USD', { waitUntil: 'networkidle' });
-  // The TradingView Charting Library is licensed and gitignored, so a desk built from the repo
-  // alone (the AMI included) has no window.TradingView. Only a desk with the library dropped into
-  // public/charting_library exercises the UDF datafeed; elsewhere the checks are recorded as skipped.
-  const hasTv = await p2.evaluate(() => !!(window.TradingView && window.Datafeeds));
-  if (hasTv) {
-    await p2.waitForFunction(() => performance.getEntriesByType('resource').some(e => e.name.includes('/api/udf/config')), null, { timeout: 30000 }).catch(() => {});
-    const cfg = udf.find(u => u.path.endsWith('/api/udf/config'));
-    check('chart datafeed fetched /api/udf/config with 200', cfg?.status === 200, JSON.stringify(udf.slice(0, 6)));
-    check('no /api/udf request was rejected with 401', udf.length > 0 && udf.every(u => u.status !== 401), `${udf.length} udf responses`);
-  } else {
-    check('chart datafeed checks skipped: TradingView library not installed on this desk', true, 'expected on the AMI');
-  }
+  await p2.waitForFunction(() => performance.getEntriesByType('resource').some(e => e.name.includes('/api/udf/history')), null, { timeout: 30000 }).catch(() => {});
+  const history = udf.find(u => u.path.endsWith('/api/udf/history'));
+  check('chart fetched /api/udf/history with 200', history?.status === 200, JSON.stringify(udf.slice(0, 6)));
+  check('no /api/udf request was rejected with 401', udf.length > 0 && udf.every(u => u.status !== 401), `${udf.length} udf responses`);
   await shot(p2, '09-chart');
   await fresh.close();
 } catch (e) {

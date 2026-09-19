@@ -1,8 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from "vue";
+import { createChart, CandlestickSeries, HistogramSeries, CrosshairMode, createSeriesMarkers } from "lightweight-charts";
 import { deskHeaders } from '../api.js';
 import { useRouter, useRoute } from "vue-router";
 import { api, fmt } from "../api";
+import { mapUdfHistory, mapUdfMarks } from "../components/chart/udfMapping";
 import Pnl from "../components/Pnl.vue";
 import SmxPanel from "../components/SmxPanel.vue";
 import ChartMarketDeck from "../components/chart/ChartMarketDeck.vue";
@@ -20,15 +22,13 @@ const interval = ref("1");
 const position = ref(null);
 const candidates = ref([]);
 const error = ref("");
-// True when the page loaded but public/charting_library is empty (every AMI/marketplace desk —
-// the library is licensed and cannot be redistributed). Gets its own honest notice, not the
-// generic "refresh to try again" error, because refreshing never fixes it.
-const libraryMissing = ref(false);
+const loading = ref(true);
 const positionState = ref("loading");
 const decisionState = ref("loading");
 const range = ref(null);
 const root = ref(null), guardian = ref(null), quote = ref(null), effects = ref(true), focused = ref(false);
 const hidden = ref(document.hidden), reduced = ref(false);
+const chartContainer = ref(null);
 const effectsActive = computed(() => effects.value && !hidden.value && !reduced.value);
 let motionPreference;
 function visibility() { hidden.value = document.hidden; }
@@ -41,82 +41,17 @@ function toggleFocus() {
 let alive = true;
 let sideRequest = 0;
 const TF_MAP = { '15S': '15s', '1': '1m', '5': '5m' };
-let widget = null;
-let widgetReady = false;
-let mountedSeries = '';
-let applyingSeries = null;
-let chartApi = null;
-let volumeTask = null;
-let cursorPixel = null;
+const SPAN_SECONDS = { '15S': 15, '1': 60, '5': 300 };
+const BAR_WINDOW = 1500;
+let chart = null;
+let candleSeries = null;
+let volumeSeries = null;
+let markers = null;
+let seriesRequest = 0;
+let renderedSeries = '';
+let lastBarTime = null;
+let pollTimer = null;
 const chartSubscriptions = [];
-
-function historyError(reason) {
-    if (typeof reason === 'string' && reason) return reason;
-    if (typeof reason?.message === 'string' && reason.message) return reason.message;
-    if (typeof reason?.errmsg === 'string' && reason.errmsg) return reason.errmsg;
-    return 'Market history is temporarily unavailable.';
-}
-// TradingView's stock UDF bundle builds its own Requester and fetches /config inside the
-// constructor, so there is no hook to hand it X-Desk-Token. Behind a master password every
-// chart request would 401. This wraps window.fetch once, for same-origin /api/udf/ URLs only.
-function installUdfTokenShim() {
-    if (window.__smxUdfTokenShim) return;
-    const nativeFetch = window.fetch.bind(window);
-    window.fetch = (input, init) => {
-        const url = typeof input === 'string' ? input : input?.url || '';
-        if (!url.startsWith('/api/udf/')) return nativeFetch(input, init);
-        const headers = deskHeaders(init?.headers || {});
-        return nativeFetch(input, { ...(init || {}), headers });
-    };
-    window.__smxUdfTokenShim = true;
-}
-
-function createHistoryFeed() {
-    installUdfTokenShim();
-    const feed = new window.Datafeeds.UDFCompatibleDatafeed('/api/udf', 15000);
-    const getBars = feed.getBars.bind(feed);
-    // The bundled UDF adapter forwards rejected Error/undefined values directly.
-    // TradingView's declared ErrorCallback requires a string (its study UI splits it).
-    feed.getBars = (info, resolution, from, to, onResult, onError, first) => getBars(
-        info, resolution, from, to,
-        (bars, meta) => { if (alive) onResult(bars, meta); },
-        (reason) => { if (alive) onError(historyError(reason)); }, first,
-    );
-    // ?backtest=N draws that backtest's simulated fills as B/S marks (strategy builder results).
-    const backtestId = route.query.backtest;
-    if (backtestId) {
-        feed.getMarks = (symbolInfo, from, to, onDataCallback) => {
-            const ticker = (symbolInfo.ticker || symbolInfo.name || '').replace(/^COINBASE:/, '');
-            fetch(`/api/udf/marks?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&backtest_id=${encodeURIComponent(backtestId)}`, { headers: deskHeaders() })
-                .then((r) => r.json()).then((marks) => { if (alive) onDataCallback(marks); }).catch(() => onDataCallback([]));
-        };
-    }
-    return feed;
-}
-function removeVolumeStudy() {
-    if (!chartApi) return;
-    for (const study of chartApi.getAllStudies()) {
-        if (study.name === 'Volume') chartApi.removeEntity(study.id);
-    }
-}
-function ensureMinuteVolume() {
-    if (!alive || !chartApi || applyingSeries || volumeTask || interval.value === '15S') return;
-    if (chartApi.getAllStudies().some((study) => study.name === 'Volume')) return;
-    const owner = chartApi;
-    try {
-        const task = Promise.resolve(owner.createStudy('Volume', false));
-        volumeTask = task;
-        task.then((id) => {
-            if (alive && chartApi === owner && interval.value === '15S' && id !== null) owner.removeEntity(id);
-        }).catch(() => {
-            // Candles and their underlying volume remain usable if the optional study fails.
-        }).finally(() => {
-            if (volumeTask !== task) return;
-            volumeTask = null;
-            if (alive) updateChart();
-        });
-    } catch {}
-}
 
 function seriesKey(product, resolution) {
     return String(product).replace(/^(?:COINBASE|DEMO):/i, '').toUpperCase() + ':' + resolution;
@@ -124,67 +59,142 @@ function seriesKey(product, resolution) {
 function selectedSeries() {
     return seriesKey(symbol.value, interval.value);
 }
-function pushRange() {
-    if (!alive || !chartApi || applyingSeries || mountedSeries !== selectedSeries()) return;
-    try {
-        // Range events can arrive while TradingView is replacing its main series.
-        if (seriesKey(chartApi.symbol(), chartApi.resolution()) !== selectedSeries()) return;
-        const currentRange = chartApi.getVisibleRange();
-        if (Number.isFinite(currentRange?.from) && Number.isFinite(currentRange?.to) && currentRange.to > currentRange.from) {
-            range.value = { from: currentRange.from, to: currentRange.to };
-        }
-    } catch {}
+
+async function fetchHistory(sym, resolution, from, to) {
+    const params = new URLSearchParams({ symbol: sym, resolution, from: String(from), to: String(to), countback: String(BAR_WINDOW) });
+    const response = await fetch(`/api/udf/history?${params}`, { headers: deskHeaders() });
+    if (!response.ok) throw new Error('Market history is temporarily unavailable.');
+    return response.json();
+}
+async function fetchMarks(sym, from, to) {
+    const params = new URLSearchParams({ symbol: sym, from: String(from), to: String(to) });
+    const backtestId = route.query.backtest;
+    if (backtestId) params.set('backtest_id', String(backtestId));
+    const response = await fetch(`/api/udf/marks?${params}`, { headers: deskHeaders() });
+    if (!response.ok) return null;
+    return response.json();
 }
 
-function trackCursor(event) {
-    if (!alive || !chartApi || applyingSeries || mountedSeries !== selectedSeries() || !effectsActive.value) return;
+async function loadMarks(id, sym, from, to) {
     try {
-        const pane = chartApi.getPanes()?.find(pane => pane.hasMainSeries());
-        const scale = pane?.getMainSourcePriceScale();
-        const target = cursorTarget(event, chartApi.getVisibleRange(), scale?.getVisiblePriceRange(), scale?.isInverted());
-        if (target) guardian.value?.aim({ ...target, ...cursorPixel, paneHeight: pane?.getHeight() });
+        const payload = await fetchMarks(sym, from, to);
+        if (!alive || id !== seriesRequest || !markers) return;
+        markers.setMarkers(mapUdfMarks(payload));
+    } catch {
+        // Marks are a supplement to the candles; a failed fetch leaves the chart usable.
+    }
+}
+
+function pushRange(visible) {
+    if (!alive || !visible || renderedSeries !== selectedSeries()) return;
+    if (Number.isFinite(visible.from) && Number.isFinite(visible.to) && visible.to > visible.from) {
+        range.value = { from: visible.from, to: visible.to };
+    }
+}
+
+function trackCursor(param) {
+    if (!alive || !chart || !candleSeries || renderedSeries !== selectedSeries() || !effectsActive.value) {
+        guardian.value?.leave();
+        return;
+    }
+    try {
+        if (!param.point || param.time === undefined) { guardian.value?.leave(); return; }
+        const price = candleSeries.coordinateToPrice(param.point.y);
+        if (price === null) { guardian.value?.leave(); return; }
+        const timeRange = chart.timeScale().getVisibleRange();
+        const priceRange = chart.priceScale('right').getVisibleRange();
+        const target = cursorTarget({ time: param.time, price }, timeRange, priceRange, false);
+        if (target) guardian.value?.aim({ ...target, pixelX: param.point.x, pixelY: param.point.y, paneHeight: chartContainer.value?.clientHeight });
         else guardian.value?.leave();
     } catch { guardian.value?.leave(); }
 }
 
-function updateChart() {
-    if (!alive || !widgetReady || !widget) return;
-    const series = selectedSeries();
-    if (series !== mountedSeries) range.value = null;
-    // Keep one widget operation in flight and coalesce rapid choices to the latest.
-    if (applyingSeries || volumeTask) return;
-    if (series === mountedSeries) return;
-    const owner = widget;
-    const request = { series, symbol: symbol.value, interval: interval.value };
-    applyingSeries = request;
+async function loadSeries() {
+    if (!alive || !candleSeries) return;
+    const key = selectedSeries();
+    const id = ++seriesRequest;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    range.value = null;
+    error.value = '';
+    loading.value = true;
+    const requestedSymbol = symbol.value, requestedInterval = interval.value;
+    const to = Math.floor(Date.now() / 1000);
+    const from = to - BAR_WINDOW * (SPAN_SECONDS[requestedInterval] || 60);
     try {
-        // This bundled chart engine cannot calculate the built-in Volume study
-        // on second bars. Keep raw bar volume; restore its study on minute views.
-        if (request.interval === '15S') removeVolumeStudy();
-        owner.setSymbol(request.symbol, request.interval, () => {
-            if (!alive || widget !== owner || applyingSeries !== request) return;
-            applyingSeries = null;
-            try {
-                mountedSeries = seriesKey(chartApi.symbol(), chartApi.resolution());
-                if (selectedSeries() !== request.series) {
-                    updateChart();
-                    pushRange();
-                } else if (mountedSeries !== request.series) {
-                    // A rejected/unknown series must not create an endless retry loop.
-                    error.value = 'The chart could not load the selected market and timeframe.';
-                } else {
-                    pushRange();
-                    ensureMinuteVolume();
-                }
-            } catch (e) {
-                error.value = e.message || 'The chart could not switch markets.';
-            }
-        });
+        const payload = await fetchHistory(requestedSymbol, requestedInterval, from, to);
+        if (!alive || id !== seriesRequest) return;
+        const { candles, volumes } = mapUdfHistory(payload);
+        candleSeries.setData(candles);
+        volumeSeries.setData(volumes);
+        renderedSeries = key;
+        lastBarTime = candles.at(-1)?.time ?? null;
+        loading.value = false;
+        pushRange(chart?.timeScale().getVisibleRange());
+        loadMarks(id, requestedSymbol, from, to);
+        pollTimer = setInterval(() => refreshLatest(id, requestedSymbol, requestedInterval), 15000);
     } catch (e) {
-        if (!alive || widget !== owner || applyingSeries !== request) return;
-        applyingSeries = null;
-        error.value = e.message || 'The chart could not switch markets.';
+        if (!alive || id !== seriesRequest) return;
+        loading.value = false;
+        error.value = e.message || 'The chart could not load the selected market and timeframe.';
     }
+}
+
+async function refreshLatest(id, requestedSymbol, requestedInterval) {
+    if (!alive || id !== seriesRequest || !candleSeries) return;
+    const to = Math.floor(Date.now() / 1000);
+    const from = (lastBarTime ?? to) - SPAN_SECONDS[requestedInterval] * 2;
+    try {
+        const payload = await fetchHistory(requestedSymbol, requestedInterval, from, to);
+        if (!alive || id !== seriesRequest) return;
+        const { candles, volumes } = mapUdfHistory(payload);
+        for (let i = 0; i < candles.length; i++) {
+            if (candles[i].time < (lastBarTime ?? -Infinity)) continue;
+            candleSeries.update(candles[i]);
+            volumeSeries.update(volumes[i]);
+            lastBarTime = candles[i].time;
+        }
+        loadMarks(id, requestedSymbol, from, to);
+    } catch {
+        // A missed poll tick just waits for the next one; it never surfaces as a page error.
+    }
+}
+
+function chartOptions() {
+    return {
+        autoSize: true,
+        layout: { background: { color: '#09090b' }, textColor: '#a1a1aa', fontSize: 12 },
+        grid: { vertLines: { color: '#27272a' }, horzLines: { color: '#27272a' } },
+        crosshair: {
+            mode: CrosshairMode.Normal,
+            vertLine: { color: '#f59e0b', labelBackgroundColor: '#f59e0b' },
+            horzLine: { color: '#f59e0b', labelBackgroundColor: '#f59e0b' },
+        },
+        rightPriceScale: { borderColor: '#27272a' },
+        timeScale: { borderColor: '#27272a', timeVisible: true, secondsVisible: interval.value === '15S' },
+    };
+}
+
+function mount() {
+    if (!alive || chart) return;
+    try {
+        chart = createChart(chartContainer.value, chartOptions());
+        candleSeries = chart.addSeries(CandlestickSeries, {
+            upColor: '#22c55e', downColor: '#ef4444',
+            borderUpColor: '#22c55e', borderDownColor: '#ef4444',
+            wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+        });
+        volumeSeries = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'volume' });
+        volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        markers = createSeriesMarkers(candleSeries, []);
+        chart.subscribeCrosshairMove(trackCursor);
+        chart.timeScale().subscribeVisibleTimeRangeChange(pushRange);
+        chartSubscriptions.push(() => chart.unsubscribeCrosshairMove(trackCursor));
+        chartSubscriptions.push(() => chart.timeScale().unsubscribeVisibleTimeRangeChange(pushRange));
+    } catch (e) {
+        error.value = e.message || 'The chart could not initialize.';
+        return;
+    }
+    loadSeries();
 }
 
 async function loadSide() {
@@ -222,103 +232,6 @@ async function loadSide() {
     }
 }
 
-function mount() {
-    if (!alive || widget) return;
-    if (!window.TradingView || !window.Datafeeds) {
-        libraryMissing.value = true;
-        return;
-    }
-    mountedSeries = selectedSeries();
-    try {
-    widget = new window.TradingView.widget({
-        symbol: symbol.value,
-        interval: interval.value,
-        container_id: "tv_chart",
-        datafeed: createHistoryFeed(),
-        library_path: "/charting_library/",
-        locale: "en",
-        theme: "Dark",
-        autosize: true,
-        timezone: "Etc/UTC",
-        enabled_features: ["seconds_resolution"],
-        time_frames: [],
-        loading_screen: { backgroundColor: "#000000", foregroundColor: "#59bfff" },
-        disabled_features: [
-            "use_localstorage_for_settings",
-            "header_symbol_search",
-            "header_compare",
-            "timeframes_toolbar",
-            "create_volume_indicator_by_default",
-        ],
-        overrides: {
-            "paneProperties.background": "#000000",
-            "paneProperties.vertGridProperties.color": "#102331",
-            "paneProperties.horzGridProperties.color": "#102331",
-            "scalesProperties.textColor": "#b4cee0",
-            "scalesProperties.fontSize": 14,
-            "mainSeriesProperties.candleStyle.upColor": "#59d5ff",
-            "mainSeriesProperties.candleStyle.downColor": "#c887ee",
-            "mainSeriesProperties.candleStyle.borderUpColor": "#80e5ff",
-            "mainSeriesProperties.candleStyle.borderDownColor": "#db9cfa",
-            "mainSeriesProperties.candleStyle.wickUpColor": "#59d5ff",
-            "mainSeriesProperties.candleStyle.wickDownColor": "#c887ee",
-        },
-        studies_overrides: {},
-    });
-    } catch (e) {
-        error.value = e.message || 'The chart could not initialize.';
-        return;
-    }
-    const owner = widget;
-    range.value = null;
-    widget.onChartReady?.(() => {
-        if (!alive || widget !== owner) return;
-        try {
-            chartApi = owner.chart();
-            // Use visible pointer coordinates for exact alignment, including log scales
-            // and resized study panes. The library supplies the price/time readout.
-            const frameDocument = document.querySelector?.('#tv_chart iframe')?.contentDocument;
-            if (frameDocument) {
-                const move = event => { cursorPixel = { pixelX: event.clientX, pixelY: event.clientY }; };
-                const leave = () => { cursorPixel = null; guardian.value?.leave(); };
-                frameDocument.addEventListener('mousemove', move, true);
-                frameDocument.addEventListener('mouseleave', leave);
-                chartSubscriptions.push(() => {
-                    frameDocument.removeEventListener('mousemove', move, true);
-                    frameDocument.removeEventListener('mouseleave', leave);
-                });
-            }
-            // This bundled API owns the crosshair callback until widget.remove().
-            chartApi.crossHairMoved?.(trackCursor);
-            mountedSeries = seriesKey(chartApi.symbol(), chartApi.resolution());
-            const subscribe = (event, handler) => {
-                event.subscribe(null, handler);
-                chartSubscriptions.push(() => event.unsubscribe(null, handler));
-            };
-            subscribe(chartApi.onVisibleRangeChanged(), pushRange);
-            subscribe(chartApi.onDataLoaded(), pushRange);
-            subscribe(chartApi.onIntervalChanged(), (next) => {
-                if (!alive || widget !== owner || applyingSeries || !TF_MAP[next]) return;
-                // An older programmatic interval event must not reverse a newer click.
-                if (selectedSeries() !== mountedSeries || chartApi.resolution() !== next) return;
-                if (seriesKey(chartApi.symbol(), next) !== seriesKey(symbol.value, next)) return;
-                mountedSeries = seriesKey(symbol.value, next);
-                interval.value = next;
-                if (next === '15S') removeVolumeStudy();
-                else ensureMinuteVolume();
-                range.value = null;
-                pushRange();
-            });
-            widgetReady = true;
-            updateChart();
-            pushRange();
-            ensureMinuteVolume();
-        } catch (e) {
-            if (alive && widget === owner) error.value = e.message || 'The chart could not initialize.';
-        }
-    });
-}
-
 function go(sym) {
     symbol.value = sym;
     router.replace(`/chart/${sym}`);
@@ -339,10 +252,10 @@ watch(symbol, () => {
     positionState.value = 'loading';
     decisionState.value = 'loading';
     error.value = '';
-    updateChart();
+    loadSeries();
     loadSide();
 });
-watch(interval, updateChart);
+watch(interval, loadSeries);
 
 onMounted(async () => {
     motionPreference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
@@ -358,8 +271,6 @@ onMounted(async () => {
     } catch (e) {
         if (alive) error.value = e.message;
     }
-    if (!alive) return;
-
 });
 onBeforeUnmount(() => {
     alive = false;
@@ -367,18 +278,18 @@ onBeforeUnmount(() => {
     document.removeEventListener('visibilitychange', visibility);
     window.removeEventListener?.('keydown', keyboard);
     sideRequest++;
-    applyingSeries = null;
+    seriesRequest++;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     for (const unsubscribe of chartSubscriptions.splice(0)) {
         try { unsubscribe(); } catch {}
     }
-    if (widget) {
-        try {
-            widget.remove();
-        } catch {}
+    if (chart) {
+        try { chart.remove(); } catch {}
     }
-    widget = null;
-    chartApi = null;
-    widgetReady = false;
+    chart = null;
+    candleSeries = null;
+    volumeSeries = null;
+    markers = null;
 });
 </script>
 
@@ -429,22 +340,8 @@ onBeforeUnmount(() => {
             <div class="smx-chart-main flex min-w-0 flex-1 flex-col">
                 <div class="cl-stage-label"><span><i></i>{{ symbol }} <b>/ {{ TF_MAP[interval] }}</b></span><span>B / S marks show your fills</span></div>
                 <div class="cl-chart-viewport" @pointerleave="guardian?.leave()">
-                    <div v-if="libraryMissing" class="cl-no-tv" role="note">
-                        <p class="cl-no-tv-title">Interactive chart not installed</p>
-                        <p>
-                            This desk ships without the TradingView Charting Library — it is free,
-                            but its license forbids redistribution, so no distributed image can
-                            include it. The market feed, candles, and indicators on this page are
-                            live and unaffected.
-                        </p>
-                        <p>
-                            To enable the chart, request access at
-                            <a href="https://www.tradingview.com/charting-library-docs" target="_blank" rel="noopener">tradingview.com/charting-library-docs</a>,
-                            extract the library into <code>public/charting_library/</code> as
-                            described in that directory's <code>README.md</code>, and reload this page.
-                        </p>
-                    </div>
-                    <div v-show="!libraryMissing" id="tv_chart" class="min-h-0 flex-1"></div>
+                    <div v-if="loading" class="cl-chart-loading">Loading chart…</div>
+                    <div ref="chartContainer" class="min-h-0 flex-1"></div>
                     <ChartGuardian ref="guardian" :symbol="symbol" :active="effectsActive" :quote="quote" :class="{ 'cl-guardian-muted': !effects }" />
                 </div>
                 <SmxPanel
@@ -567,3 +464,17 @@ onBeforeUnmount(() => {
         </div>
     </div>
 </template>
+
+<style scoped>
+.cl-chart-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #a1a1aa;
+    font-size: 0.875rem;
+    pointer-events: none;
+    z-index: 1;
+}
+</style>

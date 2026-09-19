@@ -16,7 +16,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 /**
- * TradingView UDF datafeed (the private charting_library talks to this).
+ * TradingView UDF datafeed (Chart.vue's lightweight-charts view fetches history/marks from this directly).
  * Bars come from bounded local snapshots; ingestion never blocks a chart. Fills are
  * exposed as marks so every entry/exit is drawn on the chart.
  */
