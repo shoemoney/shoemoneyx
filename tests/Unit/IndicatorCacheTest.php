@@ -229,4 +229,58 @@ class IndicatorCacheTest extends TestCase
         $this->assertNotEqualsWithDelta($truth, $first, 0.01, 'the low-high read must differ from truth, or this test proves nothing');
         $this->assertEqualsWithDelta($truth, $sameBucketAfterCorrection, 1e-9, 'a high-only correction in the same bucket must recompute, not stay pinned to the first read');
     }
+
+    /**
+     * Round-6 review, MAJOR 1: the round-5 fingerprint covered only the LAST bar, so a backfill
+     * of a bar further back in the window (CandleStore::upsert() overwrites OHLCV on conflict —
+     * its own docblock names this case) left the memo pinned even though the bar SET changed —
+     * proven with a mid-series gap backfill leaving SMA unchanged. count($bars) and the first
+     * bar's start are now folded in alongside the last bar's own fields: this scenario changes
+     * count() (one more bar survives after the backfill) while the LAST bar itself is untouched,
+     * isolating exactly what this fix adds over round 5's last-bar-only fingerprint.
+     */
+    #[Test]
+    public function a_mid_series_gap_backfill_recomputes_even_though_the_last_bar_is_unchanged(): void
+    {
+        $mk = function (float $base, int $dur): \Closure {
+            return function (int $now) use ($base, $dur): array {
+                $bars = [];
+                for ($i = 60; $i >= 0; $i--) {
+                    $s = $now - $i * $dur;
+                    $c = $base + (60 - $i) * 0.7; // monotonic ramp so any bar's presence/absence moves the SMA
+                    $bars[] = ['start' => $s, 'open' => $c, 'high' => $c + 1, 'low' => $c - 1, 'close' => $c, 'volume' => 10.0];
+                }
+
+                return $bars;
+            };
+        };
+        $data = $mk(500.0, 3600);
+        $sma = IndicatorField::parse('ind.sma(10)');
+        $now = 1_700_000_000 - (1_700_000_000 % 3600) + 5;
+
+        $ctxAt = function (int $ts, bool $withGap) use ($data): DeskContext {
+            $provider = function (string $pid, string $tf, int $from, int $to) use ($data, $withGap): array {
+                $bars = $data($to);
+                if ($withGap) {
+                    // A bar 6 closed-bars back from "now" (well within the 10-bar SMA window, and
+                    // nowhere near the very last closed bar itself) is missing — the exact shape of
+                    // a mid-series gap, not the round-5 "just-closed bar" case.
+                    array_splice($bars, count($bars) - 7, 1);
+                }
+
+                return $bars;
+            };
+
+            return new DeskContext([], 'live', false, [], new \DateTimeImmutable('@'.$ts), false, $provider);
+        };
+
+        IndicatorCache::forgetAll();
+        $withGap = IndicatorCache::current($ctxAt($now, withGap: true), 'SOL-USD', '1H', $sma)['value'];
+        $afterBackfill = IndicatorCache::current($ctxAt($now + 1800, withGap: false), 'SOL-USD', '1H', $sma)['value'];
+        IndicatorCache::forgetAll();
+        $truth = IndicatorCache::current($ctxAt($now + 1800, withGap: false), 'SOL-USD', '1H', $sma)['value'];
+
+        $this->assertNotEqualsWithDelta($truth, $withGap, 0.001, 'the gapped read must differ from truth, or this test proves nothing');
+        $this->assertEqualsWithDelta($truth, $afterBackfill, 1e-9, 'a mid-series gap backfill must recompute even though the last bar itself never changed');
+    }
 }

@@ -98,10 +98,14 @@ final class IndicatorCache
     }
 
     /**
-     * Identifies the shape of the just-closed bar the memo is keyed on: absent, still forming
-     * (mutable close/volume), or landed final. A missing bar backfilling or a partial bar's close
-     * finalising produces a different fingerprint, so the next read recomputes instead of serving
-     * what the bucket's first read happened to see.
+     * Identifies the shape of the bar SET the memo is keyed on: absent, still forming (mutable
+     * close/volume), or landed final — PLUS the set's own shape (count and first bar), so a
+     * correction or backfill to a bar somewhere in the MIDDLE of the window (CandleStore::upsert()
+     * overwrites OHLCV on conflict — see its own docblock) also invalidates the memo, not just a
+     * change to the last bar (round-6 review, MAJOR: proven with a high correction on bar 55/60
+     * leaving ATR unchanged, and a mid-series gap backfill leaving SMA unchanged). Benchmarked at
+     * ~0.6µs; hashing the whole series was measured 11-25x that for no gain this doesn't already
+     * cover — see docs/STRATEGY_SCHEMA_V2.md, "Known gaps" for what still isn't caught.
      */
     private static function barFingerprint(array $bars): string
     {
@@ -109,12 +113,14 @@ final class IndicatorCache
             return 'none';
         }
         $last = end($bars);
+        $first = $bars[0];
 
-        // start|open|high|low|close|volume: atr/adx read high and low directly, and smx folds them
-        // into its own series — a correction that only touches high/low (the close/volume-only
-        // fingerprint round-4 shipped) left those indicators pinned to the bucket's first read
-        // (round-5 review, reproduced: ATR pinned at 2.2079 vs a true 680.6 after a high correction).
-        return $last['start'].'|'.$last['open'].'|'.$last['high'].'|'.$last['low'].'|'.$last['close'].'|'.$last['volume'];
+        // count|first.start|start|open|high|low|close|volume of the last bar: atr/adx read high
+        // and low directly, and smx folds them into its own series — a correction that only
+        // touches high/low (the close/volume-only fingerprint round-4 shipped) left those
+        // indicators pinned to the bucket's first read (round-5 review, reproduced: ATR pinned at
+        // 2.2079 vs a true 680.6 after a high correction).
+        return count($bars).'|'.$first['start'].'|'.$last['start'].'|'.$last['open'].'|'.$last['high'].'|'.$last['low'].'|'.$last['close'].'|'.$last['volume'];
     }
 
     /** @return array<int, array{start:int,open:float,high:float,low:float,close:float,volume:float}> */

@@ -295,6 +295,18 @@ bar in a small `IndicatorCache`, so a strategy that never mentions an indicator 
 The backtester preloads the step timeframe and 1H; phase A extends the preload to every `tf` a
 strategy's rules name, discovered at validation time.
 
+#### Known gaps
+
+`IndicatorCache`'s memo is keyed on a fingerprint of the bar window (count, the first bar's
+start, and the last bar's start/open/high/low/close/volume — round-6 review), which catches a
+correction or backfill to the last bar, and a backfill anywhere else in the window that changes
+how many bars land or where the window starts. It does **not** catch an in-place value
+correction to a bar strictly in the MIDDLE of the window that leaves the bar count and the first
+bar's start unchanged (e.g. `CandleStore::upsert()` correcting bar 30 of 400 without adding or
+removing any bar) — that bucket's memo entry stays stale until the bucket rolls. Hashing the
+full series would catch it but was measured at 11-25x the cost of the current fingerprint for a
+correction class rare enough not to justify it.
+
 ### Field-to-field comparison and crosses
 
 `value` may be `{ "field": "..." }` instead of a number, for any op. Two new ops need the
