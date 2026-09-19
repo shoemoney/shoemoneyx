@@ -188,6 +188,63 @@ final class Indicators
         return $adx;
     }
 
+    /** Bollinger Bands: mid = SMA(n), bands = mid ± k stddev(n), pos = 0 at the lower band, 1 at the upper. @param array<float> $closes @return array{upper: float|null, lower: float|null, mid: float|null, pos: float|null} */
+    public static function bb(array $closes, int $n, float $k = 2.0): array
+    {
+        $mid = self::sma($closes, $n);
+        if ($mid === null) {
+            return ['upper' => null, 'lower' => null, 'mid' => null, 'pos' => null];
+        }
+        $window = array_slice($closes, -$n);
+        $variance = array_sum(array_map(fn ($c) => ($c - $mid) ** 2, $window)) / $n;
+        $sd = sqrt($variance);
+        $upper = $mid + $k * $sd;
+        $lower = $mid - $k * $sd;
+        $last = (float) end($closes);
+        $pos = $upper > $lower ? ($last - $lower) / ($upper - $lower) : null;
+
+        return ['upper' => $upper, 'lower' => $lower, 'mid' => $mid, 'pos' => $pos];
+    }
+
+    /** Session VWAP: typical-price-weighted average over the bars sharing the last bar's UTC calendar day. @param array<array{start:int,high:float,low:float,close:float,volume:float}> $bars */
+    public static function vwap(array $bars): ?float
+    {
+        if ($bars === []) {
+            return null;
+        }
+        $lastDay = gmdate('Y-m-d', end($bars)['start']);
+        $pv = 0.0;
+        $vol = 0.0;
+        foreach ($bars as $b) {
+            if (gmdate('Y-m-d', $b['start']) !== $lastDay) {
+                continue;
+            }
+            $pv += (($b['high'] + $b['low'] + $b['close']) / 3) * $b['volume'];
+            $vol += $b['volume'];
+        }
+
+        return $vol > 0 ? $pv / $vol : null;
+    }
+
+    /** On-Balance Volume, cumulative over the given bars (a running total across the supplied window, not since inception). @param array<array{close:float,volume:float}> $bars */
+    public static function obv(array $bars): ?float
+    {
+        $c = count($bars);
+        if ($c < 2) {
+            return null;
+        }
+        $obv = 0.0;
+        for ($i = 1; $i < $c; $i++) {
+            if ($bars[$i]['close'] > $bars[$i - 1]['close']) {
+                $obv += $bars[$i]['volume'];
+            } elseif ($bars[$i]['close'] < $bars[$i - 1]['close']) {
+                $obv -= $bars[$i]['volume'];
+            }
+        }
+
+        return $obv;
+    }
+
     /** Everything the strategies might want, from 1H bars oldest->newest. */
     public static function bundle(array $bars): array
     {
