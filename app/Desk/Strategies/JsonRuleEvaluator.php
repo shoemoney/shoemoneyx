@@ -8,6 +8,7 @@ use App\Desk\Data\ProductStats;
 use App\Desk\DeskContext;
 use App\Models\Position;
 use App\Services\Indicators\IndicatorCache;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Evaluates one strategy-plugin rule ({field, op, value}) against a live row.
@@ -131,13 +132,34 @@ final class JsonRuleEvaluator
             // still has count() 2 but no index 0/1, which threw "Undefined array key 0" here for
             // any pre-existing definition the schema validator had waved through before it also
             // required a list (round-6 review) — fails closed instead.
-            'between' => is_array($expected) && count($expected) === 2 && array_is_list($expected) && is_numeric($actual)
-                && $actual >= $expected[0] && $actual <= $expected[1],
+            'between' => self::between($field, $expected, $actual),
             // {value: [...]} — categorical/regime membership.
             'in' => is_array($expected) && in_array($actual, $expected, false),
             'not_in' => is_array($expected) && $expected !== [] && ! in_array($actual, $expected, false),
             default => false,
         };
+    }
+
+    /**
+     * Validation (SchemaMigrator::validateForSave(), reached only from save/import paths) has
+     * rejected a non-list "between" value since round 6, but nothing re-validates a definition
+     * already on load — a row stored before that tightening still reaches here and used to fail
+     * silently (bare `false`, no log line: fail-closed for entry/setup rules, but fail-OPEN for
+     * a v1 stop rule since those are OR'ed, or a v2 `all` group). Log once per evaluation so a
+     * legacy definition announces itself instead of just never firing again (round-7 review).
+     */
+    private static function between(string $field, mixed $expected, mixed $actual): bool
+    {
+        if (! is_array($expected) || count($expected) !== 2 || ! is_numeric($actual)) {
+            return false;
+        }
+        if (! array_is_list($expected)) {
+            Log::warning("JsonRuleEvaluator: 'between' rule on field \"{$field}\" has a non-list value (".json_encode($expected).') — rejected at save since round 6; this stored definition will never fire until it is fixed to a JSON array [lo, hi]');
+
+            return false;
+        }
+
+        return $actual >= $expected[0] && $actual <= $expected[1];
     }
 
     /**

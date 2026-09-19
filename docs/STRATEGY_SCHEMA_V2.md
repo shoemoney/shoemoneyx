@@ -307,6 +307,12 @@ removing any bar) — that bucket's memo entry stays stale until the bucket roll
 full series would catch it but was measured at 11-25x the cost of the current fingerprint for a
 correction class rare enough not to justify it.
 
+`between` requires its `value` to be a JSON array `[lo, hi]`, not an object — `{"lo":1,"hi":1000}`
+is rejected at save since round 6 (`JsonRuleEvaluator::fires()`, `array_is_list()` check).
+Validation only runs on save/import (`SchemaMigrator::validateForSave()`), never on load, so a
+definition stored before that round-6 tightening still loads and evaluates; it now logs a warning
+the first time it is evaluated and returns `false` (never fires) rather than throwing.
+
 ### Field-to-field comparison and crosses
 
 `value` may be `{ "field": "..." }` instead of a number, for any op. Two new ops need the
