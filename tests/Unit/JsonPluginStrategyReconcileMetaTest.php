@@ -126,4 +126,23 @@ class JsonPluginStrategyReconcileMetaTest extends TestCase
 
         $this->assertTrue($runner->meta['v2']['reentries'][0]['cashed_out']);
     }
+
+    /** Round-5 review, MINOR 5: mirrors reconcilePendingRung()'s own unset — a cash-out sells through the same Desk::trim() stamp. */
+    #[Test]
+    public function reconcile_pending_cash_out_clears_the_stamp_so_a_later_rung_never_inherits_it(): void
+    {
+        $p = new Position(['product_id' => 'X-USD', 'side' => 'long', 'quantity' => 1.0, 'trims_count' => 3]);
+        $p->meta = ['v2' => [
+            'last_trim_fill_price' => 99.0,
+            'ladder' => ['original_qty' => 10.0, 'fired' => [], 'sold' => []],
+            'reentries' => [[
+                'qty' => 4.0, 'confirmed' => true, 'cashed_out' => false,
+                'cash_out_pending' => ['trims_count_at_emit' => 1, 'qty_at_emit' => 9.0, 'lot_qty' => 4.0, 'sell_qty' => 4.0, 'remainder' => 'ladder', 'reset_on_add' => false],
+            ]],
+        ]];
+
+        $this->invokeReconcile('reconcilePendingCashOut', $p);
+
+        $this->assertArrayNotHasKey('last_trim_fill_price', $p->meta['v2'], 'a cash-out must consume the stamp, not leave it for a later ladder rung to inherit');
+    }
 }

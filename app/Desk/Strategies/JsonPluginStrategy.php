@@ -928,6 +928,10 @@ class JsonPluginStrategy extends BaseDeskStrategy
                     ? max(0.0, min($sellQty, (float) $pending['qty_at_emit'] - (float) $position->quantity))
                     : $sellQty;
                 $list[$i]['cashed_out'] = true;
+                // Mirrors reconcilePendingRung()'s own unset: a cash-out sells through the same
+                // Desk::trim() stamp, and leaving it here would let a LATER ladder rung inherit this
+                // cash-out's price instead of falling back to its own target (round-5 review, minor 5).
+                unset($meta['v2']['last_trim_fill_price']);
                 if (($pending['remainder'] ?? 'runner') === 'ladder' && ! ($pending['reset_on_add'] ?? true)) {
                     $meta['v2']['ladder']['original_qty'] = (float) ($meta['v2']['ladder']['original_qty'] ?? 0)
                         + ($lotQty - $soldQty);
