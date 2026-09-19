@@ -39,3 +39,35 @@ export function mapUdfMarks(payload) {
     });
     return marks.sort((a, b) => a.time - b.time);
 }
+
+function mergeByTime(fresher, older) {
+    const byTime = new Map();
+    for (const point of older) byTime.set(point.time, point);
+    for (const point of fresher) byTime.set(point.time, point); // fresher wins when a boundary bar overlaps
+    return [...byTime.values()].sort((a, b) => a.time - b.time);
+}
+
+// Prepends an older-window 'history' response onto the candles/volumes already on the chart
+// (backward pagination as the user pans past the loaded left edge). `requestedBars` is the
+// countback the older-window request asked for; getting back fewer bars than that, or a
+// non-'ok' status, means there is nothing further back to fetch — 'exhausted' tells the
+// caller to stop subscribing to more left-edge pans for this series.
+export function mergeOlderHistory(current, olderPayload, requestedBars) {
+    const older = mapUdfHistory(olderPayload);
+    const exhausted = olderPayload?.s !== 'ok' || older.candles.length === 0 || older.candles.length < requestedBars;
+    if (older.candles.length === 0) return { candles: current.candles, volumes: current.volumes, exhausted };
+    return {
+        candles: mergeByTime(current.candles, older.candles),
+        volumes: mergeByTime(current.volumes, older.volumes),
+        exhausted,
+    };
+}
+
+// Unions two SeriesMarker[] sets by id (never drops a marker already on the chart) and keeps
+// the ascending time order createSeriesMarkers requires.
+export function mergeMarks(existing, incoming) {
+    const byId = new Map();
+    for (const mark of existing) byId.set(mark.id, mark);
+    for (const mark of incoming) byId.set(mark.id, mark);
+    return [...byId.values()].sort((a, b) => a.time - b.time);
+}

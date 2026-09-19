@@ -197,6 +197,10 @@ try {
   const history = udf.find(u => u.path.endsWith('/api/udf/history'));
   check('chart fetched /api/udf/history with 200', history?.status === 200, JSON.stringify(udf.slice(0, 6)));
   check('no /api/udf request was rejected with 401', udf.length > 0 && udf.every(u => u.status !== 401), `${udf.length} udf responses`);
+  // A layout regression (e.g. losing the #tv_chart height rules) leaves autoSize with nothing to
+  // measure and the canvas renders at 0 height while every other check above still passes.
+  const canvasBox = await p2.locator('.cl-chart-viewport canvas').first().boundingBox().catch(() => null);
+  check('chart canvas has real height, not a collapsed 0px container', (canvasBox?.height ?? 0) > 200, JSON.stringify(canvasBox));
   await shot(p2, '09-chart');
   await fresh.close();
 } catch (e) {

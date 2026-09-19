@@ -4,7 +4,7 @@ import { createChart, CandlestickSeries, HistogramSeries, CrosshairMode, createS
 import { deskHeaders } from '../api.js';
 import { useRouter, useRoute } from "vue-router";
 import { api, fmt } from "../api";
-import { mapUdfHistory, mapUdfMarks } from "../components/chart/udfMapping";
+import { mapUdfHistory, mapUdfMarks, mergeOlderHistory, mergeMarks } from "../components/chart/udfMapping";
 import Pnl from "../components/Pnl.vue";
 import SmxPanel from "../components/SmxPanel.vue";
 import ChartMarketDeck from "../components/chart/ChartMarketDeck.vue";
@@ -43,15 +43,21 @@ let sideRequest = 0;
 const TF_MAP = { '15S': '15s', '1': '1m', '5': '5m' };
 const SPAN_SECONDS = { '15S': 15, '1': 60, '5': 300 };
 const BAR_WINDOW = 1500;
+// The realtime poll only needs the tail of the series, not another full 1500-bar download.
+const POLL_BARS = 5;
 let chart = null;
 let candleSeries = null;
 let volumeSeries = null;
 let markers = null;
 let seriesRequest = 0;
 let renderedSeries = '';
-let lastBarTime = null;
 let pollTimer = null;
+let paginating = false;
+let historyExhausted = false;
+let currentMarks = [];
 const chartSubscriptions = [];
+// Bars remaining before the loaded left edge that triggers a backward-pagination fetch.
+const PAGINATE_WITHIN_BARS = 50;
 
 function seriesKey(product, resolution) {
     return String(product).replace(/^(?:COINBASE|DEMO):/i, '').toUpperCase() + ':' + resolution;
@@ -60,8 +66,8 @@ function selectedSeries() {
     return seriesKey(symbol.value, interval.value);
 }
 
-async function fetchHistory(sym, resolution, from, to) {
-    const params = new URLSearchParams({ symbol: sym, resolution, from: String(from), to: String(to), countback: String(BAR_WINDOW) });
+async function fetchHistory(sym, resolution, from, to, countback = BAR_WINDOW) {
+    const params = new URLSearchParams({ symbol: sym, resolution, from: String(from), to: String(to), countback: String(countback) });
     const response = await fetch(`/api/udf/history?${params}`, { headers: deskHeaders() });
     if (!response.ok) throw new Error('Market history is temporarily unavailable.');
     return response.json();
@@ -79,9 +85,39 @@ async function loadMarks(id, sym, from, to) {
     try {
         const payload = await fetchMarks(sym, from, to);
         if (!alive || id !== seriesRequest || !markers) return;
-        markers.setMarkers(mapUdfMarks(payload));
+        currentMarks = mergeMarks(currentMarks, mapUdfMarks(payload));
+        markers.setMarkers(currentMarks);
     } catch {
         // Marks are a supplement to the candles; a failed fetch leaves the chart usable.
+    }
+}
+
+function handleVisibleLogicalRange(logicalRange) {
+    if (!alive || !logicalRange || paginating || historyExhausted || !candleSeries) return;
+    if (renderedSeries !== selectedSeries()) return;
+    if (logicalRange.from >= PAGINATE_WITHIN_BARS) return;
+    loadOlderHistory(seriesRequest, symbol.value, interval.value);
+}
+
+async function loadOlderHistory(id, sym, resolution) {
+    if (!alive || id !== seriesRequest || paginating || historyExhausted || !candleSeries) return;
+    const oldest = candleSeries.data()[0]?.time;
+    if (!Number.isFinite(oldest)) return;
+    paginating = true;
+    const to = oldest - 1;
+    const from = to - BAR_WINDOW * (SPAN_SECONDS[resolution] || 60);
+    try {
+        const payload = await fetchHistory(sym, resolution, from, to);
+        if (!alive || id !== seriesRequest) return;
+        const merged = mergeOlderHistory({ candles: candleSeries.data(), volumes: volumeSeries.data() }, payload, BAR_WINDOW);
+        candleSeries.setData(merged.candles);
+        volumeSeries.setData(merged.volumes);
+        historyExhausted = merged.exhausted;
+        loadMarks(id, sym, from, to);
+    } catch {
+        // A failed page just leaves the older bars unloaded; the next left-edge pan retries it.
+    } finally {
+        paginating = false;
     }
 }
 
@@ -117,7 +153,11 @@ async function loadSeries() {
     range.value = null;
     error.value = '';
     loading.value = true;
+    paginating = false;
+    historyExhausted = false;
+    currentMarks = [];
     const requestedSymbol = symbol.value, requestedInterval = interval.value;
+    chart?.applyOptions({ timeScale: { secondsVisible: requestedInterval === '15S' } });
     const to = Math.floor(Date.now() / 1000);
     const from = to - BAR_WINDOW * (SPAN_SECONDS[requestedInterval] || 60);
     try {
@@ -127,8 +167,8 @@ async function loadSeries() {
         candleSeries.setData(candles);
         volumeSeries.setData(volumes);
         renderedSeries = key;
-        lastBarTime = candles.at(-1)?.time ?? null;
         loading.value = false;
+        if (candles.length === 0) error.value = 'No market history is available for the selected market and timeframe.';
         pushRange(chart?.timeScale().getVisibleRange());
         loadMarks(id, requestedSymbol, from, to);
         pollTimer = setInterval(() => refreshLatest(id, requestedSymbol, requestedInterval), 15000);
@@ -141,17 +181,17 @@ async function loadSeries() {
 
 async function refreshLatest(id, requestedSymbol, requestedInterval) {
     if (!alive || id !== seriesRequest || !candleSeries) return;
+    const latest = candleSeries.data().at(-1)?.time;
     const to = Math.floor(Date.now() / 1000);
-    const from = (lastBarTime ?? to) - SPAN_SECONDS[requestedInterval] * 2;
+    const from = (latest ?? to) - SPAN_SECONDS[requestedInterval] * (POLL_BARS + 1);
     try {
-        const payload = await fetchHistory(requestedSymbol, requestedInterval, from, to);
+        const payload = await fetchHistory(requestedSymbol, requestedInterval, from, to, POLL_BARS);
         if (!alive || id !== seriesRequest) return;
         const { candles, volumes } = mapUdfHistory(payload);
         for (let i = 0; i < candles.length; i++) {
-            if (candles[i].time < (lastBarTime ?? -Infinity)) continue;
+            if (candles[i].time < (latest ?? -Infinity)) continue;
             candleSeries.update(candles[i]);
             volumeSeries.update(volumes[i]);
-            lastBarTime = candles[i].time;
         }
         loadMarks(id, requestedSymbol, from, to);
     } catch {
@@ -188,8 +228,10 @@ function mount() {
         markers = createSeriesMarkers(candleSeries, []);
         chart.subscribeCrosshairMove(trackCursor);
         chart.timeScale().subscribeVisibleTimeRangeChange(pushRange);
+        chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRange);
         chartSubscriptions.push(() => chart.unsubscribeCrosshairMove(trackCursor));
         chartSubscriptions.push(() => chart.timeScale().unsubscribeVisibleTimeRangeChange(pushRange));
+        chartSubscriptions.push(() => chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRange));
     } catch (e) {
         error.value = e.message || 'The chart could not initialize.';
         return;
@@ -341,7 +383,7 @@ onBeforeUnmount(() => {
                 <div class="cl-stage-label"><span><i></i>{{ symbol }} <b>/ {{ TF_MAP[interval] }}</b></span><span>B / S marks show your fills</span></div>
                 <div class="cl-chart-viewport" @pointerleave="guardian?.leave()">
                     <div v-if="loading" class="cl-chart-loading">Loading chart…</div>
-                    <div ref="chartContainer" class="min-h-0 flex-1"></div>
+                    <div id="tv_chart" ref="chartContainer" class="min-h-0 flex-1"></div>
                     <ChartGuardian ref="guardian" :symbol="symbol" :active="effectsActive" :quote="quote" :class="{ 'cl-guardian-muted': !effects }" />
                 </div>
                 <SmxPanel

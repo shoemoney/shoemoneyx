@@ -2,7 +2,7 @@
 
 An open-source crypto paper-trading desk with a backtest farm, a walk-forward optimizer, and sub-minute candles built from the raw trade tape. Bring your own strategy. Bring your own exchange.
 
-Laravel 13 · Vue 3 · Redis · MySQL/MariaDB · TradingView charts (bring your own library).
+Laravel 13 · Vue 3 · Redis · MySQL/MariaDB · TradingView lightweight-charts.
 
 > **NFA.** Paper first. Start with a number you are fine watching hit zero.
 
