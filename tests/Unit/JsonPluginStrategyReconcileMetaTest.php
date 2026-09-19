@@ -61,4 +61,33 @@ class JsonPluginStrategyReconcileMetaTest extends TestCase
             'with no fresh stamp, rung 1 must fall back to its own target — not inherit rung 0s 110.0'
         );
     }
+
+    #[Test]
+    public function reconcile_pending_cash_out_clamps_the_sold_qty_to_what_was_actually_intended(): void
+    {
+        // Intended: sell 4.0 of a 4.0-unit reentry lot. Real shrink since emit: 8.0 (this 4.0
+        // cash-out plus an unrelated 4.0 out-of-band trim on the same position) — an unclamped
+        // `qty_at_emit - quantity` delta folds a negative 4.0 into the ladder below.
+        $p = new Position(['product_id' => 'X-USD', 'side' => 'long', 'quantity' => 1.0, 'trims_count' => 3]);
+        $p->meta = ['v2' => [
+            'ladder' => ['original_qty' => 10.0, 'fired' => [], 'sold' => []],
+            'reentries' => [[
+                'qty' => 4.0, 'price' => 100.0, 'confirmed' => true, 'cashed_out' => false,
+                'cash_out_pending' => [
+                    'trims_count_at_emit' => 1, 'qty_at_emit' => 9.0,
+                    'lot_qty' => 4.0, 'sell_qty' => 4.0, 'remainder' => 'ladder', 'reset_on_add' => false,
+                ],
+            ]],
+        ]];
+
+        $this->invokeReconcile('reconcilePendingCashOut', $p);
+
+        $this->assertEqualsWithDelta(
+            10.0,
+            $p->meta['v2']['ladder']['original_qty'],
+            1e-9,
+            'an out-of-band trim beyond the intended sell_qty must never shrink the ladder below what was actually cashed out'
+        );
+        $this->assertTrue($p->meta['v2']['reentries'][0]['cashed_out']);
+    }
 }

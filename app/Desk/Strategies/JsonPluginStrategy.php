@@ -906,7 +906,18 @@ class JsonPluginStrategy extends BaseDeskStrategy
                 continue;
             }
             if ((int) $position->trims_count > (int) ($pending['trims_count_at_emit'] ?? -1)) {
-                $soldQty = max(0.0, (float) ($pending['qty_at_emit'] ?? $lot['qty'] ?? 0) - (float) $position->quantity);
+                // Clamped to the INTENDED sell_qty the same way reconcilePendingRung() clamps its
+                // own actualQty: an out-of-band trim between emit and reconcile (a separate rung, a
+                // manual close) can shrink position.quantity by more than this cash-out ever asked
+                // for, and an unclamped delta went negative sold amounts into the ladder fold below
+                // (round-4 review — proven: a 4.0 intended sell computed as an 8.0 real shrink,
+                // driving ladder.original_qty from 10.0 to 6.0). `qty_at_emit` missing at all means
+                // this is a pre-fix in-flight record with no snapshot to diff against — fall back to
+                // trusting the intended sell_qty outright, the behaviour before that snapshot existed
+                // (NOT $lot['qty'], which is the re-entry lot's own quantity, not a position snapshot).
+                $soldQty = array_key_exists('qty_at_emit', $pending)
+                    ? max(0.0, min((float) $pending['sell_qty'], (float) $pending['qty_at_emit'] - (float) $position->quantity))
+                    : (float) $pending['sell_qty'];
                 $list[$i]['cashed_out'] = true;
                 if (($pending['remainder'] ?? 'runner') === 'ladder' && ! ($pending['reset_on_add'] ?? true)) {
                     $meta['v2']['ladder']['original_qty'] = (float) ($meta['v2']['ladder']['original_qty'] ?? 0)
