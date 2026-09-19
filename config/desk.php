@@ -186,6 +186,7 @@ return [
         'trail_giveback_pct' => 25.0,     // trailing stop giveback from peak once activated
         'max_hold_hours' => 72,
         'stale_data_retries' => 2,        // no answer -> retry twice, then CLOSE anyway
+        'max_zero_price_sweeps' => 5,     // stats price stuck at <= 0 this many sweeps in a row -> CLOSE anyway
     ],
 
     'chief' => [

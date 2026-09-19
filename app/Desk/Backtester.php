@@ -16,6 +16,7 @@ use App\Models\Backtest;
 use App\Models\Candle;
 use App\Models\Position;
 use App\Models\Product;
+use App\Services\Indicators\IndicatorCache;
 use App\Services\Market\CandleStore;
 use App\Services\Market\ProductStatsBuilder;
 use App\Support\DeadlockRetry;
@@ -143,6 +144,11 @@ class Backtester
 
     private function simulate(Strategy $strategy, array $products, Carbon $from, Carbon $to, float $cash, array $overrides, ?callable $progress): array
     {
+        // The cache is keyed on (product, timeframe, series, bar bucket) alone, with nothing
+        // identifying which run computed it — an optimizer sweep or a queue worker that reuses
+        // this process across backtests would otherwise read a previous run's entries for the
+        // same product/timeframe/bucket (docs/STRATEGY_SCHEMA_V2.md review round 1).
+        IndicatorCache::forgetAll();
         $params = $this->paramsFor($strategy, $products, $overrides);
         $taker = (float) ($params['fees']['taker_rate'] ?? 0.006);
         $maker = (float) ($params['fees']['maker_rate'] ?? 0.004);
@@ -213,9 +219,20 @@ class Backtester
         $dur = Candle::DURATIONS[$stepTf] ?? 3600;
         $warmupBars = (int) ($params[$strategy->key()]['bars'] ?? 300) + 10;
 
+        // Any extra timeframe an ind.* field or a rule's "tf" override names, beyond the step
+        // and 1H bundles already loaded below — preloaded here so the loop never queries mid-run.
+        $extraTimeframes = [];
+        if (method_exists($strategy, 'definition')) {
+            $def = $strategy->definition(new DeskContext($params, 'backtest'));
+            if ($def !== null) {
+                $extraTimeframes = self::timeframesUsedBy($def);
+            }
+        }
+
         // Load bars once: 1H for liquidity/volume stats, step bars for prices and the strategy's indicator.
         $bars = [];
         $stepBars = [];
+        $extra = [];   // pid => tf => whole series, for timeframes that are neither the step tf nor 1H
         foreach ($products as $pid) {
             // Fetches end at the window end: strategies only ever ask for bars closed before the step time, and a range
             // reaching past `to` was stamped "open" and re-keyed on every new candle, so the test-window slice missed the
@@ -226,11 +243,21 @@ class Backtester
             // it closed and silently zeroing every short entry for trend-gated champions (2026-09-05).
             $bars[$pid] = $this->candles->bars($pid, '1H', $from->getTimestamp() - 600 * 3600, $to->getTimestamp());
             $stepBars[$pid] = $stepTf === '1H' ? $bars[$pid] : $this->candles->bars($pid, $stepTf, $from->getTimestamp() - $warmupBars * $dur, $to->getTimestamp());
+            foreach ($extraTimeframes as $tf) {
+                // ind.* fields write "1h"/"15m" per the schema; Candle::DURATIONS (and the
+                // provider closure below) key candles by its own canonical case ("1H"), so
+                // preload and lookup must agree on the same casing or the preload just misses.
+                $tf = self::canonicalTf($tf);
+                if ($tf === $stepTf || $tf === '1H') {
+                    continue;
+                }
+                $tfDur = Candle::DURATIONS[$tf] ?? 3600;
+                $extra[$pid][$tf] = $this->candles->bars($pid, $tf, $from->getTimestamp() - 600 * $tfDur, $to->getTimestamp());
+            }
         }
         $listed = Product::whereIn('product_id', $products)->pluck('listed_at', 'product_id');
 
         // Strategies read history through the context so no queries happen inside the loop.
-        $extra = [];   // pid => tf => whole series, for timeframes that are neither the step tf nor 1H
         $provider = function (string $pid, string $tf, int $fromUnix, int $toUnix) use (&$bars, &$stepBars, &$extra, $stepTf, $from, $to): array {
             $src = $tf === $stepTf ? ($stepBars[$pid] ?? []) : ($tf === '1H' ? ($bars[$pid] ?? []) : null);
             if ($src === null) {
@@ -498,6 +525,16 @@ class Backtester
                     $row['price'] = $sb['close'];
                     $row['extra'] = ($row['extra'] ?? []) + ['bar_high' => $sb['high'], 'bar_low' => $sb['low']];
                     $s = ProductStats::fromArray($row);
+                } else {
+                    // 1H IS the step here, so the hour bar closing at $ts is the one to range-check
+                    // against — same bar_high/bar_low contract the sub-hour branch above attaches,
+                    // so the v2 ladder and stop.pct_from_avg fail-safe are intrabar-aware at every step.
+                    $hb = $this->barAt($bars[$pid], $ts);
+                    if ($hb) {
+                        $row = $s->jsonSerialize();
+                        $row['extra'] = ($row['extra'] ?? []) + ['bar_high' => $hb['high'], 'bar_low' => $hb['low']];
+                        $s = ProductStats::fromArray($row);
+                    }
                 }
                 if ($s->price > 0) {
                     $stats[$pid] = $s;
@@ -605,6 +642,16 @@ class Backtester
                     $p->trims_count = ($p->trims_count ?? 0) + 1;
                     $m = $p->meta ?? [];
                     $m['cost_trimmed'] = (float) ($m['cost_trimmed'] ?? 0) + $costSold;
+                    // v2's ladder reconciles its rung price from this, not the rung's computed target
+                    // (JsonPluginStrategy::reconcilePendingRung(), docs/STRATEGY_SCHEMA_V2.md review
+                    // round 1) — $px is $filledAtRung ? the rung price : a slipped market price, so
+                    // stamping it here (rather than the target) carries any slip through. Guarded the
+                    // same way Desk::trim() is: a zero (or lower) $px must fall back to the rung's
+                    // target rather than stamp a sale price reconcilePendingRung()/reentryArmDecision()
+                    // would treat as "no fill".
+                    if ($px > 0) {
+                        $m['v2']['last_trim_fill_price'] = $px;
+                    }
                     $p->meta = $m;
                     $trims++;
                     if ($p->quantity <= 1e-12) {
@@ -615,7 +662,15 @@ class Backtester
                     continue;
                 }
                 if ($d->shouldClose() || $forceStopClose) {
-                    $px = ($forceStopClose ? $stopFillPrice : $s->price) * (1 - $p->dir() * $slip);
+                    // A CLOSE carrying meta['stop_price'] (JsonPluginStrategy::stopDecision(), the
+                    // pct_from_avg fail-safe) fills at the stop level, or worse if the bar closed
+                    // through it — the fail-safe triggers off bar_low/bar_high, so filling at $s->price
+                    // (the bar's close) can book a profit on a trade the fail-safe stopped out of.
+                    $stopMeta = $d->meta['stop_price'] ?? null;
+                    $base = $forceStopClose
+                        ? $stopFillPrice
+                        : ($stopMeta !== null ? ($p->isShort() ? max((float) $stopMeta, $s->price) : min((float) $stopMeta, $s->price)) : $s->price);
+                    $px = $base * (1 - $p->dir() * $slip);
                     if ($lotFor($pid) !== null) {
                         $lot = Lot::forQty($pid, $p->quantity, $px, $taker, $perContract, true);
                         if ($lot->contracts === 0 && $lot->qty === 0.0) {
@@ -945,6 +1000,46 @@ class Backtester
         }
 
         return null;
+    }
+
+    /**
+     * Every timeframe a strategy-plugin definition's rules could ask for: any rule's own "tf"
+     * override, plus meta.timeframe (the default every `ind.*` field falls back to). Walks the
+     * whole definition rather than naming each rules array, so a new rules section picks this
+     * up for free.
+     *
+     * @return array<int, string>
+     */
+    public static function timeframesUsedBy(array $definition): array
+    {
+        $tfs = [];
+        $meta = is_array($definition['meta'] ?? null) ? $definition['meta'] : [];
+        if (is_string($meta['timeframe'] ?? null) && $meta['timeframe'] !== '') {
+            $tfs[$meta['timeframe']] = true;
+        }
+
+        $walk = function (mixed $node) use (&$walk, &$tfs): void {
+            if (! is_array($node)) {
+                return;
+            }
+            if (isset($node['field']) && is_string($node['tf'] ?? null) && $node['tf'] !== '') {
+                $tfs[$node['tf']] = true;
+            }
+            foreach ($node as $v) {
+                if (is_array($v)) {
+                    $walk($v);
+                }
+            }
+        };
+        $walk($definition);
+
+        return array_keys($tfs);
+    }
+
+    /** Case-insensitive match against Candle::DURATIONS's own keys ("1h" in a strategy's JSON is Candle::DURATIONS's "1H"). */
+    private static function canonicalTf(string $tf): string
+    {
+        return Candle::canonicalTimeframe($tf) ?? $tf;
     }
 
     /** Bars with $from <= start <= $to (binary-searched; bars are sorted). */

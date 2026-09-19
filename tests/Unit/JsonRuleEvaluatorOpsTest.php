@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use App\Desk\Data\ProductStats;
 use App\Desk\DeskContext;
 use App\Desk\Strategies\JsonRuleEvaluator;
+use Illuminate\Support\Facades\Log;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -58,6 +59,58 @@ class JsonRuleEvaluatorOpsTest extends TestCase
         $this->assertTrue(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => [10, 20]], $s, null, $ctx));
         $this->assertFalse(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => [11, 20]], $s, null, $ctx));
         $this->assertFalse(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => [1]], $s, null, $ctx));
+    }
+
+    /**
+     * Round-6 review, BLOCKER 2: a stored rule whose "between" value is an object (e.g.
+     * {"lo":1,"hi":1000}, decoded from JSON as an associative array with keys 0 absent) has
+     * count() 2 and used to throw "Undefined array key 0" here. Must fail closed instead, so a
+     * pre-existing stored strategy degrades safely rather than aborting risk() (and, pre round-6
+     * blocker 1, starving every position after it in the sweep).
+     */
+    #[Test]
+    public function between_fails_closed_instead_of_throwing_when_the_value_is_not_a_list(): void
+    {
+        $s = $this->stats();
+        $ctx = $this->ctxAt('2026-01-01T00:00:00Z');
+
+        $this->assertFalse(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]], $s, null, $ctx));
+        $this->assertFalse(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => [0 => 1, 2 => 1000]], $s, null, $ctx));
+    }
+
+    /**
+     * Round-7 review, MINOR: the fail-closed path above (round 6) is silent — no log line, no
+     * reporter event — so a definition stored before round 6 (when a two-key object still
+     * passed the old count()-only check) degrades without ever telling anyone. That's fail-open
+     * for a v1 stop rule (OR'ed with the rest) or a v2 `all` group. The first evaluation of a
+     * non-list "between" value must log a warning naming the field, so a legacy definition
+     * announces itself instead of just quietly never firing again.
+     */
+    #[Test]
+    public function between_logs_a_warning_naming_the_field_when_the_value_is_not_a_list(): void
+    {
+        Log::spy();
+        $s = $this->stats();
+        $ctx = $this->ctxAt('2026-01-01T00:00:00Z');
+
+        JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]], $s, null, $ctx);
+
+        Log::shouldHaveReceived('warning')->once()->withArgs(
+            fn (string $message) => str_contains($message, 'spread_bps') && str_contains($message, 'between')
+        );
+    }
+
+    /** Sanity control: a healthy list value must not log anything, or the assertion above proves nothing. */
+    #[Test]
+    public function between_logs_nothing_for_a_healthy_list_value(): void
+    {
+        Log::spy();
+        $s = $this->stats();
+        $ctx = $this->ctxAt('2026-01-01T00:00:00Z');
+
+        JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => [5, 10]], $s, null, $ctx);
+
+        Log::shouldNotHaveReceived('warning');
     }
 
     #[Test]

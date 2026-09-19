@@ -163,7 +163,25 @@ final class JsonPluginValidator
             }
             if (! array_key_exists('value', $rule) || is_array($rule['value']) || is_object($rule['value'])) {
                 $errors[] = "{$path}[{$i}].value must be a scalar or null";
+            } elseif (is_numeric($rule['value']) && self::isBareObvField($rule['field'] ?? null)) {
+                // This validator's OPS has no crosses_*/field-ref escape hatch, so every ind.obv
+                // comparison it can express is a literal against a value that drifts with the
+                // sliding lookback window as old bars age out.
+                $errors[] = "{$path}[{$i}].value: ind.obv drifts with the lookback window and cannot be compared to a literal";
             }
+        }
+    }
+
+    /** True for `ind.obv` (or `ind.obv.value`) specifically — the one indicator whose raw level is not window-invariant. */
+    private static function isBareObvField(mixed $field): bool
+    {
+        if (! is_string($field)) {
+            return false;
+        }
+        try {
+            return IndicatorField::parse($field)?->name === 'obv';
+        } catch (\InvalidArgumentException) {
+            return false;
         }
     }
 
@@ -177,6 +195,13 @@ final class JsonPluginValidator
         }
         if (str_starts_with($field, 'extra.indicators.')) {
             return in_array(substr($field, strlen('extra.indicators.')), self::INDICATORS, true);
+        }
+        if (str_starts_with($field, 'ind.')) {
+            try {
+                return IndicatorField::parse($field) !== null;
+            } catch (\InvalidArgumentException) {
+                return false;
+            }
         }
 
         return $allowPosition && in_array($field, self::POSITION_FIELDS, true);

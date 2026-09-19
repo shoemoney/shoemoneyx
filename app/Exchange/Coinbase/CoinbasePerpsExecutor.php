@@ -173,8 +173,15 @@ class CoinbasePerpsExecutor implements Executor
         $filledContracts = (float) ($order['filled_size'] ?? 0);
         $filledQty = Perps::qtyFor($spotPid, (int) round($filledContracts));
         $fee = (float) ($order['total_fees'] ?? 0);
-        $avg = (float) ($order['average_filled_price'] ?? 0);
-        $gross = $filledQty * $avg;
+        $avgReported = (float) ($order['average_filled_price'] ?? 0);
+        $gross = $filledQty * $avgReported;
+        // Same degraded-poll shape CoinbaseExecutor's spot path defends against: a real fill with
+        // average_filled_price missing or 0 (round-5 review — this venue never got round 4's fix,
+        // so OrderResult::ok() refused every such fill and Desk::close()/trim() left the position
+        // open while the venue had already sold it).
+        [$avg, $gross, $basisRecovered] = OrderResult::recoverFillBasis($filledQty, $avgReported > 0 ? $avgReported : null, $gross, $decisionPrice, 'CoinbasePerpsExecutor', $orderId, [
+            'average_filled_price' => $order['average_filled_price'] ?? null,
+        ]);
         $status = $filledContracts > 0 ? 'filled' : 'rejected';
 
         // What the desk books:
@@ -193,12 +200,13 @@ class CoinbasePerpsExecutor implements Executor
             filledUsd: $filledUsd,
             filledQty: $filledQty,
             decisionPrice: $decisionPrice,
-            fillPrice: $avg ?: null,
+            fillPrice: $avg,
             feeUsd: $fee,
             partial: $filledContracts > 0 && $filledContracts < $contracts,
             venueOrderId: $orderId,
             raw: ['create' => $resp, 'order' => $order, 'contracts' => $contracts],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
+            basisRecovered: $basisRecovered,
         );
     }
 }

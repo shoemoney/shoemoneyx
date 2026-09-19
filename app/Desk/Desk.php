@@ -489,7 +489,13 @@ class Desk
 
         $slip = $result->slippageBps($orderSide) ?? 0;
         $msg = sprintf('%s %s%s $%.2f @ %.6f (slip %.1f bps, fee %.2f%%)%s', strtoupper($kind), $short ? 'SHORT ' : '', $pid, $result->filledUsd, $result->fillPrice, $slip, $result->feePct() * 100, $result->partial ? ' PARTIAL' : '');
-        if ($slip > (float) $ctx->param('size.max_slippage_bps', 50)) {
+        if ($result->basisRecovered) {
+            // slippageBps() refuses to report a number for a fabricated basis (null here, floored
+            // to 0 above) — comparing that manufactured zero against the threshold would silently
+            // pass every recovered fill through as if it slipped not at all (round-6 review,
+            // MAJOR). Surfaced unconditionally instead of gated on a number that doesn't exist.
+            $this->reporter->error('FILLS', 'FILL BASIS RECOVERED (slippage unmeasured) — '.$msg);
+        } elseif ($slip > (float) $ctx->param('size.max_slippage_bps', 50)) {
             $this->reporter->error('FILLS', 'SLIPPAGE OVER MAX — '.$msg);
         } else {
             $this->reporter->trade('FILLS', $msg, ['position_id' => $position->id]);
@@ -513,6 +519,14 @@ class Desk
         $existing->adds_count++;
         $meta = $existing->meta ?? [];
         $meta['entry_fees_usd'] = (float) ($meta['entry_fees_usd'] ?? 0) + $result->feeUsd;
+        // Mirrors Backtester's own bookAdd (Backtester.php, entry_fee_excluded): whole-contract perps
+        // and margin fills book filledUsd = Lot::notional/OrderResult::filledUsd, which never carried
+        // the fee (booked separately, above); the plain spot/cash-notional path's filledUsd DOES carry
+        // it. JsonPluginStrategy::reconcileV2Avg() needs to know which convention produced this fill to
+        // recover the true per-unit price, and this is the only place that still has $result to ask.
+        $feeExcluded = $result->fillPrice !== null && abs($result->filledUsd - $result->filledQty * $result->fillPrice) < max(1e-6, abs($result->filledUsd) * 1e-9)
+            ? $result->feeUsd : 0.0;
+        $meta['entry_fee_excluded'] = (float) ($meta['entry_fee_excluded'] ?? 0) + $feeExcluded;
         if ($margin !== null) {
             $meta['margin_usd'] = (float) ($meta['margin_usd'] ?? 0) + $margin;
         }
@@ -681,51 +695,96 @@ class Desk
         }
 
         foreach ($this->openPositions($executor->mode()) as $p) {
-            $ctx = $this->context($strategy, false, $executor->mode());
-            $stats = $this->statsWithRetries($p->product_id, (int) $ctx->param('risk.stale_data_retries', 2));
-
-            if ($stats === null) {
-                $decision = RiskDecision::close('unmeasurable', null, null, null, 'no answer after retries — a position you cannot measure is a position you do not hold');
-            } else {
-                $p->markPrice($stats->price);
-                $decision = $strategy->risk($p, $stats, $ctx);
-                $p->save();
-            }
-
-            $price = $stats?->price ?? (float) ($p->last_price ?? $p->entry_price);
-            if ($executor instanceof PaperExecutor && Perps::enabled()) {
-                $this->accrueFunding($p, $price);
-            }
-            RiskCheck::create([
-                'position_id' => $p->id,
-                'action' => $decision->action,
-                'rule_fired' => $decision->ruleFired,
-                'volume_6h' => $decision->volume6h,
-                'avg_6h' => $decision->avg6h,
-                'ratio' => $decision->ratio,
-                'price' => $price,
-                'pnl_usd' => $p->unrealisedPnl($price),
-                'pnl_pct' => $p->unrealisedPnlPct($price),
-                'held_minutes' => $p->heldMinutes(),
-                'meta' => ['why' => $decision->why] + $decision->meta,
-            ]);
-
             try {
-                if ($decision->shouldClose()) {
-                    $this->close($p, $decision->ruleFired ?? 'risk', $price, $executor);
-                } elseif ($decision->shouldTrim()) {
-                    $this->trim($p, $decision->fraction, $decision->ruleFired ?? 'trim', $price, $executor, $decision->limitPrice);
-                } elseif ($decision->shouldAdd()) {
-                    $this->addFromRisk($p, $decision, $ctx, $executor);
-                }
-            } catch (LockTimeoutException $e) {
-                // A close/trim's mutate lock is held by someone else (a concurrent API close/trim, or a
-                // slow exchange call) — this position gets another chance next sweep; the ones after it
-                // in this loop must not go unmanaged because of it.
-                $this->reporter->warn('RISK', "{$p->product_id}: mutate lock timed out on {$decision->action}, will retry next sweep");
-            }
+                $ctx = $this->context($strategy, false, $executor->mode());
+                $stats = $this->statsWithRetries($p->product_id, (int) $ctx->param('risk.stale_data_retries', 2));
 
-            $out[] = ['position' => $p->product_id, 'action' => $decision->action, 'rule' => $decision->ruleFired];
+                if ($stats === null) {
+                    $decision = RiskDecision::close('unmeasurable', null, null, null, 'no answer after retries — a position you cannot measure is a position you do not hold');
+                } elseif ($stats->price <= 0) {
+                    // ProductStatsBuilder::fromBars() returns price 0.0 for a product with no
+                    // closed 1H bars yet, and statsWithRetries() passes it straight through — a
+                    // real (non-null) stats row that is still useless. Skipped before
+                    // markPrice(0.0) can stamp a zero last_price onto the position (round-6 review).
+                    // Round-7 review, MAJOR: that skip was unbounded — a position whose stats price
+                    // never recovers (a halted/delisted product, or a stalled candle feeder) was
+                    // never risk-evaluated again and desk:risk kept reporting "no open positions"
+                    // while it sat unmanaged. Bounded here the same way a null stats row already
+                    // is: after risk.max_zero_price_sweeps consecutive price-0 sweeps, force-close
+                    // it instead of skipping an (N+1)th time.
+                    $zeroSweeps = ((int) ($p->meta['zero_price_sweeps'] ?? 0)) + 1;
+                    $maxZeroSweeps = (int) $ctx->param('risk.max_zero_price_sweeps', 5);
+
+                    if ($zeroSweeps < $maxZeroSweeps) {
+                        // error(), not warn() — warn() never reaches Telegram (Reporter.php), and this
+                        // runs on desk:risk's everyMinute schedule, so a warn() here is functionally silent.
+                        $this->reporter->error('RISK', "{$p->product_id}: stats price is {$stats->price}, skipping this position this sweep ({$zeroSweeps}/{$maxZeroSweeps} before force-close)");
+                        $p->meta = array_merge($p->meta ?? [], ['zero_price_sweeps' => $zeroSweeps]);
+                        $p->save();
+                        // So desk:risk stops printing "no open positions" (DeskRisk.php) and the sweep
+                        // output stops implying this position doesn't exist while it sits unmanaged.
+                        $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
+
+                        continue;
+                    }
+
+                    $decision = RiskDecision::close('unmeasurable', null, null, null, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold");
+                } else {
+                    $p->markPrice($stats->price);
+                    $decision = $strategy->risk($p, $stats, $ctx);
+                    if (($p->meta['zero_price_sweeps'] ?? 0) !== 0) {
+                        $p->meta = array_merge($p->meta ?? [], ['zero_price_sweeps' => 0]);
+                    }
+                    $p->save();
+                }
+
+                // A price-0 stats row (handled above) must not stamp $price to 0 for the escalated
+                // close below — fall back to the last known price exactly like the null-stats case.
+                $price = ($stats !== null && $stats->price > 0) ? $stats->price : (float) ($p->last_price ?? $p->entry_price);
+                if ($executor instanceof PaperExecutor && Perps::enabled()) {
+                    $this->accrueFunding($p, $price);
+                }
+                RiskCheck::create([
+                    'position_id' => $p->id,
+                    'action' => $decision->action,
+                    'rule_fired' => $decision->ruleFired,
+                    'volume_6h' => $decision->volume6h,
+                    'avg_6h' => $decision->avg6h,
+                    'ratio' => $decision->ratio,
+                    'price' => $price,
+                    'pnl_usd' => $p->unrealisedPnl($price),
+                    'pnl_pct' => $p->unrealisedPnlPct($price),
+                    'held_minutes' => $p->heldMinutes(),
+                    'meta' => ['why' => $decision->why] + $decision->meta,
+                ]);
+
+                try {
+                    if ($decision->shouldClose()) {
+                        $this->close($p, $decision->ruleFired ?? 'risk', $price, $executor);
+                    } elseif ($decision->shouldTrim()) {
+                        $this->trim($p, $decision->fraction, $decision->ruleFired ?? 'trim', $price, $executor, $decision->limitPrice);
+                    } elseif ($decision->shouldAdd()) {
+                        $this->addFromRisk($p, $decision, $ctx, $executor);
+                    }
+                } catch (LockTimeoutException $e) {
+                    // A close/trim's mutate lock is held by someone else (a concurrent API close/trim, or a
+                    // slow exchange call) — this position gets another chance next sweep; the ones after it
+                    // in this loop must not go unmanaged because of it.
+                    $this->reporter->warn('RISK', "{$p->product_id}: mutate lock timed out on {$decision->action}, will retry next sweep");
+                }
+
+                $out[] = ['position' => $p->product_id, 'action' => $decision->action, 'rule' => $decision->ruleFired];
+            } catch (\Throwable $e) {
+                // Any unhandled failure evaluating ONE position (a strategy bug, a malformed stored
+                // definition reaching an unguarded runtime path, a division by zero) must not starve
+                // every position after it in the sweep — round-6 review, blockers 2 and 3 both proved
+                // a live way to trigger this from stored data the schema validator waved through.
+                $this->reporter->error('RISK', "{$p->product_id}: risk evaluation failed, skipping this position: ".$e->getMessage());
+                report($e);
+                $out[] = ['position' => $p->product_id, 'action' => 'error', 'rule' => null];
+
+                continue;
+            }
         }
 
         $this->notifyOnBigMove($executor);
@@ -887,6 +946,15 @@ class Desk
 
                 $netPnl = $this->bookExit($p, $result);
 
+                if ($result->basisRecovered) {
+                    // Same hazard doEnter()'s slippage check guards against: a recovered fill's
+                    // slippage is unmeasured, not zero, and exit_price/pnl here come straight off
+                    // that same fabricated basis (round-6 review, MAJOR — proven: a sell recovered
+                    // to the decision price booked pnl overstated by the real, unmeasured
+                    // slippage, understating risk.daily_loss_cap_pct via dailyPnlPct()).
+                    $this->reporter->error('FILLS', sprintf('FILL BASIS RECOVERED (slippage unmeasured) — %s %s [%s] @ %.6f', $p->isShort() ? 'COVER' : 'SELL', $p->product_id, $rule, $result->fillPrice));
+                }
+
                 if ($p->quantity > self::QTY_EPSILON) {
                     $p->save();
                     $this->reporter->trade('RISK', sprintf('PARTIAL CLOSE %s [%s] pnl $%.2f, %.8f still open', $p->product_id, $rule, $netPnl, $p->quantity), ['position_id' => $p->id]);
@@ -999,12 +1067,27 @@ class Desk
                 $soldFraction = min(1.0, $result->filledQty / max($qtyBefore, 1e-12));
                 $netPnl = $this->bookExit($p, $result);
                 $p->trims_count = $p->trims_count + 1;
+                // v2's ladder reconciles its rung price from this, not the rung's computed target
+                // (JsonPluginStrategy::reconcilePendingRung(), docs/STRATEGY_SCHEMA_V2.md review round 1)
+                // — a live/paper trim fills at market, not at the target. No null/zero guard needed
+                // here: we already returned above unless $result->ok(), which now requires a
+                // positive fillPrice (round-4 review, OrderResult::ok()).
+                $meta = $p->meta ?? [];
+                $meta['v2']['last_trim_fill_price'] = (float) $result->fillPrice;
+                $p->meta = $meta;
 
                 if ($p->quantity > self::QTY_EPSILON) {
                     $p->save();
                 } else {
                     $this->markFullyClosed($p, $result, $rule);
                     $p->save();
+                }
+
+                if ($result->basisRecovered) {
+                    // Same hazard as close() (round-6 review, MAJOR): a recovered fill's slippage
+                    // is unmeasured, not zero, and the banked pnl above comes straight off that
+                    // same fabricated basis.
+                    $this->reporter->error('FILLS', sprintf('FILL BASIS RECOVERED (slippage unmeasured) — TRIM %s [%s] @ %.6f', $p->product_id, $rule, $result->fillPrice));
                 }
 
                 $this->reporter->trade('RISK', sprintf('TRIM %s [%s] sold %.0f%% @ %.6f, banked $%.2f (total banked $%.2f)', $p->product_id, $rule, $soldFraction * 100, $result->fillPrice, $netPnl, $p->realised_usd), ['position_id' => $p->id]);

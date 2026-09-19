@@ -167,6 +167,23 @@ class CcxtExecutorTest extends TestCase
         $this->assertSame(100_000.0, $this->executor->sell('BTC-USD', 0.01, 99_000.0)->fillPrice);
     }
 
+    /**
+     * Round-5 review, BLOCKER 1: this venue never got round 4's fallback at all — a real fill
+     * with no usable average (cost 0, average 0) yielded fillPrice 0.0, OrderResult::ok() was
+     * false, and Desk::close() left the position open while the venue had already sold it.
+     */
+    public function test_a_degraded_fill_with_no_usable_average_falls_back_to_the_decision_price(): void
+    {
+        $this->client->stubCreate = ['id' => 'o-7', 'status' => 'closed'];
+        $this->client->stubOrders = [['id' => 'o-7', 'status' => 'closed', 'filled' => 0.01, 'cost' => 0, 'average' => 0, 'fee' => ['cost' => 1.2]]];
+
+        $result = $this->executor->sell('BTC-USD', 0.01, 99_000.0);
+
+        $this->assertSame(99_000.0, $result->fillPrice, 'falls back to the decision price, not 0.0');
+        $this->assertEqualsWithDelta(0.01 * 99_000.0 - 1.2, $result->filledUsd, 1e-9, 'cost is rebuilt off the same fallback basis, not left at 0');
+        $this->assertTrue($result->ok(), 'a real fill must still book once a sane basis is recovered');
+    }
+
     public function test_readback_polls_until_the_status_is_terminal(): void
     {
         $this->client->stubCreate = ['id' => 'o-5', 'status' => 'open'];

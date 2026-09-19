@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
-use App\Desk\Strategies\JsonPluginValidator;
-use App\Desk\Strategies\StrategySchemaValidator;
+use App\Desk\Strategies\SchemaMigrator;
 use App\Http\Controllers\Controller;
 use App\Hub\HubClient;
 use App\Models\StrategyPlugin;
@@ -82,9 +81,7 @@ class HubArchiveController extends Controller
         $remoteVersion = $hub->version($data['slug'], $data['version']);
         $definition = $remoteVersion['definition'];
 
-        $result = isset($definition['schema_version'])
-            ? StrategySchemaValidator::validate($definition)
-            : JsonPluginValidator::validate($definition);
+        $result = SchemaMigrator::validateForSave($definition);
 
         if (! $result['valid']) {
             return response()->json($result, 422);

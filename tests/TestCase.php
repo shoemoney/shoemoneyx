@@ -2,6 +2,7 @@
 
 namespace Tests;
 
+use App\Services\Indicators\IndicatorCache;
 use App\Services\Market\CandleStore;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 
@@ -19,5 +20,9 @@ abstract class TestCase extends BaseTestCase
         // rebuild between test methods; without this, two tests proposing the same (product, timeframe,
         // window) -- easy to do with a shared fixture date -- can see each other's candles.
         CandleStore::forgetLocal();
+
+        // Same reasoning as CandleStore::forgetLocal() above: IndicatorCache's memo also lives
+        // outside the container.
+        IndicatorCache::forgetAll();
     }
 }

@@ -7,6 +7,8 @@ namespace App\Desk\Strategies;
 use App\Desk\Data\ProductStats;
 use App\Desk\DeskContext;
 use App\Models\Position;
+use App\Services\Indicators\IndicatorCache;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Evaluates one strategy-plugin rule ({field, op, value}) against a live row.
@@ -16,15 +18,41 @@ use App\Models\Position;
 final class JsonRuleEvaluator
 {
     /** Ops every rule grammar consumer (validators, exporters) can rely on. */
-    public const OPS = ['<', '<=', '>', '>=', '==', '!=', 'between', 'in', 'not_in'];
+    public const OPS = ['<', '<=', '>', '>=', '==', '!=', 'between', 'in', 'not_in', 'crosses_above', 'crosses_below'];
 
-    public static function value(string $field, ProductStats $s, ?Position $p, DeskContext $ctx): mixed
+    /**
+     * @param  string  $tf  timeframe an `ind.*` field computes on; the caller resolves the
+     *                      rule's own `tf` override / the strategy's meta.timeframe / '1h'.
+     */
+    public static function value(string $field, ProductStats $s, ?Position $p, DeskContext $ctx, string $tf = '1h'): mixed
     {
-        if ($field === 'position.pnl_pct' && $p !== null) {
-            return $p->unrealisedPnlPct($s->price);
-        }
-        if ($field === 'position.hold_hours' && $p !== null) {
-            return $p->opened_at->diffInMinutes($ctx->now()) / 60;
+        if ($p !== null && str_starts_with($field, 'position.')) {
+            return match ($field) {
+                'position.pnl_pct' => $p->unrealisedPnlPct($s->price),
+                'position.hold_hours' => $p->opened_at->diffInMinutes($ctx->now()) / 60,
+                // v2 additions (docs/STRATEGY_SCHEMA_V2.md, "Field-to-field comparison and crosses"):
+                // avg/peak_pct read the v2 engine's OWN avg (JsonPluginStrategy::avg()), not
+                // $p->entry_price — Desk::bookAdd()/Backtester's bookAdd recompute entry_price as
+                // entry_usd / quantity on every add, a fee-INCLUSIVE cost over a fee-adjusted
+                // quantity that jumps by roughly one taker fee with no price move at all. Reading
+                // entry_price here would let a rule (legal in stop.rules/take_profit.rules/
+                // reentry.when) see a different, fee-polluted number than stop.pct_from_avg, the
+                // ladder targets, and runnerTtpDecision() all read from the same position.
+                'position.avg' => JsonPluginStrategy::avg($p),
+                // Reads the ladder's own rebased peak (JsonPluginStrategy::runnerTtpDecision(),
+                // docs/STRATEGY_SCHEMA_V2.md review round 2) — $p->peak_price is the position's
+                // ALL-TIME high and is stale after an add that lowers avg without a new price move,
+                // which would stale-arm a stop.rules/take_profit.rules/reentry.when rule reading
+                // position.peak_pct the same way it once stale-armed the runner.
+                'position.peak_pct' => ($avg = JsonPluginStrategy::avg($p)) > 0
+                    ? $p->dir() * ((float) ($p->meta['v2']['ladder']['peak_price'] ?? $p->peak_price ?? $avg) / $avg - 1) * 100
+                    : 0.0,
+                'position.rungs_fired' => count($p->meta['v2']['ladder']['fired'] ?? []),
+                'position.reentries' => count($p->meta['v2']['reentries'] ?? []),
+                'position.adds_count' => (int) $p->adds_count,
+                'position.trims_count' => (int) $p->trims_count,
+                default => null,
+            };
         }
         if ($p === null && str_starts_with($field, 'position.')) {
             return null;
@@ -35,6 +63,9 @@ final class JsonRuleEvaluator
         if ($field === 'time.weekday') {
             // PHP's `w`: 0 = Sunday … 6 = Saturday.
             return (int) $ctx->now()->format('w');
+        }
+        if (str_starts_with($field, 'ind.')) {
+            return self::indicatorValue($field, $s, $ctx, $tf, false);
         }
 
         $row = $s->jsonSerialize();
@@ -60,32 +91,120 @@ final class JsonRuleEvaluator
         return null;
     }
 
-    /** True when the rule fires (field present and comparison holds). */
-    public static function fires(array $rule, ProductStats $s, ?Position $p, DeskContext $ctx): bool
+    /**
+     * True when the rule fires (field present and comparison holds).
+     *
+     * @param  string  $defaultTf  the strategy's meta.timeframe (or '1h'); overridden by the rule's own "tf".
+     */
+    public static function fires(array $rule, ProductStats $s, ?Position $p, DeskContext $ctx, string $defaultTf = '1h'): bool
     {
-        $actual = self::value((string) ($rule['field'] ?? ''), $s, $p, $ctx);
+        $field = (string) ($rule['field'] ?? '');
+        $tf = is_string($rule['tf'] ?? null) && $rule['tf'] !== '' ? $rule['tf'] : $defaultTf;
+
+        $actual = self::value($field, $s, $p, $ctx, $tf);
         if ($actual === null) {
             return false;
         }
-        $expected = $rule['value'] ?? null;
+
+        // {value: {field: "..."}} — compare against another field instead of a literal (v2 rules grammar).
+        $raw = $rule['value'] ?? null;
+        $isFieldRef = is_array($raw) && is_string($raw['field'] ?? null);
+        $expected = $isFieldRef ? self::value($raw['field'], $s, $p, $ctx, $tf) : $raw;
         if ($expected === null) {
             return false;
         }
 
-        return match ($rule['op'] ?? null) {
+        $op = $rule['op'] ?? null;
+
+        if ($op === 'crosses_above' || $op === 'crosses_below') {
+            return self::crosses($op, $field, $isFieldRef ? $raw['field'] : null, $actual, $expected, $s, $ctx, $tf);
+        }
+
+        return match ($op) {
             '<' => $actual < $expected,
             '<=' => $actual <= $expected,
             '>' => $actual > $expected,
             '>=' => $actual >= $expected,
             '==' => $actual == $expected,
             '!=' => $actual != $expected,
-            // {value: [lo, hi]}, inclusive — session-hour / regime-band filters.
-            'between' => is_array($expected) && count($expected) === 2 && is_numeric($actual)
-                && $actual >= $expected[0] && $actual <= $expected[1],
+            // {value: [lo, hi]}, inclusive — session-hour / regime-band filters. array_is_list()
+            // guards a stored rule whose value is a two-key OBJECT (e.g. {"lo":1,"hi":1000}): that
+            // still has count() 2 but no index 0/1, which threw "Undefined array key 0" here for
+            // any pre-existing definition the schema validator had waved through before it also
+            // required a list (round-6 review) — fails closed instead.
+            'between' => self::between($field, $expected, $actual),
             // {value: [...]} — categorical/regime membership.
             'in' => is_array($expected) && in_array($actual, $expected, false),
             'not_in' => is_array($expected) && $expected !== [] && ! in_array($actual, $expected, false),
             default => false,
         };
+    }
+
+    /**
+     * Validation (SchemaMigrator::validateForSave(), reached only from save/import paths) has
+     * rejected a non-list "between" value since round 6, but nothing re-validates a definition
+     * already on load — a row stored before that tightening still reaches here and used to fail
+     * silently (bare `false`, no log line: fail-closed for entry/setup rules, but fail-OPEN for
+     * a v1 stop rule since those are OR'ed, or a v2 `all` group). Log once per evaluation so a
+     * legacy definition announces itself instead of just never firing again (round-7 review).
+     */
+    private static function between(string $field, mixed $expected, mixed $actual): bool
+    {
+        if (! is_array($expected) || count($expected) !== 2 || ! is_numeric($actual)) {
+            return false;
+        }
+        if (! array_is_list($expected)) {
+            Log::warning("JsonRuleEvaluator: 'between' rule on field \"{$field}\" has a non-list value (".json_encode($expected).') — rejected at save since round 6; this stored definition will never fire until it is fixed to a JSON array [lo, hi]');
+
+            return false;
+        }
+
+        return $actual >= $expected[0] && $actual <= $expected[1];
+    }
+
+    /**
+     * crosses_above: field was <= value on the previous bar and is > value now; crosses_below
+     * mirrors it. "Previous" only exists for `ind.*` fields (they alone have a bar series
+     * behind them) — a rule against anything else, or a strategy with no previous bar yet
+     * (its first evaluation), never fires: fail-closed, per the class-level contract.
+     */
+    private static function crosses(string $op, string $field, ?string $expectedField, mixed $actual, mixed $expected, ProductStats $s, DeskContext $ctx, string $tf): bool
+    {
+        if (! is_numeric($actual) || ! is_numeric($expected)) {
+            return false;
+        }
+        $prevActual = self::previousValue($field, $ctx, $tf, $s);
+        $prevExpected = $expectedField !== null ? self::previousValue($expectedField, $ctx, $tf, $s) : $expected;
+        if (! is_numeric($prevActual) || ! is_numeric($prevExpected)) {
+            return false;
+        }
+
+        return $op === 'crosses_above'
+            ? ((float) $prevActual <= (float) $prevExpected && (float) $actual > (float) $expected)
+            : ((float) $prevActual >= (float) $prevExpected && (float) $actual < (float) $expected);
+    }
+
+    /** The same field's value as of the bar before the latest closed one — null (never fires) for anything but an `ind.*` field. */
+    private static function previousValue(string $field, DeskContext $ctx, string $tf, ProductStats $s): mixed
+    {
+        return str_starts_with($field, 'ind.') ? self::indicatorValue($field, $s, $ctx, $tf, true) : null;
+    }
+
+    private static function indicatorValue(string $field, ProductStats $s, DeskContext $ctx, string $tf, bool $previous): mixed
+    {
+        try {
+            $parsed = IndicatorField::parse($field);
+        } catch (\InvalidArgumentException) {
+            return null;   // malformed/unknown ind.* field: fail closed, never a runtime guess
+        }
+        if ($parsed === null) {
+            return null;
+        }
+
+        $values = $previous
+            ? IndicatorCache::previous($ctx, $s->productId, $tf, $parsed, $s->price)
+            : IndicatorCache::current($ctx, $s->productId, $tf, $parsed, $s->price);
+
+        return $values[$parsed->output] ?? null;
     }
 }

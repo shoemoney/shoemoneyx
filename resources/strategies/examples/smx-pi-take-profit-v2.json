@@ -1,0 +1,59 @@
+{
+  "schema_version": 2,
+  "key": "smx-pi-take-profit",
+  "author": "shoemoney",
+  "meta": {
+    "name": "SMX π Take Profit",
+    "description": "Nibble 2/4/8/10% at +1.5/3/4.5/6%, run the rest on a TTP, π re-entry on the dip, cash it out green after fees, 2.5% fail-safe.",
+    "tags": ["take-profit", "ladder", "reentry", "smx"],
+    "timeframe": "1h",
+    "assets": ["BTC-USD", "ETH-USD"]
+  },
+  "params": {
+    "rung_spacing_pct": { "type": "number", "default": 0.5, "min": 0.1, "max": 5, "step": 0.1 },
+    "fail_safe_pct":    { "type": "number", "default": 2.5, "min": 0.5, "max": 10, "step": 0.1 }
+  },
+  "signals": {
+    "liquid":   { "all": [ { "field": "volume_h24_usd", "op": ">", "value": 500000 } ] },
+    "momentum": { "all": [ { "field": "price_change_h24_pct", "op": ">", "value": 2 },
+                           { "field": "volume_surge_h1", "op": ">", "value": 1.5 } ] },
+    "not_overbought": { "all": [ { "field": "ind.rsi(14)", "op": "<", "value": 70 } ] }
+  },
+  "entry": {
+    "side": "long",
+    "when": ["liquid", "momentum", "not_overbought"],
+    "confirm": [ { "field": "spread_bps", "op": "<=", "value": 20, "reason": "spread too wide" } ],
+    "size": { "mode": "pct_equity", "value": 5 }
+  },
+  "take_profit": {
+    "from": "avg",
+    "ladder": [
+      { "at_pct": 1.5, "sell_pct_of_original": 2 },
+      { "at_pct": 3.0, "sell_pct_of_original": 4 },
+      { "at_pct": 4.5, "sell_pct_of_original": 8 },
+      { "at_pct": 6.0, "sell_pct_of_original": 10 }
+    ],
+    "runner": { "ttp": { "activate_pct": 6.0, "giveback_pct": 1.0 } },
+    "reset_on_add": true
+  },
+  "reentry": {
+    "when": "entry",
+    "after_rungs": 1,
+    "retrace": { "of": "rung_spacing", "min": 0.5, "stay_above_avg": true },
+    "size": { "mode": "formula", "expr": "sold_qty * min(1, retrace_pct * pi / spacing_pct)" },
+    "min_spacing_x_fees": 1,
+    "cash_out": {
+      "when": "green_after_fees",
+      "sell_pct_of_reentry": 80,
+      "remainder": "runner"
+    },
+    "max_per_position": 3
+  },
+  "stop": {
+    "pct_from_avg": 2.5,
+    "anchor": "avg",
+    "time_hours": null,
+    "rules": []
+  },
+  "risk": { "max_positions": 3, "daily_loss_cap_pct": 5, "leverage_cap": 1 }
+}

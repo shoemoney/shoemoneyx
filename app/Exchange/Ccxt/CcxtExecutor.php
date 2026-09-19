@@ -108,6 +108,13 @@ class CcxtExecutor implements Executor
         $cost = (float) ($order['cost'] ?? 0);
         $fee = $this->feeOf($order);
         $avg = (float) ($order['average'] ?? 0) ?: ($filledQty > 0 ? $cost / $filledQty : null);
+        // Same degraded-poll shape CoinbaseExecutor defends against: a real fill with no usable
+        // average (round-5 review — this venue never got round 4's fix at all, so OrderResult::ok()
+        // refused every such fill and Desk::close()/trim() left the position open while the venue
+        // had already sold it).
+        [$avg, $cost, $basisRecovered] = OrderResult::recoverFillBasis($filledQty, $avg, $cost, $decisionPrice, "{$this->ccxtId} (ccxt)", $orderId, [
+            'average' => $order['average'] ?? null,
+        ]);
         $status = $filledQty > 0 ? 'filled' : 'rejected';
         $partial = $side === 'BUY'
             ? $cost + $fee < $requested * 0.98
@@ -125,6 +132,7 @@ class CcxtExecutor implements Executor
             venueOrderId: $orderId,
             raw: ['create' => $create, 'order' => $order],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
+            basisRecovered: $basisRecovered,
         );
     }
 
