@@ -158,6 +158,28 @@ class JsonPluginStrategy extends BaseDeskStrategy
         return ($def['schema_version'] ?? 1) === 2;
     }
 
+    /**
+     * The ticket VET's liquidity/book-depth/executable-depth/fee-viability gates measure against.
+     * BaseDeskStrategy's own default is a 6%-of-equity Kelly proxy that happens to equal v1's real
+     * ticket (parent::size() is Kelly-capped at that same size.kelly_cap_pct) but has no relation
+     * to a v2 sizing object — a v2 `entry.size` of a flat $500,000 or 50% of equity would still be
+     * vetted as a $6,000 ticket. Resolving the real v2 sizing object here (falling back to the base
+     * Kelly proxy for v1 or no plugin) makes those gates measure what will actually be sent
+     * (docs/STRATEGY_SCHEMA_V2.md review round 3).
+     */
+    protected function intendedTicket(Candidate $c, Bank $bank, DeskContext $ctx): float
+    {
+        $def = $this->definition($ctx);
+        if ($def !== null && self::isV2($def) && is_array($def['entry']['size'] ?? null)) {
+            $dollars = $this->sizingDollars($def['entry']['size'], 'entry', $ctx, $def, $bank, $c->stats->price, null, $c);
+            if ($dollars !== null && $dollars > 0) {
+                return $dollars;
+            }
+        }
+
+        return parent::intendedTicket($c, $bank, $ctx);
+    }
+
     public function vet(Candidate $candidate, Bank $bank, DeskContext $ctx): Verdict
     {
         $verdict = parent::vet($candidate, $bank, $ctx);
@@ -399,9 +421,29 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $why .= sprintf(' -> $%.2f', $dollars);
 
         $dollars = min($dollars, $free);
+
+        // Same liquidity/book-depth cut BaseDeskStrategy::size() applies (see there) — v2 sizing
+        // modes (usd, formula, an outsized pct_equity) have no relationship to that Kelly ceiling,
+        // so without this a v2 ticket sails past 24h volume/book depth straight into an unexitable
+        // fill (docs/STRATEGY_SCHEMA_V2.md review round 3).
+        $s = $v->candidate->stats;
+        $maxPctVol = (float) $ctx->param('vet.max_pct_of_volume_24h', 0.5) / 100;
+        $liqCap = $s->volumeH24Usd * $maxPctVol;
+        if ($s->bookDepthUsd !== null) {
+            $liqCap = min($liqCap, $s->bookDepthUsd / (float) $ctx->param('vet.min_book_depth_multiple', 3.0));
+        }
+        $exitable = true;
+        if ($dollars > $liqCap) {
+            $dollars = $liqCap;
+            $why .= sprintf('; cut to liquidity cap $%.0f', $liqCap);
+        }
+        if ($liqCap < $minTicket) {
+            $exitable = false;
+        }
+
         $fee = Fees::effectiveRate($dollars, (float) $ctx->param('fees.taker_rate', 0.006), (float) $ctx->param('fees.floor_usd', 0));
-        if ($dollars < $minTicket || $fee > (float) $ctx->param('fees.max_effective_fee_pct', 0.02)) {
-            return new SizeDecision($v, 0, 0, 0, true, false, $why.'; below minimum viable ticket');
+        if ($dollars < $minTicket || $fee > (float) $ctx->param('fees.max_effective_fee_pct', 0.02) || ! $exitable) {
+            return new SizeDecision($v, 0, 0, 0, $exitable, false, $why.'; below minimum viable ticket');
         }
 
         $dollars = floor($dollars * 100) / 100;
@@ -479,7 +521,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             $vars['cash'] = $bank->freeCash();
         }
         if ($position !== null) {
-            $vars['avg'] = $this->avg($position);
+            $vars['avg'] = self::avg($position);
             $vars['position_usd'] = (float) $position->quantity * $price;
             $vars['initial_cost_usd'] = (float) ($position->meta['initial_cost_usd'] ?? $position->entry_usd);
         }
@@ -599,8 +641,12 @@ class JsonPluginStrategy extends BaseDeskStrategy
      * entry_usd / quantity on every add — a fee-INCLUSIVE cost divided by a fee-adjusted quantity —
      * which jumps by roughly one taker fee with no price move at all. Falls back to entry_price only
      * for a position reconcileV2Avg() has never touched (riskV2() always calls it first).
+     *
+     * Public and static so JsonRuleEvaluator's `position.avg`/`position.peak_pct` read the exact
+     * same number RISK's own ladder/stop/runner math reads, instead of a second, fee-polluted
+     * definition drifting from this one (docs/STRATEGY_SCHEMA_V2.md review round 3).
      */
-    private function avg(Position $position): float
+    public static function avg(Position $position): float
     {
         return is_numeric($position->meta['v2']['avg'] ?? null) ? (float) $position->meta['v2']['avg'] : (float) $position->entry_price;
     }
@@ -613,6 +659,16 @@ class JsonPluginStrategy extends BaseDeskStrategy
      * `(entry_usd delta - fees_usd delta) / quantity delta` and folded into the running average; a
      * quantity decrease (a trim — Desk::bookExit() reduces quantity and entry_usd by the same
      * fraction) never moves it, matching how `position->entry_price` itself is untouched by trims.
+     *
+     * `entry_usd` is fee-INCLUSIVE on the plain spot/cash-notional fill path (Desk/Backtester book
+     * the full requested dollars, fee already inside) but fee-EXCLUSIVE on whole-contract perps and
+     * on margin (they book `Lot::notional`/`OrderResult::filledUsd`, which never carried the fee —
+     * it is booked separately into `fees_usd` only). Subtracting the whole `fees_usd` delta on that
+     * second convention would strip a fee that was never in the basis, understating every add's fill
+     * price by ~one taker fee. `meta.entry_fee_excluded` (set by Desk::bookAdd()/Backtester's own
+     * bookAdd) is the running total of fee already excluded from `entry_usd`; subtracting only the
+     * part of the `fees_usd` delta that `entry_usd` does not already carry recovers the true fill
+     * price on both conventions.
      */
     private function reconcileV2Avg(Position $position): float
     {
@@ -621,6 +677,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $qty = (float) $position->quantity;
         $entryUsd = (float) $position->entry_usd;
         $feesUsd = (float) $position->fees_usd;
+        $feeExcl = (float) ($meta['entry_fee_excluded'] ?? 0);
 
         $avg = is_numeric($v2['avg'] ?? null) ? (float) $v2['avg'] : null;
         $prevQty = is_numeric($v2['avg_qty'] ?? null) ? (float) $v2['avg_qty'] : null;
@@ -630,8 +687,9 @@ class JsonPluginStrategy extends BaseDeskStrategy
         } elseif ($qty > $prevQty + 1e-12) {
             $prevUsd = is_numeric($v2['avg_entry_usd'] ?? null) ? (float) $v2['avg_entry_usd'] : $entryUsd;
             $prevFees = is_numeric($v2['avg_fees_usd'] ?? null) ? (float) $v2['avg_fees_usd'] : $feesUsd;
+            $prevFeeExcl = is_numeric($v2['avg_fee_excl'] ?? null) ? (float) $v2['avg_fee_excl'] : $feeExcl;
             $qtyDelta = $qty - $prevQty;
-            $fillPrice = ($entryUsd - $prevUsd - ($feesUsd - $prevFees)) / $qtyDelta;
+            $fillPrice = ($entryUsd - $prevUsd - (($feesUsd - $prevFees) - ($feeExcl - $prevFeeExcl))) / $qtyDelta;
             $avg = ($avg * $prevQty + $fillPrice * $qtyDelta) / $qty;
         }
 
@@ -639,6 +697,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $meta['v2']['avg_qty'] = $qty;
         $meta['v2']['avg_entry_usd'] = $entryUsd;
         $meta['v2']['avg_fees_usd'] = $feesUsd;
+        $meta['v2']['avg_fee_excl'] = $feeExcl;
         $position->meta = $meta;
 
         return $avg;
@@ -658,7 +717,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
     {
         $meta = $position->meta ?? [];
         $ladder = is_array($meta['v2']['ladder'] ?? null) ? $meta['v2']['ladder'] : null;
-        $avg = $this->avg($position);
+        $avg = self::avg($position);
         $resetOnAdd = ! array_key_exists('reset_on_add', $takeProfit) || (bool) $takeProfit['reset_on_add'];
 
         if ($ladder === null) {
@@ -697,18 +756,26 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if ((int) $position->adds_count > (int) ($last['adds_count_at_emit'] ?? -1)) {
             // The lot's real fill: the position's own post-add qty/cost delta, which already carries
             // slippage (bookAdd() fills at the slipped mark) and the fee-adjusted quantity — not the
-            // pre-fill price/qty this lot was recorded with when RISK emitted the ADD. $usdFilled is
-            // fee-INCLUSIVE (Desk::bookAdd() adds the full filled dollars, fee already inside — see
-            // avg()'s docblock); subtracting the fee delta gives the fee-EXCLUSIVE fill price
-            // greenAfterFees() needs, so its own fee term isn't charged a second time on entry.
+            // pre-fill price/qty this lot was recorded with when RISK emitted the ADD. $usdFilled
+            // carries the fee only on the plain spot/cash-notional path; on whole-contract perps and
+            // margin it does not (see reconcileV2Avg()'s docblock), so `entry_fee_excluded`'s own
+            // delta is subtracted back out before the fee delta is removed, on both conventions.
             $qtyFilled = (float) $position->quantity - (float) ($last['qty_at_emit'] ?? 0.0);
             $usdFilled = (float) $position->entry_usd - (float) ($last['entry_usd_at_emit'] ?? 0.0);
             $feesFilled = (float) $position->fees_usd - (float) ($last['fees_usd_at_emit'] ?? 0.0);
+            $feeExclFilled = (float) ($meta['entry_fee_excluded'] ?? 0) - (float) ($last['entry_fee_excl_at_emit'] ?? 0.0);
             if ($qtyFilled > 0) {
                 $list[$lastIdx]['qty'] = $qtyFilled;
-                $list[$lastIdx]['price'] = ($usdFilled - $feesFilled) / $qtyFilled;
+                $list[$lastIdx]['price'] = ($usdFilled - ($feesFilled - $feeExclFilled)) / $qtyFilled;
+                $list[$lastIdx]['confirmed'] = true;
+            } else {
+                // A zero-quantity "fill" (adds_count advanced for some unrelated reason, or an
+                // offsetting trim in the same window) is never promoted to confirmed carrying the
+                // stale pre-fill intent — nothing may read it (see class docblock) — so it is
+                // dropped exactly like the never-filled branch below.
+                unset($list[$lastIdx]);
+                $list = array_values($list);
             }
-            $list[$lastIdx]['confirmed'] = true;
         } else {
             unset($list[$lastIdx]);
             $list = array_values($list);
@@ -804,7 +871,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
         if (isset($stop['pct_from_avg']) && is_numeric($stop['pct_from_avg'])) {
             $anchor = $stop['anchor'] ?? 'avg';
-            $anchorPrice = $anchor === 'entry' ? (float) ($position->meta['v2']['entry_price'] ?? $position->entry_price) : $this->avg($position);
+            $anchorPrice = $anchor === 'entry' ? (float) ($position->meta['v2']['entry_price'] ?? $position->entry_price) : self::avg($position);
             $pnlPct = $anchorPrice > 0 ? $position->dir() * ($stats->price / $anchorPrice - 1) * 100 : 0.0;
             if ($pnlPct <= -(float) $stop['pct_from_avg']) {
                 return RiskDecision::close(
@@ -912,7 +979,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             return null;
         }
 
-        $avg = $this->avg($position);
+        $avg = self::avg($position);
         $dir = $position->dir();
         $atPct = (float) $rung['at_pct'];
         $target = $avg * (1 + $dir * $atPct / 100);
@@ -995,7 +1062,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $retraceMin = is_numeric($retrace['min'] ?? null) ? (float) $retrace['min'] : 0.0;
         $requiredRetracePct = $retraceOf === 'pct' ? $retraceMin : $retraceMin * $spacingPct;
 
-        $avg = $this->avg($position);
+        $avg = self::avg($position);
         $dir = $position->dir();
         $price = $stats->price;
         $retracedPct = $avg > 0 ? $dir * ($salePrice - $price) / $avg * 100 : 0.0;
@@ -1047,6 +1114,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             'cashed_out' => false, 'rung' => $lastFiredIdx, 'adds_count_at_emit' => (int) $position->adds_count,
             'qty_at_emit' => (float) $position->quantity, 'entry_usd_at_emit' => (float) $position->entry_usd,
             'fees_usd_at_emit' => (float) $position->fees_usd,
+            'entry_fee_excl_at_emit' => (float) ($meta['entry_fee_excluded'] ?? 0),
             'confirmed' => false,
         ];
         $meta['v2']['reentries'] = $list;
@@ -1133,7 +1201,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $defaultActivate = $rungs !== [] ? (float) end($rungs)['at_pct'] : 0.0;
         $activatePct = is_numeric($runner['activate_pct'] ?? null) ? (float) $runner['activate_pct'] : $defaultActivate;
 
-        $avg = $this->avg($position);
+        $avg = self::avg($position);
         $peak = (float) ($position->peak_price ?? $avg);
         $peakPct = $avg > 0 ? $position->dir() * ($peak / $avg - 1) * 100 : 0.0;
         if ($peakPct < $activatePct) {

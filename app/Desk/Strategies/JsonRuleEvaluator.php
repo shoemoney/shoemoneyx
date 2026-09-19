@@ -30,10 +30,16 @@ final class JsonRuleEvaluator
                 'position.pnl_pct' => $p->unrealisedPnlPct($s->price),
                 'position.hold_hours' => $p->opened_at->diffInMinutes($ctx->now()) / 60,
                 // v2 additions (docs/STRATEGY_SCHEMA_V2.md, "Field-to-field comparison and crosses"):
-                // avg/peak_pct read straight off the position, the four counts off its v2 engine state.
-                'position.avg' => (float) $p->entry_price,
-                'position.peak_pct' => $p->entry_price > 0
-                    ? $p->dir() * ((float) ($p->peak_price ?? $p->entry_price) / $p->entry_price - 1) * 100
+                // avg/peak_pct read the v2 engine's OWN avg (JsonPluginStrategy::avg()), not
+                // $p->entry_price — Desk::bookAdd()/Backtester's bookAdd recompute entry_price as
+                // entry_usd / quantity on every add, a fee-INCLUSIVE cost over a fee-adjusted
+                // quantity that jumps by roughly one taker fee with no price move at all. Reading
+                // entry_price here would let a rule (legal in stop.rules/take_profit.rules/
+                // reentry.when) see a different, fee-polluted number than stop.pct_from_avg, the
+                // ladder targets, and runnerTtpDecision() all read from the same position.
+                'position.avg' => JsonPluginStrategy::avg($p),
+                'position.peak_pct' => ($avg = JsonPluginStrategy::avg($p)) > 0
+                    ? $p->dir() * ((float) ($p->peak_price ?? $avg) / $avg - 1) * 100
                     : 0.0,
                 'position.rungs_fired' => count($p->meta['v2']['ladder']['fired'] ?? []),
                 'position.reentries' => count($p->meta['v2']['reentries'] ?? []),

@@ -8,6 +8,7 @@ use App\Desk\Data\ProductStats;
 use App\Desk\Data\RiskDecision;
 use App\Desk\DeskContext;
 use App\Desk\Strategies\JsonPluginStrategy;
+use App\Desk\Strategies\JsonRuleEvaluator;
 use App\Models\Position;
 use App\Models\StrategyPlugin;
 use Carbon\Carbon;
@@ -243,6 +244,81 @@ class JsonPluginStrategyV2EngineTest extends TestCase
     }
 
     #[Test]
+    public function avg_recovers_the_true_fill_price_on_the_fee_exclusive_whole_contract_perps_convention(): void
+    {
+        $this->plugin('smx-pi-fee-excl');
+        $ctx = $this->ctx('smx-pi-fee-excl');
+        $p = $this->freshPosition();
+        $p->quantity = 1.0;
+        $p->entry_price = 100.0;
+        $p->entry_usd = 100.0;
+        $strategy = new JsonPluginStrategy;
+
+        $strategy->risk($p, $this->stats(100.0), $ctx);
+        $this->assertEqualsWithDelta(100.0, $p->meta['v2']['avg'], 1e-9);
+
+        // A whole-contract/margin add of 1.0 unit at 110: on that convention Desk::bookAdd() books
+        // filledUsd = Lot::notional (fee-EXCLUSIVE) into entry_usd and the fee only into fees_usd +
+        // meta.entry_fee_excluded (Desk.php review round 3) — unlike the plain spot path, where
+        // entry_usd already carries the fee.
+        $notional = 1.0 * 110.0;
+        $fee = $notional * 0.006;
+        $p->quantity += 1.0;
+        $p->entry_usd += $notional;
+        $p->fees_usd += $fee;
+        $p->entry_price = $p->entry_usd / $p->quantity;
+        $p->adds_count++;
+        $meta = $p->meta;
+        $meta['entry_fee_excluded'] = (float) ($meta['entry_fee_excluded'] ?? 0) + $fee;
+        $p->meta = $meta;
+
+        $strategy->risk($p, $this->stats(110.0), $ctx);
+
+        // 1.0 @ 100 + 1.0 @ 110, both legs fee-exclusive -> exactly the quantity-weighted price
+        // (105.00), not the ~104.67 the old one-term fee subtraction produced by charging a fee
+        // that was never folded into entry_usd on this convention.
+        $this->assertEqualsWithDelta(105.0, $p->meta['v2']['avg'], 1e-9);
+    }
+
+    #[Test]
+    public function position_avg_reads_the_engine_avg_not_entry_price_on_the_fee_inclusive_spot_convention(): void
+    {
+        $this->plugin('smx-pi-spot-fee');
+        $ctx = $this->ctx('smx-pi-spot-fee');
+        $p = $this->freshPosition();
+        $p->quantity = 1.0;
+        $p->entry_price = 100.0;
+        $p->entry_usd = 100.0;
+        $strategy = new JsonPluginStrategy;
+
+        $strategy->risk($p, $this->stats(100.0), $ctx);
+        $this->assertEqualsWithDelta(100.0, $p->meta['v2']['avg'], 1e-9);
+
+        // A plain cash-notional (spot) add of $110: entry_usd books the FULL requested dollars
+        // (fee already inside — Desk::bookAdd()/Backtester's own bookAdd on this path), the fee
+        // only shaves the filled quantity; meta.entry_fee_excluded stays untouched (0), matching
+        // the convention Desk sets it for on this path (Desk.php review round 3).
+        $usd = 110.0;
+        $fee = $usd * 0.006;
+        $filledQty = ($usd - $fee) / 110.0;
+        $p->quantity += $filledQty;
+        $p->entry_usd += $usd;
+        $p->fees_usd += $fee;
+        $p->entry_price = $p->entry_usd / $p->quantity;
+        $p->adds_count++;
+
+        $strategy->risk($p, $this->stats(110.0), $ctx);
+        $avg = $p->meta['v2']['avg'];
+
+        // entry_price recomputes as entry_usd / quantity — a fee-INCLUSIVE cost over a
+        // fee-adjusted quantity — and jumps away from the true fill price with no price move at
+        // all; JsonRuleEvaluator's `position.avg` must read the engine's own avg(), the same
+        // number stop.pct_from_avg / the ladder targets / the runner all read, not this.
+        $this->assertNotEqualsWithDelta((float) $p->entry_price, $avg, 1e-4, 'entry_price and the engine avg must differ on this convention or the test proves nothing');
+        $this->assertEqualsWithDelta($avg, JsonRuleEvaluator::value('position.avg', $this->stats(110.0), $p, $ctx), 1e-9);
+    }
+
+    #[Test]
     public function green_after_fees_requires_the_move_to_clear_both_legs_fee(): void
     {
         $long = new Position(['side' => 'long']);
@@ -429,6 +505,33 @@ class JsonPluginStrategyV2EngineTest extends TestCase
         $this->assertEqualsWithDelta($filledQty, $lot['qty'], 1e-9, 'the lot must record the REAL filled quantity');
         $this->assertEqualsWithDelta($dAdd->dollars / $filledQty, $lot['price'], 1e-9, 'and the real per-unit cost, not the pre-fill intent');
         $this->assertNotEqualsWithDelta($intendedPrice, $lot['price'], 1e-6, 'which must differ from the naive intended price');
+    }
+
+    #[Test]
+    public function a_zero_quantity_fill_drops_the_pending_reentry_lot_instead_of_confirming_it(): void
+    {
+        $this->plugin('smx-pi-zero-fill');
+        $ctx = $this->ctx('smx-pi-zero-fill');
+        $p = $this->freshPosition();
+        $strategy = new JsonPluginStrategy;
+
+        $this->step($p, $ctx, 101.5);   // rung 0 fires
+        $p->markPrice(100.7);
+        $dAdd = $strategy->risk($p, $this->stats(100.7), $ctx);
+        $this->assertTrue($dAdd->shouldAdd());
+        $this->assertCount(1, $p->meta['v2']['reentries'], 'the pending lot was recorded');
+
+        // adds_count advances for some unrelated reason (a trim in the same window offsetting it,
+        // a counter bump elsewhere) but quantity never moved — the add never actually filled.
+        $p->adds_count++;
+
+        // Below avg: retrace.stay_above_avg (default true) blocks a fresh re-arm on this same
+        // call, so the only thing this RISK call can do with the stale lot is reconcile it —
+        // isolating the drop from reentryArmDecision() immediately replacing it with a new one.
+        $p->markPrice(99.9);
+        $strategy->risk($p, $this->stats(99.9), $ctx);
+
+        $this->assertSame([], $p->meta['v2']['reentries'], 'a zero-fill lot is dropped, never promoted to confirmed carrying the stale pre-fill intent');
     }
 
     #[Test]

@@ -513,6 +513,14 @@ class Desk
         $existing->adds_count++;
         $meta = $existing->meta ?? [];
         $meta['entry_fees_usd'] = (float) ($meta['entry_fees_usd'] ?? 0) + $result->feeUsd;
+        // Mirrors Backtester's own bookAdd (Backtester.php, entry_fee_excluded): whole-contract perps
+        // and margin fills book filledUsd = Lot::notional/OrderResult::filledUsd, which never carried
+        // the fee (booked separately, above); the plain spot/cash-notional path's filledUsd DOES carry
+        // it. JsonPluginStrategy::reconcileV2Avg() needs to know which convention produced this fill to
+        // recover the true per-unit price, and this is the only place that still has $result to ask.
+        $feeExcluded = $result->fillPrice !== null && abs($result->filledUsd - $result->filledQty * $result->fillPrice) < max(1e-6, abs($result->filledUsd) * 1e-9)
+            ? $result->feeUsd : 0.0;
+        $meta['entry_fee_excluded'] = (float) ($meta['entry_fee_excluded'] ?? 0) + $feeExcluded;
         if ($margin !== null) {
             $meta['margin_usd'] = (float) ($meta['margin_usd'] ?? 0) + $margin;
         }

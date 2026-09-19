@@ -4,13 +4,21 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Desk\Backtester;
 use App\Desk\Strategies\SchemaMigrator;
 use App\Desk\Strategies\StrategySchemaValidator;
+use App\Models\Candle;
+use App\Models\Product;
+use App\Models\StrategyPlugin;
+use Carbon\Carbon;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
 class SchemaMigratorTest extends TestCase
 {
+    use RefreshDatabase;
+
     private function legacyDefinition(): array
     {
         return [
@@ -332,14 +340,9 @@ class SchemaMigratorTest extends TestCase
     }
 
     /**
-     * Placeholder for the spec's hard proof ("every v1 example round-trips ...
-     * produce byte-identical backtest fills") until phase C's ladder engine
-     * lands — Backtester has nothing to run a v2 take_profit.ladder against
-     * yet (SchemaMigrator::migrate() refuses schema_version:2 until then).
-     * Asserted here in closed form: the percent-of-original ladder computed
-     * from a 3-rung fraction-of-remaining v1 ladder sells the same absolute
-     * quantities, in order, as the v1 ladder would against a fixed starting
-     * position.
+     * Closed-form companion to the real round trip below: the percent-of-original ladder
+     * computed from a 3-rung fraction-of-remaining v1 ladder sells the same absolute
+     * quantities, in order, as the v1 ladder would against a fixed starting position.
      */
     #[Test]
     public function the_percent_of_original_ladder_implies_the_same_absolute_fills_as_the_v1_fraction_ladder(): void
@@ -366,5 +369,97 @@ class SchemaMigratorTest extends TestCase
 
         $this->assertEqualsWithDelta($v1Fills, $v2Fills, 0.0001);
         $this->assertEqualsWithDelta([50.0, 25.0, 25.0], $v2Fills, 0.0001);
+    }
+
+    /** @return array<int, float> [product volume baseline, close price at the end of the tape] */
+    private function seedRsiDipTape(string $productId, Carbon $from): void
+    {
+        $ts = $from->copy();
+        $price = 100.0;
+        // 24 warmup bars: mild oscillation, enough candles for the base vet chain's own
+        // min_candles_h1 gate and to clear Indicators::bundle's 30-bar minimum alongside the
+        // decline below (extra.indicators / indicators.rsi14 are both null under 30 bars).
+        for ($i = 0; $i < 24; $i++) {
+            $ts->addHour();
+            $open = $price;
+            $price *= 1 + ($i % 2 === 0 ? 0.002 : -0.002);
+            Candle::create(['product_id' => $productId, 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => max($open, $price), 'low' => min($open, $price), 'close' => $price, 'volume' => 200]);
+        }
+        // 15 straight-down bars: a sustained decline drives RSI(14) under the trigger's 35
+        // threshold on its own, independent of the exact formula's rounding.
+        for ($i = 0; $i < 15; $i++) {
+            $ts->addHour();
+            $open = $price;
+            $price *= 0.985;
+            Candle::create(['product_id' => $productId, 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => $open, 'low' => $price, 'close' => $price, 'volume' => 200]);
+        }
+        // The trigger bar: continues the decline (RSI stays oversold) on a volume spike
+        // (volume_surge_h1 > 1.5), timestamped inside setup's time.hour_utc [12, 20] window —
+        // 24 + 15 + 1 = 40 hours past a midnight-UTC $from lands on hour 16.
+        $ts->addHour();
+        $open = $price;
+        $price *= 0.99;
+        Candle::create(['product_id' => $productId, 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => $open, 'low' => $price, 'close' => $price, 'volume' => 3000]);
+
+        // A few flat bars after the fill: no v1 exit condition in this example (no partials,
+        // no adds, no trailing, volume_ratio_6h stays well over 0.2, 48h time stop never
+        // reached) fires before the window ends, so both runs close identically at
+        // 'end_of_test' — proving the migration round-trips the ENTRY path faithfully, not
+        // just a hand-picked exit.
+        for ($i = 0; $i < 3; $i++) {
+            $ts->addHour();
+            $open = $price;
+            Candle::create(['product_id' => $productId, 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => $open, 'low' => $open, 'close' => $price, 'volume' => 200]);
+        }
+    }
+
+    /**
+     * The spec's own hard proof (docs/STRATEGY_SCHEMA_V2.md, "Migration v1 -> v2"): the shipped
+     * v1 example round-trips through SchemaMigrator::v1ToV2() to produce identical Backtester
+     * fills. Run twice on two products carrying the exact same candle tape — once on the raw
+     * v1 definition, once on its v1ToV2() conversion — with sizing params overridden to match
+     * what the v1 definition's own (v1-runtime-inert) `entry.sizing` declares, since v1ToV2
+     * carries `kelly_fraction`/`max_pct_book` into a v2 sizing object that actually reads them.
+     */
+    #[Test]
+    public function every_v1_example_round_trips_through_the_migrator_to_identical_backtest_fills(): void
+    {
+        config(['cache.default' => 'array']);
+        Product::create(['product_id' => 'RT-V1', 'base_currency' => 'RT1', 'quote_currency' => 'USD']);
+        Product::create(['product_id' => 'RT-V2', 'base_currency' => 'RT2', 'quote_currency' => 'USD']);
+
+        $v1 = json_decode(file_get_contents(base_path('resources/strategies/examples/mean-reversion.json')), true);
+        $v1['key'] = 'mean-reversion-roundtrip-v1';
+        StrategyPlugin::create(['key' => $v1['key'], 'name' => $v1['meta']['name'], 'definition' => $v1]);
+
+        $v2 = SchemaMigrator::v1ToV2(json_decode(file_get_contents(base_path('resources/strategies/examples/mean-reversion.json')), true));
+        $v2['key'] = 'mean-reversion-roundtrip-v2';
+        $this->assertTrue(StrategySchemaValidator::validate($v2)['valid'], json_encode(StrategySchemaValidator::validate($v2)['errors']));
+        StrategyPlugin::create(['key' => $v2['key'], 'name' => $v2['meta']['name'], 'definition' => $v2]);
+
+        $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
+        $this->seedRsiDipTape('RT-V1', $from);
+        $this->seedRsiDipTape('RT-V2', $from);
+        $to = $from->copy()->addHours(24 + 15 + 1 + 3 + 1);
+
+        $overrides = [
+            'vet.max_pct_of_volume_24h' => 100.0,
+            'size.kelly_fraction' => 0.25, 'size.kelly_cap_pct' => 0.06,
+            'fees.taker_rate' => 0.0, 'fees.maker_rate' => 0.0, 'fees.funding_hourly_pct' => 0.0,
+            'fees.per_contract_usd' => 0.0, 'fees.contract_usd' => 0.0,
+            'paper.slippage_bps' => 0.0,
+        ];
+
+        $bt1 = app(Backtester::class)->run('json', ['RT-V1'], $from, $to, 100_000.0, ['json.plugin_key' => $v1['key']] + $overrides);
+        $bt2 = app(Backtester::class)->run('json', ['RT-V2'], $from, $to, 100_000.0, ['json.plugin_key' => $v2['key']] + $overrides);
+
+        $this->assertSame('done', $bt1->status);
+        $this->assertSame('done', $bt2->status);
+        $this->assertNotEmpty($bt1->trades, 'the tape must actually produce a fill or this test proves nothing');
+        $this->assertCount(count($bt1->trades), $bt2->trades);
+
+        $strip = fn (array $trade) => collect($trade)->except('product')->all();
+        $this->assertEquals(array_map($strip, $bt1->trades), array_map($strip, $bt2->trades));
+        $this->assertEqualsWithDelta((float) $bt1->ending_equity, (float) $bt2->ending_equity, 0.01);
     }
 }
