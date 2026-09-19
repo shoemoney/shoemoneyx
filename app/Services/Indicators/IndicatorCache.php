@@ -41,15 +41,17 @@ final class IndicatorCache
     public static function current(DeskContext $ctx, string $productId, string $timeframe, IndicatorField $field, ?float $mark = null): array
     {
         [$tf, $dur, $bucket] = self::coords($ctx, $timeframe);
-        $key = self::key($productId, $tf, $field, $bucket);
+        // Fetched before the memo check (not memoised itself) and folded into the key below —
+        // otherwise the first read of a bucket pins whatever the just-closed bar looked like at
+        // that instant for the bucket's whole hour: live syncs candles and evaluates risk on
+        // independent timers, so that first read can land on a partial or still-missing bar.
+        $bars = self::fetchBars($ctx, $productId, $tf, $dur, $bucket);
+        $key = self::key($productId, $tf, $field, $bucket, self::barFingerprint($bars));
 
         if (! array_key_exists($key, self::$cache)) {
             if (count(self::$cache) > self::MAX_ENTRIES) {
                 self::$cache = [];
             }
-            // Every "now" inside [bucket, bucket + dur) sees the same closed bars, so the bucket's
-            // own start is as good a cutoff as the real now — that is what makes bucketing safe.
-            $bars = self::fetchBars($ctx, $productId, $tf, $dur, $bucket);
             self::$cache[$key] = self::valuesFor($bars, $field);
         }
 
@@ -60,13 +62,13 @@ final class IndicatorCache
     public static function previous(DeskContext $ctx, string $productId, string $timeframe, IndicatorField $field, ?float $mark = null): array
     {
         [$tf, $dur, $bucket] = self::coords($ctx, $timeframe);
-        $key = self::key($productId, $tf, $field, $bucket);
+        $bars = self::fetchBars($ctx, $productId, $tf, $dur, $bucket);
+        $key = self::key($productId, $tf, $field, $bucket, self::barFingerprint($bars));
 
         if (! array_key_exists($key, self::$previousCache)) {
             if (count(self::$previousCache) > self::MAX_ENTRIES) {
                 self::$previousCache = [];
             }
-            $bars = self::fetchBars($ctx, $productId, $tf, $dur, $bucket);
             self::$previousCache[$key] = count($bars) > 1 ? self::valuesFor(array_slice($bars, 0, -1), $field) : [];
         }
 
@@ -90,9 +92,25 @@ final class IndicatorCache
         return [$tf, $dur, intdiv($now, $dur) * $dur];
     }
 
-    private static function key(string $productId, string $tf, IndicatorField $field, int $bucket): string
+    private static function key(string $productId, string $tf, IndicatorField $field, int $bucket, string $fingerprint): string
     {
-        return strtoupper($productId).'|'.$tf.'|'.$field->seriesKey().'|'.$bucket;
+        return strtoupper($productId).'|'.$tf.'|'.$field->seriesKey().'|'.$bucket.'|'.$fingerprint;
+    }
+
+    /**
+     * Identifies the shape of the just-closed bar the memo is keyed on: absent, still forming
+     * (mutable close/volume), or landed final. A missing bar backfilling or a partial bar's close
+     * finalising produces a different fingerprint, so the next read recomputes instead of serving
+     * what the bucket's first read happened to see.
+     */
+    private static function barFingerprint(array $bars): string
+    {
+        if ($bars === []) {
+            return 'none';
+        }
+        $last = end($bars);
+
+        return $last['start'].'|'.$last['close'].'|'.$last['volume'];
     }
 
     /** @return array<int, array{start:int,open:float,high:float,low:float,close:float,volume:float}> */
