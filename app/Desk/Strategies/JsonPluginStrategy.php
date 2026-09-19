@@ -15,6 +15,8 @@ use App\Models\BankSnapshot;
 use App\Models\Position;
 use App\Models\StrategyPlugin;
 use App\Models\StrategyPluginVersion;
+use App\Support\Fees;
+use App\Support\Kelly;
 use Carbon\CarbonImmutable;
 
 /**
@@ -59,7 +61,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         if (is_numeric($versionId)) {
             $version = StrategyPluginVersion::find((int) $versionId);
             if ($version !== null) {
-                return SchemaMigrator::migrate($version->definition);
+                return self::forRuntime(SchemaMigrator::migrate($version->definition));
             }
         }
 
@@ -69,7 +71,21 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
         $plugin = StrategyPlugin::where('key', $key)->first();
 
-        return $plugin === null ? null : SchemaMigrator::migrate($plugin->definition);
+        return $plugin === null ? null : self::forRuntime(SchemaMigrator::migrate($plugin->definition));
+    }
+
+    /**
+     * v2 only: resolve `$name` param references to their declared defaults (ParamSubstitutor),
+     * the same substitution StrategySchemaValidator applies before checking a v2 definition —
+     * so a formula or a rule value written as `$fail_safe_pct` runs as the number it validated
+     * against, not the literal string. v1 has no such references; left untouched.
+     *
+     * @param  array<string, mixed>  $def
+     * @return array<string, mixed>
+     */
+    private static function forRuntime(array $def): array
+    {
+        return self::isV2($def) ? ParamSubstitutor::apply($def) : $def;
     }
 
     /** @param array<int, ProductStats> $universe */
@@ -78,6 +94,9 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $def = $this->definition($ctx);
         if ($def === null) {
             return parent::scan($universe, $ctx);
+        }
+        if (self::isV2($def)) {
+            return $this->scanV2($universe, $def, $ctx);
         }
 
         $rules = [...($def['setup']['rules'] ?? []), ...($def['trigger']['rules'] ?? [])];
@@ -91,6 +110,52 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $out = parent::scan($filtered, $ctx);
 
         return is_int($max) && $max > 0 ? array_slice($out, 0, $max) : $out;
+    }
+
+    /**
+     * v2 SCAN (docs/STRATEGY_SCHEMA_V2.md, "Evaluation order"): every signal name in
+     * `entry.when` must hold — its `all` rules all hold, and its `any` rules (if present)
+     * hold at least one. The base pipeline's own scan() still ranks and truncates on top,
+     * exactly as the v1 branch above does.
+     *
+     * @param  array<int, ProductStats>  $universe
+     * @return array<int, Candidate>
+     */
+    private function scanV2(array $universe, array $def, DeskContext $ctx): array
+    {
+        $signals = is_array($def['signals'] ?? null) ? $def['signals'] : [];
+        $when = is_array($def['entry']['when'] ?? null) ? $def['entry']['when'] : [];
+        $tf = self::defaultTf($def);
+
+        $filtered = array_values(array_filter(
+            $universe,
+            fn (ProductStats $s) => array_all($when, fn ($name) => self::evalSignal($signals[$name] ?? null, $s, null, $ctx, $tf)),
+        ));
+
+        $max = $def['entry']['max_candidates'] ?? null;
+        $out = parent::scan($filtered, $ctx);
+
+        return is_int($max) && $max > 0 ? array_slice($out, 0, $max) : $out;
+    }
+
+    /** One named `{all, any}` signal group: every `all` rule holds, and at least one `any` rule holds when `any` is non-empty. */
+    private static function evalSignal(mixed $group, ProductStats $s, ?Position $p, DeskContext $ctx, string $tf): bool
+    {
+        if (! is_array($group)) {
+            return false;
+        }
+        $all = is_array($group['all'] ?? null) ? $group['all'] : [];
+        if (! array_all($all, fn ($rule) => JsonRuleEvaluator::fires($rule, $s, $p, $ctx, $tf))) {
+            return false;
+        }
+        $any = is_array($group['any'] ?? null) ? $group['any'] : [];
+
+        return $any === [] || array_any($any, fn ($rule) => JsonRuleEvaluator::fires($rule, $s, $p, $ctx, $tf));
+    }
+
+    private static function isV2(array $def): bool
+    {
+        return ($def['schema_version'] ?? 1) === 2;
     }
 
     public function vet(Candidate $candidate, Bank $bank, DeskContext $ctx): Verdict
@@ -161,7 +226,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             }
         }
 
-        $size = parent::size($v, $bank, $ctx);
+        $size = ($def !== null && self::isV2($def)) ? $this->sizeV2($v, $bank, $ctx, $def) : parent::size($v, $bank, $ctx);
         if ($def === null || $size->zero()) {
             return $size;
         }
@@ -216,6 +281,10 @@ class JsonPluginStrategy extends BaseDeskStrategy
                     sprintf('daily PnL %.2f%% <= -%.2f%% cap — closing all', $pnlPct, (float) $capPct),
                 );
             }
+        }
+
+        if (self::isV2($def)) {
+            return $this->riskV2($position, $stats, $def, $ctx);
         }
 
         $tf = self::defaultTf($def);
@@ -302,6 +371,581 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
 
         return parent::risk($position, $stats, $ctx);
+    }
+
+    // ── v2 (docs/STRATEGY_SCHEMA_V2.md) ─────────────────────────────────
+
+    /** entry.size, one of the four sizing-object modes, clamped to min-ticket/cash exactly like the v1 (Kelly) path above does before the shared leverage_cap clamp runs. */
+    private function sizeV2(Verdict $v, Bank $bank, DeskContext $ctx, array $def): SizeDecision
+    {
+        $sizing = $def['entry']['size'] ?? null;
+        $minTicket = (float) $ctx->param('size.min_ticket_usd', 10);
+        $free = $bank->freeCash();
+        $equity = $bank->equity();
+
+        if (! is_array($sizing)) {
+            return new SizeDecision($v, 0, 0, 0, false, false, 'entry.size is missing');
+        }
+        if ($free < $minTicket) {
+            return new SizeDecision($v, 0, 0, 0, false, false, sprintf('free cash $%.2f under minimum ticket $%.2f', $free, $minTicket));
+        }
+
+        $price = $v->candidate->stats->price;
+        $dollars = $this->sizingDollars($sizing, 'entry', $ctx, $def, $bank, $price, null, $v->candidate);
+        $why = sprintf('entry.size mode=%s', $sizing['mode'] ?? '?');
+        if ($dollars === null || $dollars <= 0) {
+            return new SizeDecision($v, 0, 0, 0, false, false, $why.' produced no order');
+        }
+        $why .= sprintf(' -> $%.2f', $dollars);
+
+        $dollars = min($dollars, $free);
+        $fee = Fees::effectiveRate($dollars, (float) $ctx->param('fees.taker_rate', 0.006), (float) $ctx->param('fees.floor_usd', 0));
+        if ($dollars < $minTicket || $fee > (float) $ctx->param('fees.max_effective_fee_pct', 0.02)) {
+            return new SizeDecision($v, 0, 0, 0, true, false, $why.'; below minimum viable ticket');
+        }
+
+        $dollars = floor($dollars * 100) / 100;
+
+        return new SizeDecision(
+            $v, $dollars,
+            $free > 0 ? round($dollars / $free * 100, 4) : 0,
+            $equity > 0 ? round($dollars / $equity * 100, 4) : 0,
+            true, false, $why,
+        );
+    }
+
+    /**
+     * A sizing object's dollar notional — always dollars, for every section including
+     * `reentry` (a caller there converts back to a quantity via `/ $price`; see
+     * reentryArmDecision()). `$bank` is only available at SIZE time (entry): `pct_equity`
+     * and `kelly` fall back to null (no order) for `adds`/`reentry`, evaluated from RISK,
+     * which the Strategy contract never hands a Bank — the acceptance strategy only needs
+     * `usd` and `formula` there, and both already fail closed on a missing variable rather
+     * than guess an equity figure.
+     */
+    private function sizingDollars(array $sizing, string $section, DeskContext $ctx, array $def, ?Bank $bank, float $price, ?Position $position, ?Candidate $candidate = null, array $extraVars = []): ?float
+    {
+        return match ($sizing['mode'] ?? null) {
+            'pct_equity' => $bank === null || ! is_numeric($sizing['value'] ?? null) || $sizing['value'] <= 0
+                ? null : $bank->equity() * (float) $sizing['value'] / 100,
+            'usd' => is_numeric($sizing['value'] ?? null) && $sizing['value'] > 0 ? (float) $sizing['value'] : null,
+            'kelly' => $this->kellyDollars($sizing, $bank, $candidate),
+            'formula' => $this->formulaDollars($sizing, $section, $ctx, $def, $bank, $price, $position, $extraVars),
+            default => null,
+        };
+    }
+
+    private function kellyDollars(array $sizing, ?Bank $bank, ?Candidate $candidate): ?float
+    {
+        if ($bank === null) {
+            return null;
+        }
+        $fraction = is_numeric($sizing['fraction'] ?? null) ? (float) $sizing['fraction'] : 0.5;
+        $cap = isset($sizing['max_pct_book']) && is_numeric($sizing['max_pct_book']) ? (float) $sizing['max_pct_book'] / 100 : 0.06;
+        $frac = $candidate !== null
+            ? Kelly::fraction($candidate->edgeProbability, $candidate->payoffRatio, $fraction, $cap)
+            : min($fraction, $cap);
+
+        return $frac > 0 ? $bank->equity() * $frac : null;
+    }
+
+    /** A formula's own result is a QUANTITY for `reentry`, a dollar notional for `entry`/`adds` (docs/STRATEGY_SCHEMA_V2.md, "Formulas") — converted to dollars here either way, since sizingDollars() always returns dollars. */
+    private function formulaDollars(array $sizing, string $section, DeskContext $ctx, array $def, ?Bank $bank, float $price, ?Position $position, array $extraVars): ?float
+    {
+        $expr = $sizing['expr'] ?? null;
+        if (! is_string($expr) || trim($expr) === '') {
+            return null;
+        }
+        try {
+            $ast = Formula::parse($expr);
+        } catch (FormulaParseError) {
+            return null;
+        }
+        $vars = $this->formulaVars($section, $def, $ctx, $bank, $price, $position, $extraVars);
+        $result = Formula::evaluate($ast, $vars);
+        if ($result === null) {
+            return null;
+        }
+
+        return $section === 'reentry' ? $result * $price : $result;
+    }
+
+    /** @return array<string, float> */
+    private function formulaVars(string $section, array $def, DeskContext $ctx, ?Bank $bank, float $price, ?Position $position, array $extra = []): array
+    {
+        $vars = ['price' => $price, 'pi' => M_PI, 'fees_rt_pct' => $this->feesRoundTripPct($def, $ctx)];
+        if ($bank !== null) {
+            $vars['equity'] = $bank->equity();
+            $vars['cash'] = $bank->freeCash();
+        }
+        if ($position !== null) {
+            $vars['avg'] = (float) $position->entry_price;
+            $vars['position_usd'] = (float) $position->quantity * $price;
+            $vars['initial_cost_usd'] = (float) ($position->meta['initial_cost_usd'] ?? $position->entry_usd);
+        }
+
+        return $vars + $extra;
+    }
+
+    /**
+     * The taker fee percent (e.g. 0.6, not 0.006) a v2 strategy's own `meta.fees.taker_pct`
+     * overrides, else the desk's configured rate. No v2 strategy declares itself post-only
+     * today (there is no such runtime toggle — see docs/STRATEGY_SCHEMA_V2.md, "Fees"), so
+     * both legs of every round trip use this same rate.
+     */
+    private function takerFeePct(array $def, DeskContext $ctx): float
+    {
+        $fees = is_array($def['meta']['fees'] ?? null) ? $def['meta']['fees'] : [];
+        if (isset($fees['taker_pct']) && is_numeric($fees['taker_pct'])) {
+            return (float) $fees['taker_pct'];
+        }
+
+        return (float) $ctx->param('fees.taker_rate', 0.006) * 100;
+    }
+
+    private function feesRoundTripPct(array $def, DeskContext $ctx): float
+    {
+        return $this->takerFeePct($def, $ctx) * 2;
+    }
+
+    /**
+     * `(price - p_in) x q > fee(p_in x q) + fee(price x q)` for a long, mirrored for a short
+     * (docs/STRATEGY_SCHEMA_V2.md, "Fees"). Public and static so it is directly unit-testable
+     * without a live position/desk — the one number `reentry.cash_out` decides on.
+     */
+    public static function greenAfterFees(Position $position, float $exitPrice, float $entryPrice, float $qty, float $takerFraction): bool
+    {
+        if ($qty <= 0 || $entryPrice <= 0 || $exitPrice <= 0) {
+            return false;
+        }
+        $pnl = $position->dir() * ($exitPrice - $entryPrice) * $qty;
+        $fees = ($entryPrice + $exitPrice) * $qty * $takerFraction;
+
+        return $pnl > $fees;
+    }
+
+    /**
+     * v2 RISK, first match wins (docs/STRATEGY_SCHEMA_V2.md, "Evaluation order" #2-7);
+     * risk.daily_loss_cap_pct (#1) already ran above, and #8 (base-strategy rails) is
+     * parent::risk() at the very end, exactly as the v1 branch falls through to it too.
+     */
+    private function riskV2(Position $position, ProductStats $stats, array $def, DeskContext $ctx): RiskDecision
+    {
+        $this->ensureV2EntryPriceRecorded($position);
+        $this->reconcilePendingReentry($position);
+        $takeProfit = is_array($def['take_profit'] ?? null) ? $def['take_profit'] : [];
+        $ladder = $this->rebuildLadderState($position, $takeProfit);
+        $tf = self::defaultTf($def);
+
+        $stop = is_array($def['stop'] ?? null) ? $def['stop'] : [];
+        if (($d = $this->stopDecision($position, $stats, $stop, $ctx, $tf)) !== null) {
+            return $d;
+        }
+
+        $reentry = is_array($def['reentry'] ?? null) ? $def['reentry'] : null;
+        if ($reentry !== null && ($d = $this->cashOutDecision($position, $stats, $reentry, $def, $ctx)) !== null) {
+            return $d;
+        }
+
+        if (($d = $this->ladderDecision($position, $stats, $takeProfit, $ladder)) !== null) {
+            return $d;
+        }
+
+        if ($reentry !== null && ($d = $this->reentryArmDecision($position, $stats, $def, $reentry, $takeProfit, $ladder, $ctx, $tf)) !== null) {
+            return $d;
+        }
+
+        $adds = is_array($def['adds'] ?? null) ? $def['adds'] : [];
+        if (($d = $this->addsDecisionV2($position, $stats, $adds, $def, $ctx, $tf)) !== null) {
+            return $d;
+        }
+
+        if (($d = $this->runnerTtpDecision($position, $stats, $takeProfit, $ladder)) !== null) {
+            return $d;
+        }
+
+        return parent::risk($position, $stats, $ctx);
+    }
+
+    /**
+     * `stop.anchor: "entry"` needs the position's ORIGINAL fill price, which `position.entry_price`
+     * stops being once an add moves it — recorded once, the first time v2 RISK ever sees this
+     * position (docs/STRATEGY_SCHEMA_V2.md, "stop"). Backtester positions already carry a more
+     * precise `first_entry_price` (set at the fill that opened them, for entry-quality diagnostics);
+     * preferred here when present, else the current (still un-added-to) running average.
+     */
+    private function ensureV2EntryPriceRecorded(Position $position): void
+    {
+        $meta = $position->meta ?? [];
+        if (isset($meta['v2']['entry_price'])) {
+            return;
+        }
+        $meta['v2']['entry_price'] = (float) ($meta['first_entry_price'] ?? $position->entry_price);
+        $position->meta = $meta;
+    }
+
+    /**
+     * Rebuilds `position.meta.v2.ladder` whenever `avg` (position.entry_price) has moved since it
+     * was last stored — the one check that implements both `reset_on_add: true` (a fresh ladder,
+     * re-based on the current quantity) and `false` (fired rungs and `original_qty` stay; only the
+     * stored `avg` used to price the remaining rungs moves). Absent `reset_on_add` defaults to true,
+     * matching the shipped SMX π example and "an add starts a new ladder" being the more intuitive
+     * v2 default (v1->v2 migration always writes `false` explicitly for exact-fill equivalence).
+     *
+     * @return array{avg: float, original_qty: float, fired: array<int, int>, sold: array<int, array{qty: float, price: float}>}
+     */
+    private function rebuildLadderState(Position $position, array $takeProfit): array
+    {
+        $meta = $position->meta ?? [];
+        $ladder = is_array($meta['v2']['ladder'] ?? null) ? $meta['v2']['ladder'] : null;
+        $avg = (float) $position->entry_price;
+        $resetOnAdd = ! array_key_exists('reset_on_add', $takeProfit) || (bool) $takeProfit['reset_on_add'];
+
+        if ($ladder === null) {
+            $ladder = ['avg' => $avg, 'original_qty' => (float) $position->quantity, 'fired' => [], 'sold' => []];
+        } elseif (abs($avg - (float) $ladder['avg']) > abs($avg) * 1e-9) {
+            $ladder = $resetOnAdd
+                ? ['avg' => $avg, 'original_qty' => (float) $position->quantity, 'fired' => [], 'sold' => []]
+                : ['avg' => $avg, 'original_qty' => (float) $ladder['original_qty'], 'fired' => $ladder['fired'], 'sold' => $ladder['sold']];
+        }
+
+        $meta['v2']['ladder'] = $ladder;
+        $position->meta = $meta;
+
+        return $ladder;
+    }
+
+    /**
+     * A pending re-entry lot (docs/STRATEGY_SCHEMA_V2.md, "reentry" mechanics) is confirmed once
+     * `position.adds_count` has advanced past what it was when the lot was recorded — the add it
+     * asked for actually filled — or dropped when a later RISK call finds it still hasn't (the fill
+     * was rejected: fee floor, capital, a halt). Runs once per RISK call, before anything else reads
+     * `meta.v2.reentries`, so at most one lot is ever mid-flight at a time.
+     */
+    private function reconcilePendingReentry(Position $position): void
+    {
+        $meta = $position->meta ?? [];
+        $list = $meta['v2']['reentries'] ?? null;
+        if (! is_array($list) || $list === []) {
+            return;
+        }
+        $lastIdx = array_key_last($list);
+        $last = $list[$lastIdx];
+        if (! is_array($last) || ($last['confirmed'] ?? true) !== false) {
+            return;
+        }
+        if ((int) $position->adds_count > (int) ($last['adds_count_at_emit'] ?? -1)) {
+            $list[$lastIdx]['confirmed'] = true;
+        } else {
+            unset($list[$lastIdx]);
+            $list = array_values($list);
+        }
+        $meta['v2']['reentries'] = $list;
+        $position->meta = $meta;
+    }
+
+    /** stop.rules -> stop.pct_from_avg -> stop.time_hours, first match wins. */
+    private function stopDecision(Position $position, ProductStats $stats, array $stop, DeskContext $ctx, string $tf): ?RiskDecision
+    {
+        if ($stop === []) {
+            return null;
+        }
+        foreach ($stop['rules'] ?? [] as $rule) {
+            if (JsonRuleEvaluator::fires($rule, $stats, $position, $ctx, $tf)) {
+                $avg6 = $stats->volumeH24Usd / 4;
+
+                return RiskDecision::close(
+                    'stop.'.($rule['field'] ?? 'rule'), $stats->volumeH6Usd, $avg6, $avg6 > 0 ? $stats->volumeH6Usd / $avg6 : null,
+                    sprintf('stop rule fired: %s %s %s', $rule['field'] ?? '?', $rule['op'] ?? '?', json_encode($rule['value'] ?? null)),
+                );
+            }
+        }
+        if (isset($stop['pct_from_avg']) && is_numeric($stop['pct_from_avg'])) {
+            $anchor = $stop['anchor'] ?? 'avg';
+            $anchorPrice = $anchor === 'entry' ? (float) ($position->meta['v2']['entry_price'] ?? $position->entry_price) : (float) $position->entry_price;
+            $pnlPct = $anchorPrice > 0 ? $position->dir() * ($stats->price / $anchorPrice - 1) * 100 : 0.0;
+            if ($pnlPct <= -(float) $stop['pct_from_avg']) {
+                return RiskDecision::close(
+                    'stop.pct_from_avg', $stats->volumeH6Usd, $stats->volumeH24Usd / 4, $stats->volumeRatio6h(),
+                    sprintf('pnl %.2f%% <= -%.2f%% from %s', $pnlPct, (float) $stop['pct_from_avg'], $anchor),
+                );
+            }
+        }
+        if (isset($stop['time_hours']) && is_numeric($stop['time_hours'])) {
+            $held = $position->opened_at->diffInMinutes($ctx->now()) / 60;
+            if ($held >= (float) $stop['time_hours']) {
+                return RiskDecision::close(
+                    'stop.time_hours', $stats->volumeH6Usd, $stats->volumeH24Usd / 4, $stats->volumeRatio6h(),
+                    sprintf('held %.1fh >= %.0fh', $held, (float) $stop['time_hours']),
+                );
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The oldest confirmed re-bought lot not yet cashed out: closed (via TRIM, sized as a fraction
+     * of the CURRENT quantity) once it is green after fees. Only the oldest is ever considered per
+     * call — a newer lot already being green does not jump the FIFO queue.
+     */
+    private function cashOutDecision(Position $position, ProductStats $stats, array $reentry, array $def, DeskContext $ctx): ?RiskDecision
+    {
+        $cashOut = is_array($reentry['cash_out'] ?? null) ? $reentry['cash_out'] : null;
+        if ($cashOut === null) {
+            return null;
+        }
+        $list = $position->meta['v2']['reentries'] ?? null;
+        if (! is_array($list)) {
+            return null;
+        }
+        foreach ($list as $i => $lot) {
+            if (! is_array($lot) || ($lot['confirmed'] ?? true) === false || ! empty($lot['cashed_out'])) {
+                continue;
+            }
+
+            $takerFraction = $this->takerFeePct($def, $ctx) / 100;
+            if (! self::greenAfterFees($position, $stats->price, (float) $lot['price'], (float) $lot['qty'], $takerFraction)) {
+                return null;
+            }
+
+            $sellPct = is_numeric($cashOut['sell_pct_of_reentry'] ?? null) ? (float) $cashOut['sell_pct_of_reentry'] : 100.0;
+            $lotQty = (float) $lot['qty'];
+            $sellQty = min($lotQty, $lotQty * $sellPct / 100);
+            $fraction = $position->quantity > 0 ? min(1.0, $sellQty / $position->quantity) : 0.0;
+            if ($fraction <= 0) {
+                return null;
+            }
+
+            $meta = $position->meta ?? [];
+            $meta['v2']['reentries'][$i]['cashed_out'] = true;
+            if (($cashOut['remainder'] ?? 'runner') === 'ladder') {
+                $meta['v2']['ladder']['original_qty'] = (float) ($meta['v2']['ladder']['original_qty'] ?? 0) + ($lotQty - $sellQty);
+            }
+            $position->meta = $meta;
+
+            return RiskDecision::trim(
+                "reentry.cash_out.{$i}", $fraction, null,
+                sprintf('re-bought lot #%d green after fees (in @ %.6f, now @ %.6f) — selling %.0f%%', $i, (float) $lot['price'], $stats->price, $sellPct),
+            );
+        }
+
+        return null;
+    }
+
+    /** The next unfired ladder rung, if the bar reached it (bar high/low aware in backtests — $stats->extra['bar_high'/'bar_low']). */
+    private function ladderDecision(Position $position, ProductStats $stats, array $takeProfit, array $ladder): ?RiskDecision
+    {
+        $rungs = is_array($takeProfit['ladder'] ?? null) ? $takeProfit['ladder'] : [];
+        $nextIdx = count($ladder['fired']);
+        $rung = $rungs[$nextIdx] ?? null;
+        if ($rung === null) {
+            return null;
+        }
+
+        $avg = (float) $position->entry_price;
+        $dir = $position->dir();
+        $atPct = (float) $rung['at_pct'];
+        $target = $avg * (1 + $dir * $atPct / 100);
+        $high = (float) ($stats->extra['bar_high'] ?? $stats->price);
+        $low = (float) ($stats->extra['bar_low'] ?? $stats->price);
+        $reached = $dir === 1 ? $high >= $target : $low <= $target;
+        if (! $reached) {
+            return null;
+        }
+
+        $sellPct = (float) ($rung['sell_pct_of_original'] ?? 0);
+        $sellQty = min((float) $ladder['original_qty'] * $sellPct / 100, (float) $position->quantity);
+        if ($sellQty <= 0 || $position->quantity <= 0) {
+            return null;
+        }
+
+        $meta = $position->meta ?? [];
+        $meta['v2']['ladder']['fired'][] = $nextIdx;
+        $meta['v2']['ladder']['sold'][$nextIdx] = ['qty' => $sellQty, 'price' => $target];
+        $position->meta = $meta;
+
+        return RiskDecision::trim(
+            "take_profit.ladder.{$nextIdx}", $sellQty / $position->quantity, $target,
+            sprintf('rung %d reached (%+.2f%% from avg) — selling %.0f%% of the original position', $nextIdx, $atPct, $sellPct),
+        );
+    }
+
+    /** Arms and buys a re-entry once a rung has fired, price has retraced enough, spacing clears fees, the signal (if any) holds, and the position hasn't hit max_per_position. */
+    private function reentryArmDecision(Position $position, ProductStats $stats, array $def, array $reentry, array $takeProfit, array $ladder, DeskContext $ctx, string $tf): ?RiskDecision
+    {
+        $reentries = is_array($position->meta['v2']['reentries'] ?? null) ? $position->meta['v2']['reentries'] : [];
+        if (array_any($reentries, fn ($r) => is_array($r) && ($r['confirmed'] ?? true) === false)) {
+            return null;   // still waiting on the last one to confirm or drop
+        }
+        $maxPer = self::isPositiveInt($reentry['max_per_position'] ?? null) ? (int) $reentry['max_per_position'] : 3;
+        if (count($reentries) >= $maxPer) {
+            return null;
+        }
+
+        $afterRungs = self::isPositiveInt($reentry['after_rungs'] ?? null) ? (int) $reentry['after_rungs'] : 1;
+        $fired = $ladder['fired'];
+        if (count($fired) < $afterRungs) {
+            return null;
+        }
+
+        $rungs = is_array($takeProfit['ladder'] ?? null) ? $takeProfit['ladder'] : [];
+        $lastFiredIdx = $fired[count($fired) - 1];
+        $lastRung = $rungs[$lastFiredIdx] ?? null;
+        $sold = $ladder['sold'][$lastFiredIdx] ?? null;
+        if ($lastRung === null || $sold === null) {
+            return null;
+        }
+        $salePrice = (float) $sold['price'];
+        $soldQty = (float) $sold['qty'];
+        if ($salePrice <= 0 || $soldQty <= 0) {
+            return null;
+        }
+
+        $prevAtPct = count($fired) >= 2 ? (float) ($rungs[$fired[count($fired) - 2]]['at_pct'] ?? 0) : 0.0;
+        $spacingPct = (float) $lastRung['at_pct'] - $prevAtPct;
+        if ($spacingPct <= 0) {
+            return null;
+        }
+
+        $retrace = is_array($reentry['retrace'] ?? null) ? $reentry['retrace'] : [];
+        $retraceOf = $retrace['of'] ?? 'rung_spacing';
+        $retraceMin = is_numeric($retrace['min'] ?? null) ? (float) $retrace['min'] : 0.0;
+        $requiredRetracePct = $retraceOf === 'pct' ? $retraceMin : $retraceMin * $spacingPct;
+
+        $avg = (float) $position->entry_price;
+        $dir = $position->dir();
+        $price = $stats->price;
+        $retracedPct = $avg > 0 ? $dir * ($salePrice - $price) / $avg * 100 : 0.0;
+        if ($retracedPct < $requiredRetracePct) {
+            return null;
+        }
+
+        $stayAboveAvg = ! array_key_exists('stay_above_avg', $retrace) || (bool) $retrace['stay_above_avg'];
+        if ($stayAboveAvg && ! ($dir === 1 ? $price > $avg : $price < $avg)) {
+            return null;
+        }
+
+        $minSpacingXFees = is_numeric($reentry['min_spacing_x_fees'] ?? null) ? (float) $reentry['min_spacing_x_fees'] : 3.0;
+        if ($minSpacingXFees > 0 && $spacingPct < $minSpacingXFees * $this->feesRoundTripPct($def, $ctx)) {
+            return null;
+        }
+
+        if (! $this->reentrySignalHolds($reentry['when'] ?? 'entry', $def, $stats, $position, $ctx, $tf)) {
+            return null;
+        }
+
+        $sizing = is_array($reentry['size'] ?? null) ? $reentry['size'] : null;
+        if ($sizing === null) {
+            return null;
+        }
+        $dollars = $this->sizingDollars($sizing, 'reentry', $ctx, $def, null, $price, $position, null, [
+            'spacing_pct' => $spacingPct, 'retrace_pct' => $retracedPct,
+            'sold_qty' => $soldQty, 'sold_usd' => $soldQty * $salePrice,
+        ]);
+        if ($dollars === null || $dollars <= 0) {
+            return null;
+        }
+        $qty = $dollars / $price;   // sizingDollars() always returns dollars; the pending-lot record keeps the quantity
+
+        $meta = $position->meta ?? [];
+        $list = is_array($meta['v2']['reentries'] ?? null) ? $meta['v2']['reentries'] : [];
+        $list[] = [
+            'qty' => $qty, 'price' => $price, 'fees_usd' => $qty * $price * ($this->takerFeePct($def, $ctx) / 100),
+            'cashed_out' => false, 'rung' => $lastFiredIdx, 'adds_count_at_emit' => (int) $position->adds_count,
+            'confirmed' => false,
+        ];
+        $meta['v2']['reentries'] = $list;
+        $position->meta = $meta;
+
+        return RiskDecision::add(
+            'reentry', $dollars, $price,
+            sprintf('re-entry armed: retraced %.4f%% (need %.4f%%) — buying %.8f units', $retracedPct, $requiredRetracePct, $qty),
+        );
+    }
+
+    /** @param mixed $when "entry" (reuse entry.when), an array of signal names, or null (price only) */
+    private function reentrySignalHolds(mixed $when, array $def, ProductStats $stats, Position $position, DeskContext $ctx, string $tf): bool
+    {
+        if ($when === null) {
+            return true;
+        }
+        $names = $when === 'entry'
+            ? (is_array($def['entry']['when'] ?? null) ? $def['entry']['when'] : [])
+            : (is_array($when) ? $when : []);
+        $signals = is_array($def['signals'] ?? null) ? $def['signals'] : [];
+
+        return array_all($names, fn ($name) => self::evalSignal($signals[$name] ?? null, $stats, $position, $ctx, $tf));
+    }
+
+    /** `adds`, as v1: the next rung, indexed by `position.adds_count` (also advanced by a reentry buy — see the class docblock on that overlap). */
+    private function addsDecisionV2(Position $position, ProductStats $stats, array $adds, array $def, DeskContext $ctx, string $tf): ?RiskDecision
+    {
+        if ($adds === []) {
+            return null;
+        }
+        $idx = (int) $position->adds_count;
+        $rung = $adds[$idx] ?? null;
+        if (! is_array($rung)) {
+            return null;
+        }
+        $trigger = $rung['trigger'] ?? null;
+        if (! is_array($trigger) || ! JsonRuleEvaluator::fires($trigger, $stats, $position, $ctx, $tf)) {
+            return null;
+        }
+
+        $dollars = null;
+        if (isset($rung['size_pct']) && is_numeric($rung['size_pct'])) {
+            $basis = (float) ($position->meta['initial_cost_usd'] ?? $position->entry_usd);
+            $dollars = $basis * (float) $rung['size_pct'] / 100;
+        } elseif (is_array($rung['size'] ?? null)) {
+            $dollars = $this->sizingDollars($rung['size'], 'adds', $ctx, $def, null, $stats->price, $position);
+        }
+        if ($dollars === null || $dollars <= 0) {
+            return null;
+        }
+
+        return RiskDecision::add("adds.{$idx}", $dollars, $stats->price, sprintf('add rung %d triggered — $%.2f', $idx, $dollars));
+    }
+
+    /** Once the ladder is exhausted or peak pnl has reached activate_pct (last rung's at_pct, by default), close the remainder on a giveback_pct pullback from the peak — the same peak/pnl idiom MeanReversionStrategy's own trailing stop uses. */
+    private function runnerTtpDecision(Position $position, ProductStats $stats, array $takeProfit, array $ladder): ?RiskDecision
+    {
+        $runner = is_array($takeProfit['runner']['ttp'] ?? null) ? $takeProfit['runner']['ttp'] : null;
+        if ($runner === null) {
+            return null;
+        }
+        $givebackPct = is_numeric($runner['giveback_pct'] ?? null) ? (float) $runner['giveback_pct'] : 0.0;
+        if ($givebackPct <= 0) {
+            return null;
+        }
+
+        $rungs = is_array($takeProfit['ladder'] ?? null) ? $takeProfit['ladder'] : [];
+        $ladderExhausted = $rungs === [] || count($ladder['fired']) >= count($rungs);
+        $defaultActivate = $rungs !== [] ? (float) end($rungs)['at_pct'] : 0.0;
+        $activatePct = is_numeric($runner['activate_pct'] ?? null) ? (float) $runner['activate_pct'] : $defaultActivate;
+
+        $avg = (float) $position->entry_price;
+        $peak = (float) ($position->peak_price ?? $avg);
+        $peakPct = $avg > 0 ? $position->dir() * ($peak / $avg - 1) * 100 : 0.0;
+        if (! ($ladderExhausted || $peakPct >= $activatePct)) {
+            return null;
+        }
+
+        $pnlPct = $position->unrealisedPnlPct($stats->price);
+        if ($pnlPct > $peakPct - $givebackPct) {
+            return null;
+        }
+
+        return RiskDecision::close(
+            'take_profit.runner.ttp', $stats->volumeH6Usd, $stats->volumeH24Usd / 4, $stats->volumeRatio6h(),
+            sprintf('runner peak %+.2f%%, now %+.2f%% (giveback %.2f%%)', $peakPct, $pnlPct, $givebackPct),
+        );
+    }
+
+    private static function isPositiveInt(mixed $v): bool
+    {
+        return is_int($v) && $v > 0;
     }
 
     /** `ind.*` fields default to the strategy's own meta.timeframe, falling back to 1h when unset. */

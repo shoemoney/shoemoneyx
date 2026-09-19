@@ -24,7 +24,7 @@ final class StrategyJsonTool implements Tool
 
     public function description(): string
     {
-        return 'Validate and save a strategy definition (legacy or schema_version:1 shape) as a new plugin version.';
+        return 'Validate and save a strategy definition (legacy, schema_version:1, or schema_version:2 shape) as a new plugin version.';
     }
 
     public function parameters(): array

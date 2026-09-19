@@ -15,15 +15,15 @@ namespace App\Desk\Strategies;
  *   documented in docs/STRATEGY_SCHEMA.md.
  * - Canonical v2 (`schema_version: 2`): `signals` / `entry` / `adds` /
  *   `take_profit` / `reentry` / `stop` / `risk`, documented in
- *   docs/STRATEGY_SCHEMA_V2.md, "Migration v1 → v2".
+ *   docs/STRATEGY_SCHEMA_V2.md, "Migration v1 → v2". Phase C
+ *   (JsonPluginStrategy) is the engine that runs it.
  *
- * `migrate()` is what JsonPluginStrategy executes against: it always returns
- * the canonical v1 shape, mapping legacy fields forward so plugins saved
- * before the schema existed keep running unchanged. It does not touch v2 —
- * a v1 definition stays v1 until something asks for v2 explicitly via
- * v1ToV2(). `toLegacyView()` is the inverse, used by the Markdown/Pine
- * exporters so they keep reading the flat shape regardless of which shape
- * the plugin was authored in (v2 goes through v2ToV1View() first).
+ * `migrate()` is what JsonPluginStrategy executes against: an already-versioned
+ * definition (v1 or v2) passes through unchanged; a legacy flat shape (no
+ * `schema_version` at all) maps forward to canonical v1. `toLegacyView()` is
+ * the inverse, used by the Markdown/Pine exporters so they keep reading the
+ * flat shape regardless of which shape the plugin was authored in (v2 goes
+ * through v2ToV1View() first).
  */
 final class SchemaMigrator
 {
@@ -34,20 +34,11 @@ final class SchemaMigrator
     /**
      * The one dispatch every save path (StrategyPluginController::store/validate,
      * StrategySync::import, StrategyJsonTool::run) runs a definition through.
-     * schema_version:2 validates structurally fine (StrategySchemaValidatorV2Test
-     * covers that in isolation) but is refused here while `strategies.v2_engine`
-     * is off, since migrate() will not run it either — see the class docblock.
      *
      * @return array{valid: bool, errors: array<int, array{path: string, message: string}>}
      */
     public static function validateForSave(array $definition): array
     {
-        if (($definition['schema_version'] ?? null) === self::V2_VERSION && ! config('strategies.v2_engine')) {
-            return ['valid' => false, 'errors' => [
-                ['path' => 'schema_version', 'message' => 'schema_version 2 has no engine yet (phase C) and cannot be saved'],
-            ]];
-        }
-
         return isset($definition['schema_version'])
             ? StrategySchemaValidator::validate($definition)
             : JsonPluginValidator::validate($definition);
@@ -56,10 +47,6 @@ final class SchemaMigrator
     /** @return array<string, mixed> */
     public static function migrate(array $definition): array
     {
-        if (($definition['schema_version'] ?? null) === self::V2_VERSION) {
-            throw new \LogicException('schema_version 2 has no engine yet (phase C)');
-        }
-
         if (isset($definition['schema_version'])) {
             return $definition;
         }

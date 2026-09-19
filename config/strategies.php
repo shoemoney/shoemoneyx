@@ -24,9 +24,4 @@ return [
     // How long GET /api/strategies/sync/status caches its check() result, and
     // the interval the scheduled `strategies:sync` check runs at.
     'check_interval_minutes' => (int) env('STRATEGIES_CHECK_INTERVAL_MINUTES', 360),
-
-    // schema_version:2 has no engine yet (phase C — docs/STRATEGY_SCHEMA_V2.md).
-    // Every save path rejects a v2 definition while this is off, so nothing lands
-    // in a plugin row that JsonPluginStrategy would then run with dropped rules.
-    'v2_engine' => (bool) env('STRATEGIES_V2_ENGINE', false),
 ];

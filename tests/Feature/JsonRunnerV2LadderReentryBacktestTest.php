@@ -1,0 +1,166 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Desk\Backtester;
+use App\Models\Candle;
+use App\Models\Product;
+use App\Models\StrategyPlugin;
+use Carbon\Carbon;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+/**
+ * The shipped SMX π Take Profit v2 example (resources/strategies/examples/smx-pi-take-profit-v2.json)
+ * run end to end through Backtester — real SCAN/VET/SIZE gating, real ProductStatsBuilder-derived
+ * stats and a real IndicatorCache-backed ind.rsi(14) — not a hand-fed ProductStats fixture (see
+ * JsonPluginStrategyV2EngineTest for that, canned-tape style, which pins the exact ladder/reentry
+ * fractions this test exercises through the real pipeline).
+ *
+ * The candle tape: 30 warmup bars (a mild ±0.3% oscillation, RSI-neutral), a +2.5% high-volume bar
+ * SCAN reads as its candidate (momentum + liquidity signals hold, not_overbought holds), then a
+ * small natural pullback bar whose OPEN is the fill price — that pullback is what keeps RSI(14)
+ * under the not_overbought gate a few hours later, when the ladder has climbed and the dip needs
+ * to re-check entry.when for the reentry to arm. Every following close is that fill price times a
+ * ratio, so the WHOLE post-entry walk (four rungs, a retrace that arms and cashes out a reentry,
+ * the ladder re-arming from the new average, a new peak, the runner's TTP close) is driven by real
+ * RISK() calls against real bar-derived stats, exactly the sequence JsonPluginStrategyV2EngineTest
+ * verifies directly. Fees, slippage and funding are zeroed so the ending equity is exactly the sum
+ * of what SIZE put in and every trim/add/close moved — a closed-form number, not a tuned constant.
+ */
+class JsonRunnerV2LadderReentryBacktestTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private function setUpProduct(): void
+    {
+        config(['cache.default' => 'array']);
+        Product::create(['product_id' => 'BTC-USD', 'base_currency' => 'BTC', 'quote_currency' => 'USD']);
+    }
+
+    private function definePlugin(): array
+    {
+        $def = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
+        StrategyPlugin::create(['key' => $def['key'], 'name' => $def['meta']['name'], 'definition' => $def]);
+
+        return $def;
+    }
+
+    /** @return array{0: Carbon, 1: Carbon, 2: float, 3: float} [from, to, jump close E, fill price F] */
+    private function warmupAndEntry(Carbon $from): array
+    {
+        $price = 100.0;
+        $ts = $from->copy();
+        for ($i = 0; $i < 30; $i++) {
+            $ts->addHour();
+            $open = $price;
+            $price *= 1 + ($i % 2 === 0 ? 0.003 : -0.003);
+            Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => max($open, $price), 'low' => min($open, $price), 'close' => $price, 'volume' => 230]);
+        }
+        // The jump SCAN reads: +2.5% on a volume spike (liquid, momentum, not_overbought all hold).
+        $ts->addHour();
+        $open = $price;
+        $jump = $price * 1.025;
+        Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $open, 'high' => max($open, $jump), 'low' => min($open, $jump), 'close' => $jump, 'volume' => 900]);
+
+        // Entry fills at the NEXT bar's open — a small natural pullback off the jump.
+        $fill = $jump * 0.995;
+        $ts->addHour();
+        Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $fill, 'high' => $fill, 'low' => $fill, 'close' => $fill, 'volume' => 230]);
+
+        return [$ts, $jump, $fill];
+    }
+
+    /** @param array<int, float> $ratios closes as a multiple of the fill price, one candle per ratio */
+    private function walk(Carbon $ts, float $fill, array $ratios): Carbon
+    {
+        $prev = $fill;
+        foreach ($ratios as $r) {
+            $close = $fill * $r;
+            $ts->addHour();
+            Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $prev, 'high' => max($prev, $close), 'low' => min($prev, $close), 'close' => $close, 'volume' => 230]);
+            $prev = $close;
+        }
+
+        return $ts;
+    }
+
+    /** @return array<string, float> */
+    private function overrides(string $key): array
+    {
+        return [
+            'json.plugin_key' => $key,
+            'fees.taker_rate' => 0.0, 'fees.maker_rate' => 0.0, 'fees.funding_hourly_pct' => 0.0,
+            'fees.per_contract_usd' => 0.0, 'fees.contract_usd' => 0.0,
+            'paper.slippage_bps' => 0.0,
+            // The base pipeline's own liquidity gate (unrelated to v2's own signals) would reject a
+            // $100k ticket against this tape's ~$600-650k 24h volume at its default 0.5% cap.
+            'vet.max_pct_of_volume_24h' => 100.0,
+        ];
+    }
+
+    public function test_the_ladder_reentry_rearm_and_runner_ttp_survive_a_real_scan_vet_size_run(): void
+    {
+        $this->setUpProduct();
+        $def = $this->definePlugin();
+        $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
+        [$ts, , $fill] = $this->warmupAndEntry($from);
+
+        // Rungs 0-3 (+0.55/1.05/1.55/2.06%: a hair past each exact target so bar-close floating
+        // point never leaves a rung just short of "reached"), a retrace that arms one reentry buy,
+        // its cash-out once green, the ladder re-arming from the new average for a second pass,
+        // then a peak and a 1%+ giveback that fires the runner.
+        $ts = $this->walk($ts, $fill, [1.0055, 1.0105, 1.0155, 1.0206, 1.016, 1.016, 1.0175, 1.0175, 1.026, 1.026, 1.045, 1.03]);
+        $to = $ts->copy()->addHour();
+
+        $bt = app(Backtester::class)->run('json', ['BTC-USD'], $from, $to, 2_000_000.0, $this->overrides($def['key']));
+
+        $this->assertSame('done', $bt->status);
+        $trade = $bt->trades[0];
+        $this->assertSame('take_profit.runner.ttp', $trade['rule']);
+        $this->assertSame(1, $trade['adds'], 'exactly one reentry buy');
+        $this->assertSame(9, $trade['trims'], '4 original rungs + cash_out + 4 re-armed rungs');
+
+        // Closed form: SIZE puts in 5% of the $2,000,000 starting equity ($100,000, no fees/slippage)
+        // at the fill price; every rung/cash_out trim banks (rung price - avg cost/unit) x qty sold,
+        // the reentry buy moves cash by exactly -dollars, and the runner's TTP close banks whatever
+        // is left at its own fill price minus its cost basis. That is exactly the same fee-free walk
+        // JsonPluginStrategyV2EngineTest drives directly against JsonPluginStrategy::risk() on a
+        // round-number position (avg 100, qty 1000) — same rungs, same reentry formula, same
+        // rearm — so this number is cross-checked against that closed-form derivation, not tuned.
+        $this->assertEqualsWithDelta(2_002_428.04, (float) $bt->ending_equity, 0.02);
+    }
+
+    public function test_the_stop_fires_off_the_moved_average_after_a_reentry_buy(): void
+    {
+        $this->setUpProduct();
+        $def = $this->definePlugin();
+        $from = Carbon::parse('2024-01-01 00:00:00', 'UTC');
+        [$ts, , $fill] = $this->warmupAndEntry($from);
+
+        // One rung, a small retrace that arms a reentry (moving the average up), then a crash well
+        // past the fail-safe from wherever that new average landed. The direct-call engine test
+        // (JsonPluginStrategyV2EngineTest::the_stop_moves_with_the_average_after_a_reentry_buy)
+        // is what actually pins the boundary — this proves the same thing survives a real run.
+        $ts = $this->walk($ts, $fill, [1.0055, 1.002]);
+        $ts->addHour();
+        $crash = $fill * 0.90;
+        Candle::create(['product_id' => 'BTC-USD', 'timeframe' => '1H', 'candle_start' => $ts->copy(), 'open' => $fill * 1.002, 'high' => $fill * 1.002, 'low' => $crash, 'close' => $crash, 'volume' => 230]);
+        $to = $ts->copy()->addHour();
+
+        $bt = app(Backtester::class)->run('json', ['BTC-USD'], $from, $to, 2_000_000.0, $this->overrides($def['key']));
+
+        $this->assertSame('done', $bt->status);
+        $trade = $bt->trades[0];
+        $this->assertSame('stop.pct_from_avg', $trade['rule']);
+        $this->assertSame(1, $trade['adds'], 'the reentry buy fired before the stop did');
+        $this->assertGreaterThan($fill, $trade['entry'], 'the average the stop measured from had already moved up off the reentry buy');
+
+        // Closed form: SIZE puts in $100,000 at $fill (no fees/slippage), the ladder banks one small
+        // rung, the reentry buy moves cash by -dollars, and the stop liquidates everything left at
+        // the crash price. Cross-checked the same way as the path above.
+        $this->assertEqualsWithDelta(1_990_006.05, (float) $bt->ending_equity, 0.02);
+    }
+}

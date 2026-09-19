@@ -1,11 +1,12 @@
 # Strategy schema — `schema_version: 2`
 
-Status: **validator, formulas and migration implemented; engine pending.** v1
-(`docs/STRATEGY_SCHEMA.md`) keeps running unchanged. `SchemaMigrator::v1ToV2()` maps v1
-forward to v2 on demand, the same way `migrate()` maps the legacy flat shape to v1 — it is
-not called automatically on read yet, since nothing consumes v2 at runtime until phase C
-lands the engine (`take_profit` ladder, `reentry`, `stop` anchoring). Until then, a v1
-definition stays v1.
+Status: **validator, formulas, migration and the engine are all implemented** (phases A-C).
+v1 (`docs/STRATEGY_SCHEMA.md`) keeps running unchanged, dispatched on `schema_version` at the
+top of `JsonPluginStrategy::scan()/vet()/size()/risk()`. `SchemaMigrator::v1ToV2()` maps v1
+forward to v2 on demand, the same way `migrate()` maps the legacy flat shape to v1; it is still
+not called automatically on read, so a v1 definition stays v1 unless something asks for v2
+explicitly. A saved v2 definition runs its own section (`take_profit` ladder, `reentry`,
+`stop` anchoring) exactly as documented below.
 
 ## Why v2
 
@@ -182,10 +183,11 @@ A size that clamps to below the minimum ticket produces no order.
 - `runner.ttp`: trailing take-profit on whatever the ladder did not sell. Arms once peak pnl from
   `avg` reaches `activate_pct`, closes the remainder when pnl gives back `giveback_pct` points
   from the peak. `activate_pct` defaults to the last rung's `at_pct`.
-- `reset_on_add`: when `true`, any add (an `adds` rung or a `reentry` buy) that moves `avg`
-  re-arms the whole ladder from the new `avg`, with `original` re-based to the current quantity.
-  When `false`, rungs already fired stay fired and remaining rungs are re-priced from the new
-  `avg`.
+- `reset_on_add`: when `true` (the default when the key is absent), any add (an `adds` rung or
+  a `reentry` buy) that moves `avg` re-arms the whole ladder from the new `avg`, with `original`
+  re-based to the current quantity. When `false`, rungs already fired stay fired and remaining
+  rungs are re-priced from the new `avg`. `v1ToV2()` always writes `false` explicitly (see
+  "Migration v1 → v2"), so the default only matters for a definition authored directly as v2.
 
 Engine state, stored on `position.meta.v2.ladder`:
 `{ avg, original_qty, fired: [i, ...], sold: { i: { qty, price } } }`. The ladder is rebuilt
@@ -227,7 +229,11 @@ moment it is green after fees, `cash_out.sell_pct_of_reentry` of that lot is sol
 margin back, better average kept.
 
 Engine state, `position.meta.v2.reentries[]`:
-`{ qty, price, fees_usd, cashed_out: bool, rung: i }`.
+`{ qty, price, fees_usd, cashed_out: bool, rung: i, adds_count_at_emit: int, confirmed: bool }`.
+A lot is appended with `confirmed: false` the moment RISK emits its `ADD`; the next RISK call
+for that position confirms it (`position.adds_count` advanced past `adds_count_at_emit`) or
+drops it (the add never filled). `max_per_position` and a new arm both look only at confirmed
+lots, so at most one lot is ever mid-flight.
 
 ### `stop`
 
@@ -352,7 +358,10 @@ One decision per call, as today. Ladder state is rebuilt on any `avg` change bef
 declare `meta.fees: { taker_pct, maker_pct }` to override for its own backtests). A re-bought
 lot at fill `p_in` with quantity `q` is green after fees when
 `(price - p_in) × q > fee(p_in × q) + fee(price × q)` for a long, mirrored for a short. The
-backtester already charges both legs; this only reads the same numbers.
+backtester already charges both legs; this only reads the same numbers. There is no runtime
+"this desk is post-only" toggle today (`post_only.shadow` is a paper-only A/B log, not a real
+execution mode), so both legs use the taker rate — `meta.fees.maker_pct` is reserved for when
+one exists. `meta.fees.taker_pct` is read now, in percent (0.6, not 0.006).
 
 ## Migration v1 → v2
 

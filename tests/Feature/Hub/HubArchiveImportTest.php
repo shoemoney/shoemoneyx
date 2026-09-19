@@ -19,9 +19,8 @@ class HubArchiveImportTest extends TestCase
         config(['hub.url' => 'https://hub.test']);
     }
 
-    public function test_import_rejects_a_v2_definition_while_the_engine_flag_is_off_and_writes_no_plugin(): void
+    public function test_import_accepts_a_valid_v2_definition_and_saves_it_as_the_plugins_own_shape(): void
     {
-        config(['strategies.v2_engine' => false]);
         $definition = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
 
         Http::fake([
@@ -31,8 +30,10 @@ class HubArchiveImportTest extends TestCase
         ]);
 
         $this->postJson('/api/hub/import', ['slug' => 'smx-pi', 'version' => '1.0.0'])
-            ->assertStatus(422);
+            ->assertStatus(201);
 
-        $this->assertSame(0, StrategyPlugin::count());
+        $plugin = StrategyPlugin::sole();
+        $this->assertSame(2, $plugin->definition['schema_version']);
+        $this->assertSame('smx-pi', $plugin->hub_slug);
     }
 }

@@ -25,11 +25,22 @@ final class JsonRuleEvaluator
      */
     public static function value(string $field, ProductStats $s, ?Position $p, DeskContext $ctx, string $tf = '1h'): mixed
     {
-        if ($field === 'position.pnl_pct' && $p !== null) {
-            return $p->unrealisedPnlPct($s->price);
-        }
-        if ($field === 'position.hold_hours' && $p !== null) {
-            return $p->opened_at->diffInMinutes($ctx->now()) / 60;
+        if ($p !== null && str_starts_with($field, 'position.')) {
+            return match ($field) {
+                'position.pnl_pct' => $p->unrealisedPnlPct($s->price),
+                'position.hold_hours' => $p->opened_at->diffInMinutes($ctx->now()) / 60,
+                // v2 additions (docs/STRATEGY_SCHEMA_V2.md, "Field-to-field comparison and crosses"):
+                // avg/peak_pct read straight off the position, the four counts off its v2 engine state.
+                'position.avg' => (float) $p->entry_price,
+                'position.peak_pct' => $p->entry_price > 0
+                    ? $p->dir() * ((float) ($p->peak_price ?? $p->entry_price) / $p->entry_price - 1) * 100
+                    : 0.0,
+                'position.rungs_fired' => count($p->meta['v2']['ladder']['fired'] ?? []),
+                'position.reentries' => count($p->meta['v2']['reentries'] ?? []),
+                'position.adds_count' => (int) $p->adds_count,
+                'position.trims_count' => (int) $p->trims_count,
+                default => null,
+            };
         }
         if ($p === null && str_starts_with($field, 'position.')) {
             return null;

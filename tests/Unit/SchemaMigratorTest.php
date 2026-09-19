@@ -54,29 +54,16 @@ class SchemaMigratorTest extends TestCase
     }
 
     #[Test]
-    public function migrate_refuses_schema_version_2_because_phase_c_has_no_engine_yet(): void
+    public function migrate_passes_a_canonical_v2_definition_through_unchanged(): void
     {
-        $this->expectException(\LogicException::class);
+        $v2 = ['schema_version' => 2, 'key' => 'k', 'meta' => ['name' => 'K'], 'entry' => ['when' => ['a']]];
 
-        SchemaMigrator::migrate(['schema_version' => 2, 'key' => 'k', 'meta' => ['name' => 'K'], 'entry' => ['when' => ['a']]]);
+        $this->assertSame($v2, SchemaMigrator::migrate($v2));
     }
 
     #[Test]
-    public function validate_for_save_refuses_schema_version_2_while_the_engine_flag_is_off(): void
+    public function validate_for_save_runs_the_v2_validator_for_a_schema_version_2_definition(): void
     {
-        config(['strategies.v2_engine' => false]);
-        $v2 = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
-
-        $result = SchemaMigrator::validateForSave($v2);
-
-        $this->assertFalse($result['valid']);
-        $this->assertSame('schema_version', $result['errors'][0]['path']);
-    }
-
-    #[Test]
-    public function validate_for_save_runs_the_v2_validator_once_the_engine_flag_is_on(): void
-    {
-        config(['strategies.v2_engine' => true]);
         $v2 = json_decode(file_get_contents(base_path('resources/strategies/examples/smx-pi-take-profit-v2.json')), true);
 
         $result = SchemaMigrator::validateForSave($v2);
