@@ -489,7 +489,13 @@ class Desk
 
         $slip = $result->slippageBps($orderSide) ?? 0;
         $msg = sprintf('%s %s%s $%.2f @ %.6f (slip %.1f bps, fee %.2f%%)%s', strtoupper($kind), $short ? 'SHORT ' : '', $pid, $result->filledUsd, $result->fillPrice, $slip, $result->feePct() * 100, $result->partial ? ' PARTIAL' : '');
-        if ($slip > (float) $ctx->param('size.max_slippage_bps', 50)) {
+        if ($result->basisRecovered) {
+            // slippageBps() refuses to report a number for a fabricated basis (null here, floored
+            // to 0 above) — comparing that manufactured zero against the threshold would silently
+            // pass every recovered fill through as if it slipped not at all (round-6 review,
+            // MAJOR). Surfaced unconditionally instead of gated on a number that doesn't exist.
+            $this->reporter->error('FILLS', 'FILL BASIS RECOVERED (slippage unmeasured) — '.$msg);
+        } elseif ($slip > (float) $ctx->param('size.max_slippage_bps', 50)) {
             $this->reporter->error('FILLS', 'SLIPPAGE OVER MAX — '.$msg);
         } else {
             $this->reporter->trade('FILLS', $msg, ['position_id' => $position->id]);
@@ -915,6 +921,15 @@ class Desk
 
                 $netPnl = $this->bookExit($p, $result);
 
+                if ($result->basisRecovered) {
+                    // Same hazard doEnter()'s slippage check guards against: a recovered fill's
+                    // slippage is unmeasured, not zero, and exit_price/pnl here come straight off
+                    // that same fabricated basis (round-6 review, MAJOR — proven: a sell recovered
+                    // to the decision price booked pnl overstated by the real, unmeasured
+                    // slippage, understating risk.daily_loss_cap_pct via dailyPnlPct()).
+                    $this->reporter->error('FILLS', sprintf('FILL BASIS RECOVERED (slippage unmeasured) — %s %s [%s] @ %.6f', $p->isShort() ? 'COVER' : 'SELL', $p->product_id, $rule, $result->fillPrice));
+                }
+
                 if ($p->quantity > self::QTY_EPSILON) {
                     $p->save();
                     $this->reporter->trade('RISK', sprintf('PARTIAL CLOSE %s [%s] pnl $%.2f, %.8f still open', $p->product_id, $rule, $netPnl, $p->quantity), ['position_id' => $p->id]);
@@ -1041,6 +1056,13 @@ class Desk
                 } else {
                     $this->markFullyClosed($p, $result, $rule);
                     $p->save();
+                }
+
+                if ($result->basisRecovered) {
+                    // Same hazard as close() (round-6 review, MAJOR): a recovered fill's slippage
+                    // is unmeasured, not zero, and the banked pnl above comes straight off that
+                    // same fabricated basis.
+                    $this->reporter->error('FILLS', sprintf('FILL BASIS RECOVERED (slippage unmeasured) — TRIM %s [%s] @ %.6f', $p->product_id, $rule, $result->fillPrice));
                 }
 
                 $this->reporter->trade('RISK', sprintf('TRIM %s [%s] sold %.0f%% @ %.6f, banked $%.2f (total banked $%.2f)', $p->product_id, $rule, $soldFraction * 100, $result->fillPrice, $netPnl, $p->realised_usd), ['position_id' => $p->id]);

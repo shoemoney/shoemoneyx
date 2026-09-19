@@ -179,7 +179,7 @@ class CoinbasePerpsExecutor implements Executor
         // average_filled_price missing or 0 (round-5 review — this venue never got round 4's fix,
         // so OrderResult::ok() refused every such fill and Desk::close()/trim() left the position
         // open while the venue had already sold it).
-        [$avg, $gross] = OrderResult::recoverFillBasis($filledQty, $avgReported > 0 ? $avgReported : null, $gross, $decisionPrice, 'CoinbasePerpsExecutor', $orderId, [
+        [$avg, $gross, $basisRecovered] = OrderResult::recoverFillBasis($filledQty, $avgReported > 0 ? $avgReported : null, $gross, $decisionPrice, 'CoinbasePerpsExecutor', $orderId, [
             'average_filled_price' => $order['average_filled_price'] ?? null,
         ]);
         $status = $filledContracts > 0 ? 'filled' : 'rejected';
@@ -206,6 +206,7 @@ class CoinbasePerpsExecutor implements Executor
             venueOrderId: $orderId,
             raw: ['create' => $resp, 'order' => $order, 'contracts' => $contracts],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
+            basisRecovered: $basisRecovered,
         );
     }
 }

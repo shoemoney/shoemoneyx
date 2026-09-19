@@ -28,6 +28,14 @@ final class OrderResult
          * Null for live executors (the venue already settled cash; there is nothing local left to write).
          */
         public readonly ?\Closure $ledgerWrite = null,
+        /**
+         * True when recoverFillBasis() had to fabricate this fill's price and/or notional off the
+         * decision price rather than the venue's own readback (round-6 review, MAJOR): slippage
+         * against a fabricated price is not measured slippage, it is exactly zero by construction,
+         * which let a genuinely bad fill sail past Desk's SLIPPAGE OVER MAX check and overstated
+         * Position.pnl_usd. slippageBps() refuses to report a number when this is true.
+         */
+        public readonly bool $basisRecovered = false,
     ) {}
 
     /**
@@ -59,29 +67,29 @@ final class OrderResult
      * loudly either way since both shapes mean the venue gave back materially incomplete data.
      *
      * @param  array<string, mixed>  $context  extra fields folded into the warning log for triage
-     * @return array{0: ?float, 1: float} [price, notional]
+     * @return array{0: ?float, 1: float, 2: bool} [price, notional, recovered]
      */
     public static function recoverFillBasis(float $filledQty, ?float $avg, float $filledValue, float $decisionPrice, string $venue, ?string $orderId, array $context = []): array
     {
         if ($filledQty <= 0) {
-            return [$avg, $filledValue];
+            return [$avg, $filledValue, false];
         }
         if ($avg === null || $avg <= 0) {
             Log::warning("{$venue}: filled order missing a usable average price, falling back to the decision price", [
                 'order_id' => $orderId, 'filled_qty' => $filledQty, 'filled_value' => $filledValue, 'average' => $avg, ...$context,
             ]);
 
-            return [$decisionPrice, $filledQty * $decisionPrice];
+            return [$decisionPrice, $filledQty * $decisionPrice, true];
         }
         if ($filledValue <= 0) {
             Log::warning("{$venue}: filled order has an average price but no filled value, rebuilding it from the average", [
                 'order_id' => $orderId, 'filled_qty' => $filledQty, 'average' => $avg, ...$context,
             ]);
 
-            return [$avg, $filledQty * $avg];
+            return [$avg, $filledQty * $avg, true];
         }
 
-        return [$avg, $filledValue];
+        return [$avg, $filledValue, false];
     }
 
     /** Runs the deferred ledger write, if this fill carries one. No-op for live fills. */
@@ -94,7 +102,7 @@ final class OrderResult
 
     public function slippageBps(string $side): ?float
     {
-        if (! $this->fillPrice || $this->decisionPrice <= 0) {
+        if ($this->basisRecovered || ! $this->fillPrice || $this->decisionPrice <= 0) {
             return null;
         }
         $bps = ($this->fillPrice / $this->decisionPrice - 1) * 10_000;

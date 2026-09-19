@@ -102,7 +102,7 @@ class CoinbaseExecutor implements Executor
         $fee = (float) ($order['total_fees'] ?? 0);
         $avgReported = (float) ($order['average_filled_price'] ?? 0);
         $avg = $avgReported > 0 ? $avgReported : ($filledQty > 0 && $filledValue > 0 ? $filledValue / $filledQty : null);
-        [$avg, $filledValue] = OrderResult::recoverFillBasis($filledQty, $avg, $filledValue, $decisionPrice, 'CoinbaseExecutor', $orderId, [
+        [$avg, $filledValue, $basisRecovered] = OrderResult::recoverFillBasis($filledQty, $avg, $filledValue, $decisionPrice, 'CoinbaseExecutor', $orderId, [
             'average_filled_price' => $order['average_filled_price'] ?? null,
         ]);
         $status = $filledQty > 0 ? 'filled' : 'rejected';
@@ -122,6 +122,7 @@ class CoinbaseExecutor implements Executor
             venueOrderId: $orderId,
             raw: ['create' => $resp, 'order' => $order],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
+            basisRecovered: $basisRecovered,
         );
     }
 

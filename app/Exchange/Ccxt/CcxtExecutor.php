@@ -112,7 +112,7 @@ class CcxtExecutor implements Executor
         // average (round-5 review — this venue never got round 4's fix at all, so OrderResult::ok()
         // refused every such fill and Desk::close()/trim() left the position open while the venue
         // had already sold it).
-        [$avg, $cost] = OrderResult::recoverFillBasis($filledQty, $avg, $cost, $decisionPrice, "{$this->ccxtId} (ccxt)", $orderId, [
+        [$avg, $cost, $basisRecovered] = OrderResult::recoverFillBasis($filledQty, $avg, $cost, $decisionPrice, "{$this->ccxtId} (ccxt)", $orderId, [
             'average' => $order['average'] ?? null,
         ]);
         $status = $filledQty > 0 ? 'filled' : 'rejected';
@@ -132,6 +132,7 @@ class CcxtExecutor implements Executor
             venueOrderId: $orderId,
             raw: ['create' => $create, 'order' => $order],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
+            basisRecovered: $basisRecovered,
         );
     }
 

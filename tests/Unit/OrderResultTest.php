@@ -103,4 +103,38 @@ class OrderResultTest extends TestCase
         $this->assertNull($price);
         $this->assertSame(0.0, $notional);
     }
+
+    public function test_recover_fill_basis_flags_a_recovered_result(): void
+    {
+        [, , $recoveredNoAvg] = OrderResult::recoverFillBasis(2.0, null, 0.0, 100.0, 'test-venue', 'o-4');
+        [, , $recoveredNoValue] = OrderResult::recoverFillBasis(2.0, 102.0, 0.0, 100.0, 'test-venue', 'o-5');
+        [, , $notRecovered] = OrderResult::recoverFillBasis(2.0, 100.0, 200.0, 100.0, 'test-venue', 'o-6');
+
+        $this->assertTrue($recoveredNoAvg);
+        $this->assertTrue($recoveredNoValue);
+        $this->assertFalse($notRecovered);
+    }
+
+    /**
+     * Round-6 review, MAJOR 2: slippageBps() computes fillPrice/decisionPrice - 1 — for a
+     * recovered fill, fillPrice IS the decision price by construction, so this always reads as
+     * exactly zero rather than "unmeasured". Desk's SLIPPAGE OVER MAX check can never fire on the
+     * one fill class where slippage is genuinely unknown, and Position.pnl_usd/exit_price built
+     * off that same fabricated basis silently overstate the real fill.
+     */
+    public function test_slippage_bps_is_null_on_a_recovered_result(): void
+    {
+        $r = new OrderResult('filled', 200.0, 200.0, 2.0, 100.0, 100.0, 1.2, basisRecovered: true);
+
+        $this->assertNull($r->slippageBps('SELL'));
+    }
+
+    public function test_slippage_bps_still_measures_a_healthy_result(): void
+    {
+        $r = new OrderResult('filled', 200.0, 194.0, 2.0, 100.0, 97.0, 1.2);
+
+        // A SELL that actually filled at 97 against a 100 decision price is worse than decision —
+        // slippageBps() reports that as positive.
+        $this->assertEqualsWithDelta(300.0, $r->slippageBps('SELL'), 1e-9);
+    }
 }
