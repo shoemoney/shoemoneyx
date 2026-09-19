@@ -72,6 +72,23 @@ class StrategySchemaValidatorTest extends TestCase
         $this->assertContains('setup.rules[1].value', array_column($result['errors'], 'path'));
     }
 
+    /**
+     * Round-6 review, BLOCKER 2: an object value (e.g. {"lo":1,"hi":1000}, decoded to an
+     * associative array with no index 0/1) has count() 2 and validated clean, then threw
+     * "Undefined array key 0" at runtime (JsonRuleEvaluator).
+     */
+    #[Test]
+    public function between_rejects_a_two_key_object_value(): void
+    {
+        $def = $this->validDefinition();
+        $def['setup']['rules'][1]['value'] = ['lo' => 1, 'hi' => 1000];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('setup.rules[1].value', array_column($result['errors'], 'path'));
+    }
+
     #[Test]
     public function risk_caps_must_be_positive(): void
     {

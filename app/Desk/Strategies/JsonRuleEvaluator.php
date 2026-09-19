@@ -126,8 +126,12 @@ final class JsonRuleEvaluator
             '>=' => $actual >= $expected,
             '==' => $actual == $expected,
             '!=' => $actual != $expected,
-            // {value: [lo, hi]}, inclusive — session-hour / regime-band filters.
-            'between' => is_array($expected) && count($expected) === 2 && is_numeric($actual)
+            // {value: [lo, hi]}, inclusive — session-hour / regime-band filters. array_is_list()
+            // guards a stored rule whose value is a two-key OBJECT (e.g. {"lo":1,"hi":1000}): that
+            // still has count() 2 but no index 0/1, which threw "Undefined array key 0" here for
+            // any pre-existing definition the schema validator had waved through before it also
+            // required a list (round-6 review) — fails closed instead.
+            'between' => is_array($expected) && count($expected) === 2 && array_is_list($expected) && is_numeric($actual)
                 && $actual >= $expected[0] && $actual <= $expected[1],
             // {value: [...]} — categorical/regime membership.
             'in' => is_array($expected) && in_array($actual, $expected, false),

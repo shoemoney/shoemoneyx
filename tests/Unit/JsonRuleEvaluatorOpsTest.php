@@ -60,6 +60,23 @@ class JsonRuleEvaluatorOpsTest extends TestCase
         $this->assertFalse(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => [1]], $s, null, $ctx));
     }
 
+    /**
+     * Round-6 review, BLOCKER 2: a stored rule whose "between" value is an object (e.g.
+     * {"lo":1,"hi":1000}, decoded from JSON as an associative array with keys 0 absent) has
+     * count() 2 and used to throw "Undefined array key 0" here. Must fail closed instead, so a
+     * pre-existing stored strategy degrades safely rather than aborting risk() (and, pre round-6
+     * blocker 1, starving every position after it in the sweep).
+     */
+    #[Test]
+    public function between_fails_closed_instead_of_throwing_when_the_value_is_not_a_list(): void
+    {
+        $s = $this->stats();
+        $ctx = $this->ctxAt('2026-01-01T00:00:00Z');
+
+        $this->assertFalse(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]], $s, null, $ctx));
+        $this->assertFalse(JsonRuleEvaluator::fires(['field' => 'spread_bps', 'op' => 'between', 'value' => [0 => 1, 2 => 1000]], $s, null, $ctx));
+    }
+
     #[Test]
     public function in_and_not_in_test_membership(): void
     {

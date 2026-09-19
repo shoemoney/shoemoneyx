@@ -445,6 +445,23 @@ class StrategySchemaValidatorV2Test extends TestCase
         $this->assertContains('signals.liquid.all[1].value[1]', $this->paths($result));
     }
 
+    /**
+     * Round-6 review, BLOCKER 2: an object value (e.g. {"lo":1,"hi":1000}, decoded to an
+     * associative array with no index 0/1) has count() 2 and validated clean, then threw
+     * "Undefined array key 0" at runtime (JsonRuleEvaluator).
+     */
+    #[Test]
+    public function between_rejects_a_two_key_object_value(): void
+    {
+        $def = $this->validDefinition();
+        $def['signals']['liquid']['all'][] = ['field' => 'price', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]];
+
+        $result = StrategySchemaValidator::validate($def);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('signals.liquid.all[1].value', $this->paths($result));
+    }
+
     #[Test]
     public function adds_rung_rejects_both_size_pct_and_size_at_once(): void
     {

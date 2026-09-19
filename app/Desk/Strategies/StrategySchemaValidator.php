@@ -408,8 +408,8 @@ final class StrategySchemaValidator
                 $errors[] = ['path' => "{$rulePath}.op", 'message' => 'op must be one of: '.implode(', ', JsonRuleEvaluator::OPS)];
             } elseif (in_array($op, ['between', 'in', 'not_in'], true) && ! is_array($value)) {
                 $errors[] = ['path' => "{$rulePath}.value", 'message' => "value must be an array for op \"{$op}\""];
-            } elseif ($op === 'between' && is_array($value) && count($value) !== 2) {
-                $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value must have exactly 2 elements [min, max] for op "between"'];
+            } elseif ($op === 'between' && is_array($value) && (count($value) !== 2 || ! array_is_list($value))) {
+                $errors[] = ['path' => "{$rulePath}.value", 'message' => 'value must be a two-element list [min, max] for op "between"'];
             } elseif ($isCrosses && ! str_starts_with((string) ($rule['field'] ?? ''), 'ind.')) {
                 $errors[] = ['path' => "{$rulePath}.field", 'message' => 'crosses_* needs an ind.* field on both sides'];
             } elseif ($isCrosses && ! is_numeric($value) && ! ($isFieldRef && str_starts_with($value['field'], 'ind.'))) {
@@ -1077,8 +1077,8 @@ final class StrategySchemaValidator
             if (! is_array($value)) {
                 $errors[] = ['path' => "{$path}.value", 'message' => "value must be an array for op \"{$op}\""];
             } else {
-                if ($op === 'between' && count($value) !== 2) {
-                    $errors[] = ['path' => "{$path}.value", 'message' => 'value must have exactly 2 elements [min, max] for op "between"'];
+                if ($op === 'between' && (count($value) !== 2 || ! array_is_list($value))) {
+                    $errors[] = ['path' => "{$path}.value", 'message' => 'value must be a two-element list [min, max] for op "between"'];
                 }
                 foreach ($value as $i => $el) {
                     $name = self::unresolvedParamName($el);
