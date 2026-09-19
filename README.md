@@ -42,7 +42,7 @@ Update to the latest image:
 docker compose pull && docker compose up -d
 ```
 
-The published `ghcr.io` images already include Font Awesome Pro, so no Font Awesome license files are needed to run them (charts still need your own TradingView Charting Library copy — see below).
+The published `ghcr.io` images already include Font Awesome Pro, so no Font Awesome license files are needed to run them.
 
 ## Quick start (no Docker)
 
@@ -57,7 +57,7 @@ open http://localhost:8000
 
 First run lands you on `/onboarding` — set a master password (or skip it for a trusted local desk), connect an OpenRouter key, pick an exchange, optionally import a community strategy, and launch in paper mode, all in under five minutes.
 
-Charts need the TradingView Charting Library, which is free but cannot be redistributed. See `public/charting_library/README.md`.
+Charts run on TradingView's [lightweight-charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0), bundled via npm — no separate download or TradingView account needed.
 
 ## Commands
 
