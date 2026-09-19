@@ -1179,6 +1179,13 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $avg = self::avg($position);
         $dir = $position->dir();
         $price = $stats->price;
+        // ProductStatsBuilder::fromBars() returns price 0.0 for a product with no closed 1H bars,
+        // and Desk::statsWithRetries() passes it straight through — every guard above this
+        // survives a literal 0 (round-6 review, BLOCKER: $qty = $dollars / $price below threw
+        // DivisionByZeroError, which pre round-6-blocker-1 starved the rest of the risk sweep).
+        if ($price <= 0) {
+            return null;
+        }
         $retracedPct = $avg > 0 ? $dir * ($salePrice - $price) / $avg * 100 : 0.0;
         if ($retracedPct < $requiredRetracePct) {
             return null;

@@ -695,6 +695,14 @@ class Desk
 
                 if ($stats === null) {
                     $decision = RiskDecision::close('unmeasurable', null, null, null, 'no answer after retries — a position you cannot measure is a position you do not hold');
+                } elseif ($stats->price <= 0) {
+                    // ProductStatsBuilder::fromBars() returns price 0.0 for a product with no
+                    // closed 1H bars yet, and statsWithRetries() passes it straight through — a
+                    // real (non-null) stats row that is still useless. Skipped before
+                    // markPrice(0.0) can stamp a zero last_price onto the position (round-6 review).
+                    $this->reporter->warn('RISK', "{$p->product_id}: stats price is {$stats->price}, skipping this position this sweep");
+
+                    continue;
                 } else {
                     $p->markPrice($stats->price);
                     $decision = $strategy->risk($p, $stats, $ctx);
