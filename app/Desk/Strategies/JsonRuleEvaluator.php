@@ -209,8 +209,12 @@ final class JsonRuleEvaluator
     private static function stratKeyFor(DeskContext $ctx): ?string
     {
         $versionId = $ctx->param('json.plugin_version_id');
-        if (is_string($versionId) && $versionId !== '') {
-            return $versionId;
+        // Every producer (BacktestVersionPin, ArenaRunner, RunBacktestTool) sets this to an
+        // int — is_numeric(), the same check JsonPluginStrategy::definition() uses to resolve
+        // this very param, not is_string(): a plain is_string() check never matched a real
+        // caller, so every arena seat fell through to the no-safe-key "always log" branch below.
+        if (is_numeric($versionId)) {
+            return (string) $versionId;
         }
         $key = $ctx->param('json.plugin_key');
 

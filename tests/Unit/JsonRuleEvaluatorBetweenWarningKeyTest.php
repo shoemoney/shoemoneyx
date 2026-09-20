@@ -51,7 +51,7 @@ class JsonRuleEvaluatorBetweenWarningKeyTest extends TestCase
         );
     }
 
-    private function ctxWith(?string $pluginKey, ?string $pluginVersionId): DeskContext
+    private function ctxWith(?string $pluginKey, ?int $pluginVersionId): DeskContext
     {
         return new DeskContext(
             ['json' => array_filter(['plugin_key' => $pluginKey, 'plugin_version_id' => $pluginVersionId], fn ($v) => $v !== null)],
@@ -75,8 +75,8 @@ class JsonRuleEvaluatorBetweenWarningKeyTest extends TestCase
 
         // Same plugin_key, DIFFERENT plugin_version_id -> must be treated as different strategy
         // identities (a plugin_key can span several published versions) -> logs for each.
-        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-a', 'v1'));
-        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-a', 'v2'));
+        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-a', 1));
+        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-a', 2));
         Log::shouldHaveReceived('warning')->twice();
     }
 
@@ -88,8 +88,27 @@ class JsonRuleEvaluatorBetweenWarningKeyTest extends TestCase
 
         // Different plugin_key, SAME plugin_version_id -> plugin_version_id must win, so these
         // dedupe together (proves it isn't just "prefer key, then also check version").
-        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-a', 'v1'));
-        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-b', 'v1'));
+        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-a', 1));
+        JsonRuleEvaluator::fires($this->rule, $s, null, $this->ctxWith('plugin-b', 1));
+        Log::shouldHaveReceived('warning')->once();
+    }
+
+    #[Test]
+    public function int_plugin_version_id_with_no_plugin_key_still_dedupes(): void
+    {
+        // Round-10 review, MAJOR: every real producer (BacktestVersionPin, ArenaRunner,
+        // RunBacktestTool) sets json.plugin_version_id to a plain int with no plugin_key at
+        // all — an arena seat is exactly this shape. A stratKeyFor() that only accepted
+        // is_string() never matched this and fell through to "no safe key, always log",
+        // spamming a warning on every single evaluation instead of deduping.
+        Log::spy();
+        $s = $this->stats();
+        $ctx = $this->ctxWith(null, 42);
+
+        JsonRuleEvaluator::fires($this->rule, $s, null, $ctx);
+        JsonRuleEvaluator::fires($this->rule, $s, null, $ctx);
+        JsonRuleEvaluator::fires($this->rule, $s, null, $ctx);
+
         Log::shouldHaveReceived('warning')->once();
     }
 

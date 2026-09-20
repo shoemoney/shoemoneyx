@@ -116,7 +116,9 @@ class JsonRuleEvaluatorOpsTest extends TestCase
     {
         Log::spy();
         $s = $this->stats();
-        $ctx = new DeskContext(['json' => ['plugin_version_id' => 'v1']], 'backtest', false, [], new \DateTimeImmutable('2026-01-01T00:00:00Z', new \DateTimeZone('UTC')));
+        // int, not a string — every real producer (BacktestVersionPin, ArenaRunner,
+        // RunBacktestTool) sets json.plugin_version_id to a plain int (round-10 review, MAJOR).
+        $ctx = new DeskContext(['json' => ['plugin_version_id' => 1]], 'backtest', false, [], new \DateTimeImmutable('2026-01-01T00:00:00Z', new \DateTimeZone('UTC')));
         $rule = ['field' => 'spread_bps', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]];
 
         // Three sweeps' worth of evaluations against the same stored (legacy) rule.
