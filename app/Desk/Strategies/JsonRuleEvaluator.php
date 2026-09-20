@@ -153,6 +153,15 @@ final class JsonRuleEvaluator
     private const BETWEEN_WARNING_TTL_SECONDS = 3600;
 
     /**
+     * Every cache key between() has ever written this process, so forgetLoggedBetweenWarnings()
+     * below can forget exactly its own dedupe entries (round-10 review, MINOR — see that
+     * method's docblock).
+     *
+     * @var array<string, true>
+     */
+    private static array $warnedKeys = [];
+
+    /**
      * Validation (SchemaMigrator::validateForSave(), reached only from save/import paths) has
      * rejected a non-list "between" value since round 6, but nothing re-validates a definition
      * already on load — a row stored before that tightening still reaches here and used to fail
@@ -187,6 +196,9 @@ final class JsonRuleEvaluator
             }
 
             $seenKey = self::BETWEEN_WARNING_CACHE_PREFIX.$stratKey.'|'.$field.'|'.json_encode($expected);
+            // Tracked so forgetLoggedBetweenWarnings() below can forget only ITS OWN keys —
+            // never the whole cache store.
+            self::$warnedKeys[$seenKey] = true;
             // Cache::add() only writes (and returns true) when the key is absent — an atomic
             // "was this already logged" check-and-set, not a read-then-write race.
             if (Cache::add($seenKey, true, self::BETWEEN_WARNING_TTL_SECONDS)) {
@@ -222,14 +234,21 @@ final class JsonRuleEvaluator
     }
 
     /**
-     * Test-only reset for the "between" legacy-value warning dedupe above. Round 9: the dedupe
-     * itself moved from a static array to Cache::add(), which already resets automatically
-     * between test methods (a fresh container = a fresh 'array' cache store) — this is now a
-     * belt-and-suspenders flush for the rare case a test seeds the cache store directly.
+     * Test-only reset for the "between" legacy-value warning dedupe above.
+     *
+     * Round-10 review, MINOR: this called Cache::flush(), wiping the ENTIRE configured cache
+     * store rather than just this dedupe's own keys — safe only by accident, because
+     * phpunit.xml pins CACHE_STORE=array; tests/TestCase.php calls this in setUp() for every one
+     * of the suite's tests, so any run whose cache resolved to the shared KeyDB would flush it
+     * on every single test. Forgets only the keys between() itself has written (tracked in
+     * self::$warnedKeys above), never anything else in the store.
      */
     public static function forgetLoggedBetweenWarnings(): void
     {
-        Cache::flush();
+        foreach (array_keys(self::$warnedKeys) as $key) {
+            Cache::forget($key);
+        }
+        self::$warnedKeys = [];
     }
 
     /**
