@@ -139,6 +139,8 @@ php artisan test
 npm run test:frontend
 ```
 
+- End-to-end browser journeys (onboarding, the agent, the chart) live in `tests/e2e/*.mjs` — see [`docs/E2E.md`](docs/E2E.md) for what each proves and the fresh-desk recipe to run them.
+
 ## Contributing
 
 See `CONTRIBUTING.md`. Exchange adapters are the most wanted contribution. Security issues go to the address in `SECURITY.md`.
