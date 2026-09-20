@@ -132,6 +132,72 @@ class DeskForceCloseBackoffAndTerminalTest extends TestCase
         };
     }
 
+    /** A fresh stuck-price position + always-rejecting executor, wired the same way every test here needs. */
+    private function stuckDesk(): array
+    {
+        Product::create(['product_id' => 'BTC-USD', 'base_currency' => 'BTC', 'quote_currency' => 'USD']);
+        Position::create([
+            'mode' => 'paper', 'strategy' => 'probe', 'product_id' => 'BTC-USD', 'side' => 'long', 'status' => 'open',
+            'quantity' => 1.0, 'entry_price' => 100.0, 'entry_usd' => 100.0, 'fees_usd' => 0.0,
+            'peak_price' => 100.0, 'last_price' => 105.0, 'opened_at' => now()->subDays(30), 'meta' => [],
+        ]);
+
+        $zeroStats = ProductStats::fromArray([
+            'product_id' => 'BTC-USD', 'price' => 0.0,
+            'volume_h24_usd' => 0, 'volume_h1_usd' => 0, 'volume_h6_usd' => 0,
+            'price_change_h24_pct' => 0, 'spread_bps' => 0, 'candles_h1_count' => 0,
+        ]);
+        $builder = \Mockery::mock(ProductStatsBuilder::class);
+        $builder->shouldReceive('live')->andReturn($zeroStats);
+        $this->app->instance(ProductStatsBuilder::class, $builder);
+
+        $desk = app(Desk::class);
+        $deskStats = new \ReflectionProperty(Desk::class, 'stats');
+        $deskStats->setAccessible(true);
+        $deskStats->setValue($desk, $builder);
+
+        return [$desk, $this->alwaysRejectingExecutor()];
+    }
+
+    /**
+     * Round-9 review, BLOCKER: the cadence check was 1-based (`$forceCloseSweeps % $backoffSweeps
+     * !== 1`), which divides by zero's cousin — with force_close_backoff_sweeps=1 (or an empty
+     * env falling through `max(1, ...)`), every sweep computes `N % 1 !== 1` as true, so the
+     * force-close NEVER actually attempts and the position sits "stale" (i.e. unmanaged) forever,
+     * exactly the outcome this whole escalation ladder exists to prevent. The 0-based cadence
+     * `(($forceCloseSweeps - 1) % $backoffSweeps) !== 0` fires on sweep 1 and every Nth sweep
+     * after it for every N >= 1, backoff=1 included.
+     */
+    public function test_force_close_with_backoff_of_one_attempts_every_single_sweep(): void
+    {
+        config(['desk.risk.force_close_backoff_sweeps' => 1, 'desk.risk.force_close_max_attempts' => 5]);
+        [$desk, $executor] = $this->stuckDesk();
+        $strategy = $this->strategy();
+
+        foreach ([1, 2, 3] as $sweep) {
+            $out = $desk->runRiskSweep($strategy, $executor);
+            $this->assertSame('CLOSE', $out[0]['action'], "sweep {$sweep} with backoff=1 must attempt the close, not sit stale forever");
+            $this->assertSame($sweep, $executor->attempts, "sweep {$sweep} with backoff=1 must reach the executor every time");
+        }
+    }
+
+    /** Same cadence math, N=2: attempts on sweeps 1, 3, 5 — backs off on 2, 4. */
+    public function test_force_close_with_backoff_of_two_attempts_every_other_sweep(): void
+    {
+        config(['desk.risk.force_close_backoff_sweeps' => 2, 'desk.risk.force_close_max_attempts' => 5]);
+        [$desk, $executor] = $this->stuckDesk();
+        $strategy = $this->strategy();
+
+        $expectedActions = ['CLOSE', 'stale', 'CLOSE', 'stale', 'CLOSE'];
+        $expectedAttempts = [1, 1, 2, 2, 3];
+        foreach ($expectedActions as $i => $action) {
+            $out = $desk->runRiskSweep($strategy, $executor);
+            $sweep = $i + 1;
+            $this->assertSame($action, $out[0]['action'], "sweep {$sweep} with backoff=2");
+            $this->assertSame($expectedAttempts[$i], $executor->attempts, "sweep {$sweep} with backoff=2");
+        }
+    }
+
     public function test_force_close_backs_off_then_goes_terminal_instead_of_retrying_forever(): void
     {
         Product::create(['product_id' => 'BTC-USD', 'base_currency' => 'BTC', 'quote_currency' => 'USD']);

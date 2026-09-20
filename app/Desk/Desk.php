@@ -753,7 +753,14 @@ class Desk
                         continue;
                     }
 
-                    if ($forceCloseSweeps % $backoffSweeps !== 1) {
+                    // Round-9 review, BLOCKER: this cadence check was 1-based (`% $backoffSweeps
+                    // !== 1`) — with force_close_backoff_sweeps=1 (or an empty env falling through
+                    // max(1, ...) above), forceCloseSweeps % 1 is always 0, which is never 1, so
+                    // the condition was true on EVERY sweep and the force-close never once
+                    // attempted, reinstating "unmanaged forever" for the exact case this ladder
+                    // exists to prevent. 0-based instead: fires on sweep 1, then every Nth sweep
+                    // after it, for every N >= 1.
+                    if ((($forceCloseSweeps - 1) % $backoffSweeps) !== 0) {
                         $p->meta = array_merge($p->meta ?? [], ['force_close_sweeps' => $forceCloseSweeps]);
                         $p->save();
                         $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
