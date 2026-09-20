@@ -191,6 +191,7 @@ return [
         // (illiquid book, exchange reject) must not retry every single sweep forever:
         'force_close_backoff_sweeps' => (int) env('DESK_RISK_FORCE_CLOSE_BACKOFF_SWEEPS', 5), // only actually retry the close every Nth sweep since escalation
         'force_close_max_attempts' => (int) env('DESK_RISK_FORCE_CLOSE_MAX_ATTEMPTS', 10),    // give up after this many failed attempts — reports once (position.meta.force_close_terminal_reported) and stops retrying
+        'force_close_rereport_sweeps' => (int) env('DESK_RISK_FORCE_CLOSE_REREPORT_SWEEPS', 60), // once terminal, re-report the give-up every Nth sweep instead of only ever once
     ],
 
     'chief' => [

@@ -698,22 +698,27 @@ class Desk
             try {
                 $ctx = $this->context($strategy, false, $executor->mode());
                 $stats = $this->statsWithRetries($p->product_id, (int) $ctx->param('risk.stale_data_retries', 2));
-                // Set true whenever $decision comes out of forceCloseDecision() below, so the
-                // close attempt below can record its OWN outcome against force_close_attempts
-                // (round-9 review, MINOR — see forceCloseDecision()'s docblock).
+                // Set whenever $decision comes out of forceCloseDecision() below, so the
+                // close-attempt block and the final $out[] entry below can tell a real attempt
+                // apart from an inert terminal placeholder (round-9 review — see
+                // forceCloseDecision()'s docblock).
                 $isForceCloseAttempt = false;
+                $forceCloseTerminal = false;
 
                 if ($stats === null) {
                     // Round-9 review, MAJOR: this used to issue close('unmeasurable', ...)
                     // directly here, with no backoff and no terminal check — unlike the
                     // stats->price<=0 route below, which only got the ladder in round 8. Routed
                     // through the same shared ledger now: forceCloseDecision() returns null and
-                    // has already recorded 'stale' (backoff) or 'force_close_terminal' in $out.
-                    $decision = $this->forceCloseDecision($p, $ctx, 'no answer after retries — a position you cannot measure is a position you do not hold', $out);
-                    if ($decision === null) {
+                    // has already recorded 'stale' (backoff) in $out (the caller `continue`s
+                    // without a RiskCheck row); terminal falls through instead, see below.
+                    $forceClose = $this->forceCloseDecision($p, $ctx, 'no answer after retries — a position you cannot measure is a position you do not hold', $out);
+                    if ($forceClose === null) {
                         continue;
                     }
-                    $isForceCloseAttempt = true;
+                    $decision = $forceClose['decision'];
+                    $forceCloseTerminal = $forceClose['terminal'];
+                    $isForceCloseAttempt = ! $forceCloseTerminal;
                 } elseif ($stats->price <= 0) {
                     // ProductStatsBuilder::fromBars() returns price 0.0 for a product with no
                     // closed 1H bars yet, and statsWithRetries() passes it straight through — a
@@ -747,11 +752,13 @@ class Desk
                     // close that can't fill must not retry every single sweep forever, and a
                     // position already terminal on one route must not hammer again just because it
                     // arrived here via the other).
-                    $decision = $this->forceCloseDecision($p, $ctx, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold", $out);
-                    if ($decision === null) {
+                    $forceClose = $this->forceCloseDecision($p, $ctx, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold", $out);
+                    if ($forceClose === null) {
                         continue;
                     }
-                    $isForceCloseAttempt = true;
+                    $decision = $forceClose['decision'];
+                    $forceCloseTerminal = $forceClose['terminal'];
+                    $isForceCloseAttempt = ! $forceCloseTerminal;
                 } else {
                     $p->markPrice($stats->price);
                     $decision = $strategy->risk($p, $stats, $ctx);
@@ -791,7 +798,11 @@ class Desk
                 }
                 RiskCheck::create([
                     'position_id' => $p->id,
-                    'action' => $decision->action,
+                    // Round-9 review, MINOR: a terminal force-close position used to skip this
+                    // entirely (early `continue` in the old code) — the dashboard had no row at
+                    // all for a position that was, correctly, parked. 'force_close_terminal' here
+                    // instead of the inert HOLD placeholder's own action.
+                    'action' => $forceCloseTerminal ? 'force_close_terminal' : $decision->action,
                     'rule_fired' => $decision->ruleFired,
                     'volume_6h' => $decision->volume6h,
                     'avg_6h' => $decision->avg6h,
@@ -821,7 +832,7 @@ class Desk
                     $this->reporter->warn('RISK', "{$p->product_id}: mutate lock timed out on {$decision->action}, will retry next sweep");
                 }
 
-                $out[] = ['position' => $p->product_id, 'action' => $decision->action, 'rule' => $decision->ruleFired];
+                $out[] = ['position' => $p->product_id, 'action' => $forceCloseTerminal ? 'force_close_terminal' : $decision->action, 'rule' => $decision->ruleFired];
             } catch (\Throwable $e) {
                 // Any unhandled failure evaluating ONE position (a strategy bug, a malformed stored
                 // definition reaching an unguarded runtime path, a division by zero) must not starve
@@ -886,11 +897,17 @@ class Desk
      * attempting another close.
      *
      * @param  array<int, array{position:string, action:string, rule:?string}>  $out
-     * @return RiskDecision|null the CLOSE decision to attempt this sweep, or null when $out already
-     *                            got its entry for this sweep ('stale' backoff, or
-     *                            'force_close_terminal') and the caller must `continue`.
+     * @return array{decision:RiskDecision, terminal:bool}|null
+     *         null when $out already got its 'stale' backoff entry for this sweep and the caller
+     *         must `continue` without resolving a price or writing a RiskCheck row.
+     *         Non-null otherwise: terminal=false means actually attempt the CLOSE decision;
+     *         terminal=true means the position has given up for good (decision is an inert HOLD)
+     *         — the caller must still resolve a price and write a RiskCheck row (round-9 review,
+     *         MINOR: a terminal position used to vanish from the dashboard entirely), but must
+     *         never attempt close/trim/add and must report the 'force_close_terminal' action, not
+     *         the HOLD placeholder's own action.
      */
-    private function forceCloseDecision(Position $p, DeskContext $ctx, string $reason, array &$out): ?RiskDecision
+    private function forceCloseDecision(Position $p, DeskContext $ctx, string $reason, array &$out): ?array
     {
         $forceCloseSweeps = ((int) ($p->meta['force_close_sweeps'] ?? 0)) + 1;
         $forceCloseAttempts = (int) ($p->meta['force_close_attempts'] ?? 0);
@@ -898,14 +915,25 @@ class Desk
         $maxForceCloseAttempts = (int) $ctx->param('risk.force_close_max_attempts', 10);
 
         if ($forceCloseAttempts >= $maxForceCloseAttempts) {
-            if (($p->meta['force_close_terminal_reported'] ?? false) !== true) {
-                $this->reporter->error('RISK', "{$p->product_id}: force-close failed {$forceCloseAttempts} attempts, giving up — needs manual intervention");
-                $p->meta = array_merge($p->meta ?? [], ['force_close_terminal_reported' => true]);
-                $p->save();
-            }
-            $out[] = ['position' => $p->product_id, 'action' => 'force_close_terminal', 'rule' => null];
+            // Round-9 review, MINOR: this used to report once ever and never again — useful the
+            // first time, silent and forgettable a week later. Re-reports every
+            // risk.force_close_rereport_sweeps'th terminal sweep instead of never again.
+            $rereportSweeps = max(1, (int) $ctx->param('risk.force_close_rereport_sweeps', 60));
+            $terminalSweeps = ((int) ($p->meta['force_close_terminal_sweeps'] ?? 0)) + 1;
+            $alreadyReported = ($p->meta['force_close_terminal_reported'] ?? false) === true;
 
-            return null;
+            if (! $alreadyReported || (($terminalSweeps - 1) % $rereportSweeps) === 0) {
+                $this->reporter->error('RISK', "{$p->product_id}: force-close failed {$forceCloseAttempts} attempts, giving up — needs manual intervention");
+            }
+            $p->meta = array_merge($p->meta ?? [], [
+                'force_close_terminal_reported' => true,
+                'force_close_terminal_sweeps' => $terminalSweeps,
+            ]);
+            $p->save();
+
+            // HOLD is inert — shouldClose()/shouldTrim()/shouldAdd() are all false for it, so the
+            // caller's close/trim/add block is a guaranteed no-op without any special-casing there.
+            return ['decision' => new RiskDecision(RiskDecision::HOLD, null, null, null, null, 'force_close_terminal'), 'terminal' => true];
         }
 
         // 0-based cadence (round-9 review, BLOCKER): fires on sweep 1, then every Nth sweep after
@@ -926,7 +954,7 @@ class Desk
         $p->meta = array_merge($p->meta ?? [], ['force_close_sweeps' => $forceCloseSweeps]);
         $p->save();
 
-        return RiskDecision::close('unmeasurable', null, null, null, $reason);
+        return ['decision' => RiskDecision::close('unmeasurable', null, null, null, $reason), 'terminal' => false];
     }
 
     /**
