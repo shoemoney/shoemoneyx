@@ -752,6 +752,15 @@ class Desk
                     // close that can't fill must not retry every single sweep forever, and a
                     // position already terminal on one route must not hammer again just because it
                     // arrived here via the other).
+                    //
+                    // Round-9 review, MINOR: zero_price_sweeps used to only ever get saved by the
+                    // "< threshold" skip branch above — past the threshold it was read as
+                    // stored+1 but never written back, so the reason string below froze at
+                    // max_zero_price_sweeps forever no matter how many more sweeps actually
+                    // passed. Kept incrementing and persisted here too, merged into the same
+                    // save forceCloseDecision() already does, so the reason string always
+                    // reports the TRUE stall length.
+                    $p->meta = array_merge($p->meta ?? [], ['zero_price_sweeps' => $zeroSweeps]);
                     $forceClose = $this->forceCloseDecision($p, $ctx, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold", $out);
                     if ($forceClose === null) {
                         continue;
