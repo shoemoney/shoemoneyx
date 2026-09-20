@@ -698,6 +698,10 @@ class Desk
             try {
                 $ctx = $this->context($strategy, false, $executor->mode());
                 $stats = $this->statsWithRetries($p->product_id, (int) $ctx->param('risk.stale_data_retries', 2));
+                // Set true whenever $decision comes out of forceCloseDecision() below, so the
+                // close attempt below can record its OWN outcome against force_close_attempts
+                // (round-9 review, MINOR — see forceCloseDecision()'s docblock).
+                $isForceCloseAttempt = false;
 
                 if ($stats === null) {
                     // Round-9 review, MAJOR: this used to issue close('unmeasurable', ...)
@@ -709,6 +713,7 @@ class Desk
                     if ($decision === null) {
                         continue;
                     }
+                    $isForceCloseAttempt = true;
                 } elseif ($stats->price <= 0) {
                     // ProductStatsBuilder::fromBars() returns price 0.0 for a product with no
                     // closed 1H bars yet, and statsWithRetries() passes it straight through — a
@@ -746,6 +751,7 @@ class Desk
                     if ($decision === null) {
                         continue;
                     }
+                    $isForceCloseAttempt = true;
                 } else {
                     $p->markPrice($stats->price);
                     $decision = $strategy->risk($p, $stats, $ctx);
@@ -799,7 +805,10 @@ class Desk
 
                 try {
                     if ($decision->shouldClose()) {
-                        $this->close($p, $decision->ruleFired ?? 'risk', $price, $executor);
+                        $fill = $this->close($p, $decision->ruleFired ?? 'risk', $price, $executor);
+                        if ($isForceCloseAttempt) {
+                            $this->recordForceCloseAttemptOutcome($p, $fill);
+                        }
                     } elseif ($decision->shouldTrim()) {
                         $this->trim($p, $decision->fraction, $decision->ruleFired ?? 'trim', $price, $executor, $decision->limitPrice);
                     } elseif ($decision->shouldAdd()) {
@@ -890,7 +899,7 @@ class Desk
 
         if ($forceCloseAttempts >= $maxForceCloseAttempts) {
             if (($p->meta['force_close_terminal_reported'] ?? false) !== true) {
-                $this->reporter->error('RISK', "{$p->product_id}: force-close failed {$forceCloseAttempts} times in a row, giving up — needs manual intervention");
+                $this->reporter->error('RISK', "{$p->product_id}: force-close failed {$forceCloseAttempts} attempts, giving up — needs manual intervention");
                 $p->meta = array_merge($p->meta ?? [], ['force_close_terminal_reported' => true]);
                 $p->save();
             }
@@ -909,13 +918,32 @@ class Desk
             return null;
         }
 
-        $p->meta = array_merge($p->meta ?? [], [
-            'force_close_sweeps' => $forceCloseSweeps,
-            'force_close_attempts' => $forceCloseAttempts + 1,
-        ]);
+        // Round-9 review, MINOR: force_close_attempts is deliberately NOT bumped here anymore —
+        // only force_close_sweeps (the backoff cadence). The caller (runRiskSweep()) records the
+        // real outcome via recordForceCloseAttemptOutcome() once close() has actually run, so a
+        // LockTimeoutException between here and there (contract everywhere else: "another chance
+        // next sweep") never burns one of the position's limited attempts.
+        $p->meta = array_merge($p->meta ?? [], ['force_close_sweeps' => $forceCloseSweeps]);
         $p->save();
 
         return RiskDecision::close('unmeasurable', null, null, null, $reason);
+    }
+
+    /**
+     * Counts a force-close attempt against the position ONLY when close() actually ran and did
+     * NOT succeed — a LockTimeoutException never reaches this method at all (the caller's catch
+     * block skips straight past it), and a genuinely successful close needs no counting: the
+     * position is no longer open, so no future sweep will ever consult this ledger again.
+     */
+    private function recordForceCloseAttemptOutcome(Position $p, ?Fill $fill): void
+    {
+        $ok = $fill !== null && $fill->status === 'filled' && $fill->filled_qty > 0 && $fill->fill_price !== null && $fill->fill_price > 0;
+        if ($ok) {
+            return;
+        }
+
+        $p->meta = array_merge($p->meta ?? [], ['force_close_attempts' => ((int) ($p->meta['force_close_attempts'] ?? 0)) + 1]);
+        $p->save();
     }
 
     private function statsWithRetries(string $pid, int $retries): ?ProductStats
