@@ -187,6 +187,10 @@ return [
         'max_hold_hours' => 72,
         'stale_data_retries' => 2,        // no answer -> retry twice, then CLOSE anyway
         'max_zero_price_sweeps' => 5,     // stats price stuck at <= 0 this many sweeps in a row -> CLOSE anyway
+        // Once escalated past max_zero_price_sweeps into a force-close, a close that can't fill
+        // (illiquid book, exchange reject) must not retry every single sweep forever:
+        'force_close_backoff_sweeps' => (int) env('DESK_RISK_FORCE_CLOSE_BACKOFF_SWEEPS', 5), // only actually retry the close every Nth sweep since escalation
+        'force_close_max_attempts' => (int) env('DESK_RISK_FORCE_CLOSE_MAX_ATTEMPTS', 10),    // give up after this many failed attempts — reports once (position.meta.force_close_terminal_reported) and stops retrying
     ],
 
     'chief' => [

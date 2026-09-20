@@ -728,12 +728,58 @@ class Desk
                         continue;
                     }
 
+                    // Round-8 review, MAJOR: escalating past max_zero_price_sweeps into a force-close
+                    // had no backoff and no terminal state — $zeroSweeps was read as stored+1 above but
+                    // never written back on this branch, so a close that can't fill (illiquid book,
+                    // exchange reject) retried on every single sweep forever. Two counters from here:
+                    // force_close_sweeps paces the backoff (only actually retries the close every
+                    // risk.force_close_backoff_sweeps'th sweep since escalation), force_close_attempts
+                    // counts real attempts and trips a terminal state after
+                    // risk.force_close_max_attempts of them, so this reports once and stops hammering
+                    // the exchange instead of retrying a dead close forever.
+                    $forceCloseSweeps = ((int) ($p->meta['force_close_sweeps'] ?? 0)) + 1;
+                    $forceCloseAttempts = (int) ($p->meta['force_close_attempts'] ?? 0);
+                    $backoffSweeps = max(1, (int) $ctx->param('risk.force_close_backoff_sweeps', 5));
+                    $maxForceCloseAttempts = (int) $ctx->param('risk.force_close_max_attempts', 10);
+
+                    if ($forceCloseAttempts >= $maxForceCloseAttempts) {
+                        if (($p->meta['force_close_terminal_reported'] ?? false) !== true) {
+                            $this->reporter->error('RISK', "{$p->product_id}: force-close failed {$forceCloseAttempts} times in a row, giving up — needs manual intervention");
+                            $p->meta = array_merge($p->meta ?? [], ['force_close_terminal_reported' => true]);
+                            $p->save();
+                        }
+                        $out[] = ['position' => $p->product_id, 'action' => 'force_close_terminal', 'rule' => null];
+
+                        continue;
+                    }
+
+                    if ($forceCloseSweeps % $backoffSweeps !== 1) {
+                        $p->meta = array_merge($p->meta ?? [], ['force_close_sweeps' => $forceCloseSweeps]);
+                        $p->save();
+                        $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
+
+                        continue;
+                    }
+
+                    $p->meta = array_merge($p->meta ?? [], [
+                        'force_close_sweeps' => $forceCloseSweeps,
+                        'force_close_attempts' => $forceCloseAttempts + 1,
+                    ]);
+                    $p->save();
+
                     $decision = RiskDecision::close('unmeasurable', null, null, null, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold");
                 } else {
                     $p->markPrice($stats->price);
                     $decision = $strategy->risk($p, $stats, $ctx);
-                    if (($p->meta['zero_price_sweeps'] ?? 0) !== 0) {
-                        $p->meta = array_merge($p->meta ?? [], ['zero_price_sweeps' => 0]);
+                    if (($p->meta['zero_price_sweeps'] ?? 0) !== 0 || ($p->meta['force_close_sweeps'] ?? 0) !== 0 || ($p->meta['force_close_attempts'] ?? 0) !== 0 || ($p->meta['force_close_terminal_reported'] ?? false) !== false) {
+                        // Price recovered — the whole force-close escalation state is stale, clear it
+                        // so a FUTURE stall starts its own backoff/terminal count from zero.
+                        $p->meta = array_merge($p->meta ?? [], [
+                            'zero_price_sweeps' => 0,
+                            'force_close_sweeps' => 0,
+                            'force_close_attempts' => 0,
+                            'force_close_terminal_reported' => false,
+                        ]);
                     }
                     $p->save();
                 }
