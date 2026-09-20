@@ -99,37 +99,69 @@ function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
 // (an optional "id" and/or "#", plus whitespace — never arbitrary prose) sit between it and the
 // number, so "Backtest #1", "backtest 1" and "backtest id 1" all match but "Rung #1" and "the
 // backtest returned 1 result" (the number there isn't the id, it's an unrelated word away) do not.
-function backtestIdPattern(id) {
+// Exported so a mutant-testing harness can import the two layers separately and stub either one
+// without touching the composed matcher below (see the self-check block).
+export function backtestIdPattern(id) {
   return new RegExp('backtest(?:\\s+id)?\\s*#?\\s*' + id + '\\b', 'i');
 }
 
 // Belt-and-braces: strip grouped thousands ("$1,000") and dotted decimals/versions ("1.0.0",
 // "v1.0") out of the text before testing, so a stray digit trapped inside one of those can never
 // satisfy the id pattern even if a context prefix happens to line up right before it.
-function stripNumberNoise(text) {
+export function stripNumberNoise(text) {
   return text
     .replace(/\d{1,3}(?:,\d{3})+/g, '')
     .replace(/\d+(?:\.\d+)+/g, '');
 }
 
-function backtestIdMentioned(text, id) {
-  return backtestIdPattern(id).test(stripNumberNoise(text));
+// `strip` is injectable (defaults to the real stripNumberNoise) purely so the self-check below can
+// stub it to identity and prove the strip layer is load-bearing, without a second copy of this
+// function.
+function backtestIdMentioned(text, id, strip = stripNumberNoise) {
+  return backtestIdPattern(id).test(strip(text));
 }
 
 // Self-check the matcher before the browser even starts — a regression here would otherwise only
 // surface as a silently-passing e2e run against a desk whose first backtest id is always 1.
+//
+// A prior version of this block asserted 'The backtest returned 1 result.' and 'Backtest
+// complete. Equity #1,000.' were rejected and claimed that isolated the two layers below. It
+// didn't: the old pattern alternation rejects the first regardless (no "#" in it) and the pattern
+// rejects the second with or without stripping (the "#1" sits after "Equity", not after
+// "backtest", so the literal-"backtest"-adjacency requirement fails before stripping ever
+// matters). Both assertions passed unconditionally under every mutant below — verified by running
+// them against a reverted pattern, an identity-stubbed strip, and both at once. The two blocks
+// after the general checks replace them with cases proven (by the same three mutants) to fail
+// under exactly one broken layer.
 {
   const falsePositive = 'Ending equity: $1,000. Version 1.0.0.';
   const truePositive = 'Backtest #1 finished';
   assert.equal(backtestIdMentioned(falsePositive, 1), false, 'must NOT match id 1 inside "$1,000. Version 1.0.0."');
   assert.equal(backtestIdMentioned(truePositive, 1), true, 'must match "Backtest #1 finished"');
-  // Isolate each layer the two checks above blur together: stripNumberNoise alone (a plain "1"
-  // sitting next to unrelated prose, no grouped/decimal noise involved) and backtestIdPattern
-  // alone (a "#1" with no "backtest" word anywhere near it — the false positive the old
-  // "(?:backtest\s*#?|#)" alternation let through).
-  assert.equal(backtestIdMentioned('The backtest returned 1 result.', 1), false, 'must NOT match a bare "1" that is just an unrelated word away from "backtest"');
-  assert.equal(backtestIdMentioned('Backtest complete. Equity #1,000.', 1), false, 'must NOT match id 1 hiding inside a later "#1,000" figure');
-  console.log('PASS self-check: backtest-id matcher rejects numeric noise and bare "#<id>", accepts "Backtest #<id>"');
+
+  // Pattern-layer isolation: a bare "#1" with no "backtest" word anywhere near it — the exact
+  // false positive the old "(?:backtest\s*#?|#)" alternation let through (a take-profit "Rung
+  // #1"). stripNumberNoise is a no-op on this string (no grouped thousands, no decimal), so
+  // rejecting it is entirely the pattern's doing — proven by stubbing strip to identity and
+  // getting the same answer.
+  const patternRegressionInput = 'Rung #1';
+  assert.equal(backtestIdMentioned(patternRegressionInput, 1), false, 'must NOT match a bare "#1" with no "backtest" word before it');
+  assert.equal(backtestIdMentioned(patternRegressionInput, 1, (t) => t), false, 'sanity: identical result with stripNumberNoise stubbed to identity — this rejection is the pattern layer, not the strip layer');
+
+  // Strip-layer isolation: "backtest" sits directly against a grouped-thousands figure, so
+  // backtestIdPattern alone — no unrelated word in the way — treats the leading "1" of "1,000" as
+  // the id. Only stripNumberNoise removing "1,000" first stops that, proven by stubbing it to
+  // identity and watching the composed matcher flip from false to true.
+  const stripRegressionInput = 'Backtest 1,000 candles consumed.';
+  assert.equal(backtestIdPattern(1).test(stripRegressionInput), true, 'sanity: backtestIdPattern alone (unstripped) treats the "1" in "1,000" as the id');
+  assert.equal(backtestIdMentioned(stripRegressionInput, 1, (t) => t), true, 'must reproduce that false positive when stripNumberNoise is stubbed to identity');
+  assert.equal(backtestIdMentioned(stripRegressionInput, 1), false, 'must NOT match id 1 hiding inside a "1,000"-style figure once stripNumberNoise actually runs');
+
+  // Acceptance: the "backtest id <n>" form (the `(?:\s+id)?` branch) was never exercised by any
+  // case above.
+  assert.equal(backtestIdMentioned('backtest id 1', 1), true, 'must match the "backtest id <n>" form');
+
+  console.log('PASS self-check: backtest-id matcher isolates the pattern layer and the strip layer, and accepts the "backtest id <n>" form');
 }
 
 async function pollBacktest(ctx, id, timeoutMs) {
