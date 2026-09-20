@@ -33,7 +33,13 @@ class AgentController extends Controller
         // kills it mid-loop. 300 s matches nginx's fastcgi_read_timeout in the image.
         set_time_limit(300);
 
-        return response()->json($agent->turn($conversation->id, $data['message']));
+        $result = $agent->turn($conversation->id, $data['message']);
+
+        // 200 whenever the loop produced a result — even a capped or tool-error result is real
+        // progress worth 200'ing back with its (possibly partial) tool_events; only an upstream/
+        // model failure that stopped the loop outright gets a non-2xx, and even then the body
+        // still carries whatever tool_events ran before it, never a bare empty 500.
+        return response()->json($result, $result['error'] === null ? 200 : 502);
     }
 
     public function show(AgentConversation $conversation): JsonResponse

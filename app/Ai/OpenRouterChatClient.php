@@ -46,8 +46,9 @@ final class OpenRouterChatClient implements ChatClient
 
         $durationMs = self::elapsedMs($startedAt);
         if (! $response->successful()) {
+            $bodySnippet = mb_substr($response->body(), 0, 500);
             $this->gate->record($userKey, $model, 'error', 'HTTP '.$response->status().': '.$response->body(), $durationMs);
-            throw new \RuntimeException('OpenRouter returned '.$response->status().'.');
+            throw new \RuntimeException('OpenRouter returned '.$response->status().' for model '.$model.': '.$bodySnippet);
         }
 
         $reply = self::parse($response->json() ?? [], $model);
@@ -80,7 +81,10 @@ final class OpenRouterChatClient implements ChatClient
             'HTTP-Referer' => config('app.url'),
             'X-Title' => 'shoemoneyx strategy builder',
             'Content-Type' => 'application/json',
-        ])->timeout(90)->post(self::ENDPOINT, $body);
+        // 90s was too tight for a free-tier model under load — observed a real >90s round trip
+        // once the payload grows to include a tool result (cURL error 28). 150s still leaves room
+        // for a second round trip inside AgentController's 300s set_time_limit for one turn.
+        ])->timeout(150)->post(self::ENDPOINT, $body);
     }
 
     /** @throws AiNoConnectionException when neither a connected account nor the self-host env key exists */

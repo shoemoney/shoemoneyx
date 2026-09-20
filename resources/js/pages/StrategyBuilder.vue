@@ -490,7 +490,7 @@ async function sendAgentMessage() {
                 </div>
             </section>
         </div>
-        <section class="agent">
+        <section class="agent" data-testid="agent-chat">
             <h2>Strategy Agent</h2>
             <p class="hint">Walks you through Setup → Trigger → Entry → Management → Exit → Risk → Review, one phase at a time.</p>
             <div class="phase-track">
