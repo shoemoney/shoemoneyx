@@ -8,6 +8,7 @@ use App\Desk\Data\ProductStats;
 use App\Desk\DeskContext;
 use App\Models\Position;
 use App\Services\Indicators\IndicatorCache;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -140,6 +141,12 @@ final class JsonRuleEvaluator
         };
     }
 
+    /** Cache key prefix for the "between" legacy-value warning dedupe below — exposed so tests can seed/inspect it directly. */
+    public const BETWEEN_WARNING_CACHE_PREFIX = 'json_rule_evaluator:between_warned:';
+
+    /** Round-9 review: how long one warning silences repeats for the same (strategy, field, value). */
+    private const BETWEEN_WARNING_TTL_SECONDS = 3600;
+
     /**
      * Validation (SchemaMigrator::validateForSave(), reached only from save/import paths) has
      * rejected a non-list "between" value since round 6, but nothing re-validates a definition
@@ -148,7 +155,13 @@ final class JsonRuleEvaluator
      * a v1 stop rule since those are OR'ed, or a v2 `all` group). Docs (STRATEGY_SCHEMA_V2.md)
      * say this logs "the first time it is evaluated" — round-8 review, MINOR: the code logged on
      * EVERY evaluation instead, one line per sweep for as long as the broken definition stays
-     * loaded. Logged once per (strategy key, rule) per process via a static set, matching the doc.
+     * loaded.
+     *
+     * Round-9 review, MINOR: round 8's fix deduped via a static PHP array, which is process-local
+     * memory — desk:risk's everyMinute scheduler forks a fresh `php artisan desk:risk` process
+     * every tick, so that dedupe was a complete no-op in production: every tick got its own empty
+     * static array and re-logged. Backed by Cache::add() (ttl 1h) instead, so the dedupe survives
+     * across processes the way "once per hour" actually requires.
      */
     private static function between(string $field, mixed $expected, mixed $actual, string $stratKey = ''): bool
     {
@@ -156,9 +169,10 @@ final class JsonRuleEvaluator
             return false;
         }
         if (! array_is_list($expected)) {
-            $seenKey = $stratKey.'|'.$field.'|'.json_encode($expected);
-            if (! isset(self::$loggedBetweenWarnings[$seenKey])) {
-                self::$loggedBetweenWarnings[$seenKey] = true;
+            $seenKey = self::BETWEEN_WARNING_CACHE_PREFIX.$stratKey.'|'.$field.'|'.json_encode($expected);
+            // Cache::add() only writes (and returns true) when the key is absent — an atomic
+            // "was this already logged" check-and-set, not a read-then-write race.
+            if (Cache::add($seenKey, true, self::BETWEEN_WARNING_TTL_SECONDS)) {
                 Log::warning("JsonRuleEvaluator: 'between' rule on field \"{$field}\" has a non-list value (".json_encode($expected).') — rejected at save since round 6; this stored definition will never fire until it is fixed to a JSON array [lo, hi]');
             }
 
@@ -168,15 +182,15 @@ final class JsonRuleEvaluator
         return $actual >= $expected[0] && $actual <= $expected[1];
     }
 
-    /** Process-lifetime dedupe set for the "between" legacy-value warning above, keyed by (strategy key, field, value). */
-    private static array $loggedBetweenWarnings = [];
-
-    /** Same reasoning as CandleStore::forgetLocal()/IndicatorCache::forgetAll(): this memo lives
-     *  outside the container and survives the app rebuild between test methods, so tests must
-     *  clear it themselves. */
+    /**
+     * Test-only reset for the "between" legacy-value warning dedupe above. Round 9: the dedupe
+     * itself moved from a static array to Cache::add(), which already resets automatically
+     * between test methods (a fresh container = a fresh 'array' cache store) — this is now a
+     * belt-and-suspenders flush for the rare case a test seeds the cache store directly.
+     */
     public static function forgetLoggedBetweenWarnings(): void
     {
-        self::$loggedBetweenWarnings = [];
+        Cache::flush();
     }
 
     /**

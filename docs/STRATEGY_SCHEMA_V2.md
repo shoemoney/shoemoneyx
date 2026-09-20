@@ -311,7 +311,9 @@ correction class rare enough not to justify it.
 is rejected at save since round 6 (`JsonRuleEvaluator::fires()`, `array_is_list()` check).
 Validation only runs on save/import (`SchemaMigrator::validateForSave()`), never on load, so a
 definition stored before that round-6 tightening still loads and evaluates; it now logs a warning
-the first time it is evaluated and returns `false` (never fires) rather than throwing.
+once per hour per strategy version and rule (deduped via `Cache::add()`, so it survives across the
+fresh processes desk:risk's scheduler forks every tick — a process-local dedupe would re-log every
+single tick) and returns `false` (never fires) rather than throwing.
 
 ### Field-to-field comparison and crosses
 
