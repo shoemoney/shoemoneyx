@@ -90,6 +90,10 @@ This repository ships example strategies only. Your edge is yours.
 
 Any machine that can reach the desk host's Redis can be a worker: `bin/desk worker N`, or the Docker image with `ROLE=worker`. Roster and expected worker counts come from `FARM_HOSTS` and `FARM_EXPECTED_WORKERS` in `.env`. Details in `docs/FARM.md`.
 
+## Risk
+
+RISK is final authority, on its own timer, independent of the SCAN→VET→SIZE→FILLS cycle. A position that can't be priced at all (no answer from the feed, or a product with no closed bars) escalates through a backoff ladder into a force-close, and eventually a terminal state if the exchange keeps rejecting the close. See `docs/RISK.md` for the ladder, the `risk.force_close_*` config/env, and how to manually recover a terminal position.
+
 ## Layout
 
 ```
@@ -108,6 +112,7 @@ app/Services/Indicators  indicator math
 app/Http/Controllers/Api status, positions, runs, desk, settings, backtests, farm, UDF datafeed
 resources/js             Vue SPA
 docs/COINBASE_DOCS.md    Coinbase docs map, read before touching any Coinbase call
+docs/RISK.md             force-close escalation ladder, config/env, manual recovery
 ```
 
 ## Adding an exchange
