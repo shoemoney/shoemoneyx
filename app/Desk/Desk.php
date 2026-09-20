@@ -805,6 +805,14 @@ class Desk
                     // sweep relies on the ledger's own (slow-cadence) "giving up" message instead.
                     if ($isForceCloseAttempt) {
                         $this->reporter->error('RISK', "{$p->product_id}: no usable price to act on (stats, last_price and entry_price are all <= 0), skipping this position this sweep");
+                        // Round-10 review, MAJOR: recordForceCloseAttemptOutcome() only ever ran
+                        // after close() — this branch `continue`s before close() is ever reached,
+                        // so a position with no usable price anywhere never burned an attempt and
+                        // the ladder could never reach terminal, reporting on the backoff cadence
+                        // forever instead of going quiet after max_attempts. An unpriceable close
+                        // is a failed attempt (null fill fails recordForceCloseAttemptOutcome()'s
+                        // "ok" check the same way a rejected fill does), so it counts the same way.
+                        $this->recordForceCloseAttemptOutcome($p, null);
                     }
                     $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
 
