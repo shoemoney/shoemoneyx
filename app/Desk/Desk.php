@@ -700,7 +700,15 @@ class Desk
                 $stats = $this->statsWithRetries($p->product_id, (int) $ctx->param('risk.stale_data_retries', 2));
 
                 if ($stats === null) {
-                    $decision = RiskDecision::close('unmeasurable', null, null, null, 'no answer after retries — a position you cannot measure is a position you do not hold');
+                    // Round-9 review, MAJOR: this used to issue close('unmeasurable', ...)
+                    // directly here, with no backoff and no terminal check — unlike the
+                    // stats->price<=0 route below, which only got the ladder in round 8. Routed
+                    // through the same shared ledger now: forceCloseDecision() returns null and
+                    // has already recorded 'stale' (backoff) or 'force_close_terminal' in $out.
+                    $decision = $this->forceCloseDecision($p, $ctx, 'no answer after retries — a position you cannot measure is a position you do not hold', $out);
+                    if ($decision === null) {
+                        continue;
+                    }
                 } elseif ($stats->price <= 0) {
                     // ProductStatsBuilder::fromBars() returns price 0.0 for a product with no
                     // closed 1H bars yet, and statsWithRetries() passes it straight through — a
@@ -729,52 +737,15 @@ class Desk
                     }
 
                     // Round-8 review, MAJOR: escalating past max_zero_price_sweeps into a force-close
-                    // had no backoff and no terminal state — $zeroSweeps was read as stored+1 above but
-                    // never written back on this branch, so a close that can't fill (illiquid book,
-                    // exchange reject) retried on every single sweep forever. Two counters from here:
-                    // force_close_sweeps paces the backoff (only actually retries the close every
-                    // risk.force_close_backoff_sweeps'th sweep since escalation), force_close_attempts
-                    // counts real attempts and trips a terminal state after
-                    // risk.force_close_max_attempts of them, so this reports once and stops hammering
-                    // the exchange instead of retrying a dead close forever.
-                    $forceCloseSweeps = ((int) ($p->meta['force_close_sweeps'] ?? 0)) + 1;
-                    $forceCloseAttempts = (int) ($p->meta['force_close_attempts'] ?? 0);
-                    $backoffSweeps = max(1, (int) $ctx->param('risk.force_close_backoff_sweeps', 5));
-                    $maxForceCloseAttempts = (int) $ctx->param('risk.force_close_max_attempts', 10);
-
-                    if ($forceCloseAttempts >= $maxForceCloseAttempts) {
-                        if (($p->meta['force_close_terminal_reported'] ?? false) !== true) {
-                            $this->reporter->error('RISK', "{$p->product_id}: force-close failed {$forceCloseAttempts} times in a row, giving up — needs manual intervention");
-                            $p->meta = array_merge($p->meta ?? [], ['force_close_terminal_reported' => true]);
-                            $p->save();
-                        }
-                        $out[] = ['position' => $p->product_id, 'action' => 'force_close_terminal', 'rule' => null];
-
+                    // had no backoff and no terminal state. Round 9: this ladder is now shared with
+                    // the stats===null route above via forceCloseDecision() (same reasoning — a
+                    // close that can't fill must not retry every single sweep forever, and a
+                    // position already terminal on one route must not hammer again just because it
+                    // arrived here via the other).
+                    $decision = $this->forceCloseDecision($p, $ctx, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold", $out);
+                    if ($decision === null) {
                         continue;
                     }
-
-                    // Round-9 review, BLOCKER: this cadence check was 1-based (`% $backoffSweeps
-                    // !== 1`) — with force_close_backoff_sweeps=1 (or an empty env falling through
-                    // max(1, ...) above), forceCloseSweeps % 1 is always 0, which is never 1, so
-                    // the condition was true on EVERY sweep and the force-close never once
-                    // attempted, reinstating "unmanaged forever" for the exact case this ladder
-                    // exists to prevent. 0-based instead: fires on sweep 1, then every Nth sweep
-                    // after it, for every N >= 1.
-                    if ((($forceCloseSweeps - 1) % $backoffSweeps) !== 0) {
-                        $p->meta = array_merge($p->meta ?? [], ['force_close_sweeps' => $forceCloseSweeps]);
-                        $p->save();
-                        $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
-
-                        continue;
-                    }
-
-                    $p->meta = array_merge($p->meta ?? [], [
-                        'force_close_sweeps' => $forceCloseSweeps,
-                        'force_close_attempts' => $forceCloseAttempts + 1,
-                    ]);
-                    $p->save();
-
-                    $decision = RiskDecision::close('unmeasurable', null, null, null, "price stuck at {$stats->price} for {$zeroSweeps} consecutive sweeps — a position you cannot measure is a position you do not hold");
                 } else {
                     $p->markPrice($stats->price);
                     $decision = $strategy->risk($p, $stats, $ctx);
@@ -892,6 +863,59 @@ class Desk
             // that runs right after this — the deleverage retries next sweep either way.
             $this->reporter->warn('RISK', "{$worst->product_id}: mutate lock timed out on deleverage close, will retry next sweep");
         }
+    }
+
+    /**
+     * Shared force-close ledger for both "unmeasurable" routes in runRiskSweep() — stats===null
+     * (retries exhausted) and stats->price stuck at <= 0 past risk.max_zero_price_sweeps. Round-9
+     * review, MAJOR: previously only the price-0 route escalated through backoff/terminal; the
+     * null-stats route issued close('unmeasurable') directly on every single sweep forever, no
+     * backoff and no terminal check, and a position already terminal via one route would start
+     * hammering again the moment it arrived here via the other (e.g. a stalled feed recovering
+     * just enough to report price 0 instead of throwing, or vice versa). Both routes now read and
+     * write the same force_close_* meta keys and both check the terminal flag before ever
+     * attempting another close.
+     *
+     * @param  array<int, array{position:string, action:string, rule:?string}>  $out
+     * @return RiskDecision|null the CLOSE decision to attempt this sweep, or null when $out already
+     *                            got its entry for this sweep ('stale' backoff, or
+     *                            'force_close_terminal') and the caller must `continue`.
+     */
+    private function forceCloseDecision(Position $p, DeskContext $ctx, string $reason, array &$out): ?RiskDecision
+    {
+        $forceCloseSweeps = ((int) ($p->meta['force_close_sweeps'] ?? 0)) + 1;
+        $forceCloseAttempts = (int) ($p->meta['force_close_attempts'] ?? 0);
+        $backoffSweeps = max(1, (int) $ctx->param('risk.force_close_backoff_sweeps', 5));
+        $maxForceCloseAttempts = (int) $ctx->param('risk.force_close_max_attempts', 10);
+
+        if ($forceCloseAttempts >= $maxForceCloseAttempts) {
+            if (($p->meta['force_close_terminal_reported'] ?? false) !== true) {
+                $this->reporter->error('RISK', "{$p->product_id}: force-close failed {$forceCloseAttempts} times in a row, giving up — needs manual intervention");
+                $p->meta = array_merge($p->meta ?? [], ['force_close_terminal_reported' => true]);
+                $p->save();
+            }
+            $out[] = ['position' => $p->product_id, 'action' => 'force_close_terminal', 'rule' => null];
+
+            return null;
+        }
+
+        // 0-based cadence (round-9 review, BLOCKER): fires on sweep 1, then every Nth sweep after
+        // it, for every N >= 1 including backoffSweeps=1 (no pause at all).
+        if ((($forceCloseSweeps - 1) % $backoffSweeps) !== 0) {
+            $p->meta = array_merge($p->meta ?? [], ['force_close_sweeps' => $forceCloseSweeps]);
+            $p->save();
+            $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
+
+            return null;
+        }
+
+        $p->meta = array_merge($p->meta ?? [], [
+            'force_close_sweeps' => $forceCloseSweeps,
+            'force_close_attempts' => $forceCloseAttempts + 1,
+        ]);
+        $p->save();
+
+        return RiskDecision::close('unmeasurable', null, null, null, $reason);
     }
 
     private function statsWithRetries(string $pid, int $retries): ?ProductStats
