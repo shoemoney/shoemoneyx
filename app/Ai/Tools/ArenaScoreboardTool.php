@@ -22,7 +22,9 @@ final class ArenaScoreboardTool implements Tool
 
     public function parameters(): array
     {
-        return ['type' => 'object', 'properties' => [], 'required' => []];
+        // (object) [] (never a bare []) so json_encode emits {} — some OpenRouter providers
+        // hard-reject "properties":[] as "not of type 'object'".
+        return ['type' => 'object', 'properties' => (object) [], 'required' => []];
     }
 
     public function run(array $args, AgentContext $context): array

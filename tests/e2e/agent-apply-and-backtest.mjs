@@ -9,15 +9,28 @@
 // backtest anything, so this journey drives the agent chat to actually exercise the capability the
 // task describes.
 //
-// Assertions are all literal outcomes read back through the API, not just "the page didn't 500":
-//   - a strategy_plugins row with key 'smx-pi-take-profit' exists after the turn
-//   - it has a version row for its current_version (created_by/changelog checked, existence is the
-//     fallback the schema guarantees since the agent context here never carries a user email)
-//   - a backtests row exists (its id comes straight off the turn's own tool_events, not guessed)
-//     and reaches a terminal status (done or error)
-//   - the assistant's final chat reply mentions a number (the backtest result it read back)
+// Assertions are all literal outcomes read back through the API (and, for the chat reply, the
+// rendered DOM too), not just "the page didn't 500":
+//   - a strategy_plugins row with key 'smx-pi-take-profit' exists after the turn, and the
+//     strategy_json tool call that made it reported valid:true for that same key
+//   - it has a version row for its current_version carrying a non-empty changelog (the agent
+//     is instructed to pass one — created_by is expected to stay null, the turn route carries no
+//     user email)
+//   - a backtests row exists (its id comes straight off the turn's own tool_events, not guessed),
+//     finished with status 'done' and no error, ran on BTC-USD, covered a ~30-day window, and its
+//     stats show real candle data consumed (obs > 0) — not just "reached a terminal status"
+//   - the assistant's final chat reply, and the same message as rendered in the chat DOM, both
+//     name the backtest id from the tool result
+//
+// The agent turn drives OpenRouter's free tier, which is unpinned-model roulette: some free
+// providers hard-reject the app's own tool schemas or mangle large tool-call JSON. The server this
+// journey runs against must have OPENROUTER_MODEL pinned to a specific free model
+// (nvidia/nemotron-3-ultra-550b-a55b:free — verified against this exact system prompt + tool
+// schema set to reliably call strategy_json with a well-formed object argument, then run_backtest
+// with the right products/days, in one turn) — export it before `php artisan serve`, not here.
 //
 // Run against an isolated desk (never the shared LAN database):
+//   export OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free   # before `php artisan serve`
 //   E2E_BASE=http://127.0.0.1:8012 E2E_OUT=storage/e2e \
 //   PLAYWRIGHT_PATH=/opt/homebrew/lib/node_modules/playwright \
 //   OPENROUTER_API_KEY=sk-or-... node tests/e2e/agent-apply-and-backtest.mjs
@@ -111,11 +124,16 @@ try {
 
   if (!OR_KEY) throw new Error('OPENROUTER_API_KEY is required for the openrouter wizard step');
   await keyInput.fill(OR_KEY);
-  await page.locator('button:has-text("Continue")').first().click();
+  // Assert the wizard step's own response, not just the absence of an error element — that
+  // absence check could never fail unless an error banner happened to render.
+  const [orStepResp] = await Promise.all([
+    page.waitForResponse((r) => /\/api\/onboarding\/openrouter$/.test(r.url()) && r.request().method() === 'POST', { timeout: 30000 }),
+    page.locator('button:has-text("Continue")').first().click(),
+  ]);
+  const orStepBody = await orStepResp.json().catch(() => null);
+  check('openrouter step accepted the key (server validated it against OpenRouter)', orStepResp.status() === 200 && orStepBody?.ok === true && orStepBody?.status === 'done', JSON.stringify(orStepBody));
   const coinbase = page.locator('input[type="radio"][value="coinbase"]');
   await coinbase.waitFor({ timeout: 30000 });
-  const orError = page.locator('.mw-error[role="alert"]');
-  check('openrouter step accepted the key (server validated it against OpenRouter)', (await orError.count()) === 0);
 
   await coinbase.check();
   await page.locator('button:has-text("Continue with coinbase")').click();
@@ -162,7 +180,7 @@ try {
   // which is what actually gets a tool-calling free model to call strategy_json/run_backtest in
   // this one turn instead of stalling on an interview. The task's literal instruction opens the
   // message; this is the framing that makes it executable in a single turn.
-  const message = `apply this strategy, then backtest BTC-USD for 30 days. This strategy definition is already complete for every phase (setup, trigger, entry, management, exit, risk) exactly as written below. Do not ask any clarifying questions and do not run the phase interview for it. Call the strategy_json tool now with this exact definition (bump: patch), then call run_backtest for BTC-USD over a 30-day window, and report the result.\n\n${JSON.stringify(strategyDef)}`;
+  const message = `apply this strategy, then backtest BTC-USD for 30 days. This strategy definition is already complete for every phase (setup, trigger, entry, management, exit, risk) exactly as written below. Do not ask any clarifying questions and do not run the phase interview for it. Call the strategy_json tool now with this exact definition (bump: patch, changelog: a short one-sentence description of this strategy), then call run_backtest for BTC-USD over a 30-day window. Once you have the backtest result, reply with a summary that includes the backtest id and the number of trades, and stop there — do not call suggest_share, start_arena_seat, or offer anything else this turn.\n\n${JSON.stringify(strategyDef)}`;
   const [turnResp] = await Promise.all([
     p2.waitForResponse((r) => /\/api\/agent\/conversations\/\d+\/turn$/.test(r.url()) && r.request().method() === 'POST', { timeout: AGENT_TIMEOUT }),
     (async () => {
@@ -177,15 +195,28 @@ try {
   fs.writeFileSync(path.join(OUT, 'tool-events.json'), JSON.stringify(toolEvents, null, 2));
   console.log(`  tool_events: ${toolEvents.map((e) => e.tool).join(', ') || '(none)'}`);
 
+  // A tool/upstream failure mid-loop no longer discards the tool_events collected before it —
+  // StrategyAgent::turn() now catches it and reports the reason here instead of a bare 500.
+  check('agent turn completed without an upstream/tool error', !turnBody?.error, String(turnBody?.error || '').slice(0, 300));
+
   const strategyJsonEvent = toolEvents.find((e) => e.tool === 'strategy_json');
   check('agent turn called the strategy_json tool to save the plugin', !!strategyJsonEvent, JSON.stringify(strategyJsonEvent?.result));
+  check('strategy_json tool call actually validated and saved the intended plugin', strategyJsonEvent?.result?.valid === true && strategyJsonEvent?.result?.key === PLUGIN_KEY, JSON.stringify(strategyJsonEvent?.result));
   const backtestEvent = toolEvents.find((e) => e.tool === 'run_backtest');
   check('agent turn called the run_backtest tool', !!backtestEvent, JSON.stringify(backtestEvent?.result));
 
   const canned = /^Error:|^Connect your OpenRouter|^Pick a model|^\(no reply\)|^\(empty reply\)/;
   const reply = (turnBody?.content || '').trim();
   check('agent turn produced a model-written assistant reply', reply.length > 0 && !canned.test(reply), reply.slice(0, 160));
-  check('chat transcript mentions the backtest result (a number)', /\d/.test(reply), reply.slice(0, 160));
+
+  // The instruction asked the agent to report the backtest id — assert that literal, not just
+  // "a digit somewhere", and read it back out of the rendered chat DOM too so the check named
+  // "chat transcript" actually looks at the transcript rather than only the turn's JSON body.
+  const backtestIdForReply = backtestEvent?.result?.id;
+  const idPattern = Number.isInteger(backtestIdForReply) ? new RegExp(`\\b${backtestIdForReply}\\b`) : null;
+  check('chat transcript (API body) mentions the backtest id from the tool result', !!idPattern && idPattern.test(reply), `backtestId=${backtestIdForReply} reply=${reply.slice(0, 160)}`);
+  const lastAssistantBubble = (await p2.locator('.msg.assistant').last().innerText().catch(() => '')).trim();
+  check('chat transcript (rendered DOM) mentions the same backtest id', !!idPattern && idPattern.test(lastAssistantBubble), lastAssistantBubble.slice(0, 160));
 
   // ---- 5. Verify the plugin + version row via API (never only the HTTP 200 of the turn) -----
   const pluginsList = await json(fresh, '/api/strategy-plugins');
@@ -202,19 +233,26 @@ try {
   const versionRow = versionRows.find((v) => v.version === pluginGet.body?.current_version);
   check('a version row exists for current_version, created by the agent this turn', versionsGet.status === 200 && !!versionRow, JSON.stringify(versionRows.map((v) => ({ version: v.version, created_by: v.created_by, changelog: v.changelog }))));
   if (versionRow) {
-    // The agent's tool context never carries a user email (App\Ai\AgentContext::$userEmail is
-    // always null on this turn path), so created_by/changelog attribution isn't guaranteed —
-    // assert whichever the schema actually populated, falling back to "the row exists" per the
-    // journey's own acceptance criteria.
-    const attributed = versionRow.created_by != null || versionRow.changelog != null;
-    check('version row carries agent attribution (created_by/changelog) or at minimum exists', true, `attributed=${attributed} created_by=${JSON.stringify(versionRow.created_by)} changelog=${JSON.stringify(versionRow.changelog)}`);
+    // App\Ai\AgentContext::$userEmail is always null on this turn path, so created_by is expected
+    // to stay null — but the turn's own instruction asked the agent to pass a changelog to
+    // strategy_json, so a non-empty changelog is a real, failable signal of provenance.
+    check('version row carries a non-empty changelog from the agent', typeof versionRow.changelog === 'string' && versionRow.changelog.trim().length > 0, JSON.stringify({ created_by: versionRow.created_by, changelog: versionRow.changelog }));
   }
 
   // ---- 6. Verify the backtest row reaches a terminal status ---------------------------------
   const backtestId = backtestEvent?.result?.id ?? null;
   check('run_backtest tool result carried a backtest id', Number.isInteger(backtestId), JSON.stringify(backtestEvent?.result));
   const bt = backtestId ? await pollBacktest(fresh, backtestId, BT_POLL_TIMEOUT_MS) : null;
-  check('backtest for the applied plugin reached a terminal status', bt?.status === 'done' || bt?.status === 'error', JSON.stringify({ id: backtestId, status: bt?.status, error: bt?.error }));
+  // A terminal status alone let a crashed backtest pass — require it actually finished, and that
+  // it did the work the instruction asked for: BTC-USD, a ~30-day window, real data consumed.
+  check('backtest for the applied plugin finished without error', bt?.status === 'done' && bt?.error == null, JSON.stringify({ id: backtestId, status: bt?.status, error: bt?.error }));
+  check('backtest actually ran on BTC-USD, the product the instruction named', Array.isArray(bt?.products) && bt.products.includes('BTC-USD'), JSON.stringify(bt?.products));
+  const btFromMs = bt?.from ? Date.parse(bt.from) : NaN;
+  const btToMs = bt?.to ? Date.parse(bt.to) : NaN;
+  const windowDays = Number.isFinite(btFromMs) && Number.isFinite(btToMs) ? (btToMs - btFromMs) / 86400000 : NaN;
+  check('backtest window is ~30 days, the window the instruction named', Math.abs(windowDays - 30) <= 1, `from=${bt?.from} to=${bt?.to} days=${windowDays}`);
+  const obs = bt?.stats?.obs;
+  check('backtest engine actually consumed candle data', typeof obs === 'number' && obs > 0, JSON.stringify(bt?.stats));
   check('backtest is pinned to a version of the applied plugin', pluginId != null && versionRows.some((v) => v.id === bt?.strategy_plugin_version_id), JSON.stringify({ backtestVersionId: bt?.strategy_plugin_version_id, pluginVersionIds: versionRows.map((v) => v.id) }));
 
   await shot(p2, '05-final');

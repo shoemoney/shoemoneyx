@@ -505,7 +505,11 @@ class Backtester
             $hourKey = intdiv($ts, 3600);
             foreach ($products as $pid) {
                 if (($hourStats[$pid][0] ?? -1) !== $hourKey) {
-                    $age = $listed[$pid] ? Carbon::parse($listed[$pid])->diffInMinutes($t) / 60 : null;
+                    // A product with no `products` row yet (e.g. a fresh desk backtesting a symbol
+                    // before its first market:sync-products run) has no entry in $listed at all —
+                    // plain array access on the missing key throws "Undefined array key", not just
+                    // returns null, so this must be a null-coalesce, not a bare lookup.
+                    $age = ($listed[$pid] ?? null) ? Carbon::parse($listed[$pid])->diffInMinutes($t) / 60 : null;
                     // Sub-hour steps must never see the hour bar they are currently inside: that bar's
                     // close/high/low/volume are not known until it closes at (hourKey+1)*3600, so only
                     // bars CLOSED before this hour started are eligible. A 1H step *is* the hour (the
