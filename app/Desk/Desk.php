@@ -739,8 +739,23 @@ class Desk
                 }
 
                 // A price-0 stats row (handled above) must not stamp $price to 0 for the escalated
-                // close below — fall back to the last known price exactly like the null-stats case.
-                $price = ($stats !== null && $stats->price > 0) ? $stats->price : (float) ($p->last_price ?? $p->entry_price);
+                // close below — fall back to the last known price, then entry price, exactly like the
+                // null-stats case. Round-8 review, MAJOR: the old `??` fallback only catches NULL, so a
+                // position whose last_price was ALREADY 0 (e.g. stamped before this class's own
+                // zero-price guards existed) closed at decision price 0 instead of falling through to
+                // entry_price. A position with no usable price anywhere is skipped, not closed at 0.
+                if ($stats !== null && $stats->price > 0) {
+                    $price = $stats->price;
+                } elseif ((float) ($p->last_price ?? 0) > 0) {
+                    $price = (float) $p->last_price;
+                } elseif ((float) ($p->entry_price ?? 0) > 0) {
+                    $price = (float) $p->entry_price;
+                } else {
+                    $this->reporter->error('RISK', "{$p->product_id}: no usable price to act on (stats, last_price and entry_price are all <= 0), skipping this position this sweep");
+                    $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
+
+                    continue;
+                }
                 if ($executor instanceof PaperExecutor && Perps::enabled()) {
                     $this->accrueFunding($p, $price);
                 }
