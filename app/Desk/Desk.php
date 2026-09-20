@@ -797,7 +797,15 @@ class Desk
                 } elseif ((float) ($p->entry_price ?? 0) > 0) {
                     $price = (float) $p->entry_price;
                 } else {
-                    $this->reporter->error('RISK', "{$p->product_id}: no usable price to act on (stats, last_price and entry_price are all <= 0), skipping this position this sweep");
+                    // Round-9 review, MINOR: this used to report unconditionally every time it was
+                    // reached — including on a TERMINAL sweep once those started falling through
+                    // to this same price resolution (see forceCloseDecision()'s terminal branch),
+                    // which reintroduced per-sweep spam for exactly this ladder's whole reason to
+                    // exist. Only a genuine, cadence-gated attempt sweep reports it now; a terminal
+                    // sweep relies on the ledger's own (slow-cadence) "giving up" message instead.
+                    if ($isForceCloseAttempt) {
+                        $this->reporter->error('RISK', "{$p->product_id}: no usable price to act on (stats, last_price and entry_price are all <= 0), skipping this position this sweep");
+                    }
                     $out[] = ['position' => $p->product_id, 'action' => 'stale', 'rule' => null];
 
                     continue;
