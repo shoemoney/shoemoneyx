@@ -133,7 +133,12 @@ final class JsonRuleEvaluator
             // still has count() 2 but no index 0/1, which threw "Undefined array key 0" here for
             // any pre-existing definition the schema validator had waved through before it also
             // required a list (round-6 review) — fails closed instead.
-            'between' => self::between($field, $expected, $actual, (string) ($ctx->param('json.plugin_key') ?? $ctx->param('json.plugin_version_id') ?? '')),
+            // Round-9 review, MINOR: plugin_version_id is the more specific identity (one
+            // plugin_key can span several published versions of the same strategy) so it must
+            // win over plugin_key, not the other way around; and a stratKey of null (rather than
+            // '') when NEITHER is set tells between() to skip the dedupe entirely instead of
+            // sharing one cache slot across every identity-less caller.
+            'between' => self::between($field, $expected, $actual, self::stratKeyFor($ctx)),
             // {value: [...]} — categorical/regime membership.
             'in' => is_array($expected) && in_array($actual, $expected, false),
             'not_in' => is_array($expected) && $expected !== [] && ! in_array($actual, $expected, false),
@@ -163,23 +168,53 @@ final class JsonRuleEvaluator
      * static array and re-logged. Backed by Cache::add() (ttl 1h) instead, so the dedupe survives
      * across processes the way "once per hour" actually requires.
      */
-    private static function between(string $field, mixed $expected, mixed $actual, string $stratKey = ''): bool
+    private static function between(string $field, mixed $expected, mixed $actual, ?string $stratKey = null): bool
     {
         if (! is_array($expected) || count($expected) !== 2 || ! is_numeric($actual)) {
             return false;
         }
         if (! array_is_list($expected)) {
+            $message = "JsonRuleEvaluator: 'between' rule on field \"{$field}\" has a non-list value (".json_encode($expected).') — rejected at save since round 6; this stored definition will never fire until it is fixed to a JSON array [lo, hi]';
+
+            if ($stratKey === null) {
+                // Round-9 review, MINOR: no plugin identity to key a shared dedupe slot on — the
+                // old `?? ''` fallback keyed every identity-less caller onto the SAME '' slot, so
+                // one broken identity-less rule could silence a completely unrelated one. No safe
+                // key means no dedupe: always log rather than share a slot that means nothing.
+                Log::warning($message);
+
+                return false;
+            }
+
             $seenKey = self::BETWEEN_WARNING_CACHE_PREFIX.$stratKey.'|'.$field.'|'.json_encode($expected);
             // Cache::add() only writes (and returns true) when the key is absent — an atomic
             // "was this already logged" check-and-set, not a read-then-write race.
             if (Cache::add($seenKey, true, self::BETWEEN_WARNING_TTL_SECONDS)) {
-                Log::warning("JsonRuleEvaluator: 'between' rule on field \"{$field}\" has a non-list value (".json_encode($expected).') — rejected at save since round 6; this stored definition will never fire until it is fixed to a JSON array [lo, hi]');
+                Log::warning($message);
             }
 
             return false;
         }
 
         return $actual >= $expected[0] && $actual <= $expected[1];
+    }
+
+    /**
+     * The strategy identity to key the "between" warning dedupe on — plugin_version_id wins when
+     * present (round-9 review, MINOR: it is the more specific identity, since one plugin_key can
+     * span several published versions of the same strategy), plugin_key otherwise, and null (never
+     * '') when neither is set, so between() knows to skip the dedupe entirely rather than share one
+     * cache slot across every identity-less caller.
+     */
+    private static function stratKeyFor(DeskContext $ctx): ?string
+    {
+        $versionId = $ctx->param('json.plugin_version_id');
+        if (is_string($versionId) && $versionId !== '') {
+            return $versionId;
+        }
+        $key = $ctx->param('json.plugin_key');
+
+        return is_string($key) && $key !== '' ? $key : null;
     }
 
     /**

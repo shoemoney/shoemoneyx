@@ -105,13 +105,18 @@ class JsonRuleEvaluatorOpsTest extends TestCase
      * evaluated", but the code logged on EVERY evaluation — one warning line per sweep for as
      * long as the broken definition kept getting loaded, not the one-time announcement the doc
      * promises. Repeated evaluations of the SAME rule for the SAME strategy must log only once.
+     *
+     * Round-9 review, MINOR: the dedupe now requires a strategy identity to key on (a plugin_key
+     * or plugin_version_id) — an identity-less caller skips the dedupe entirely instead of
+     * sharing a slot keyed on '' (see JsonRuleEvaluatorBetweenWarningKeyTest), so this test needs
+     * one to still exercise the "once per real strategy" behavior it is named for.
      */
     #[Test]
     public function between_logs_only_once_across_repeated_evaluations_of_the_same_rule(): void
     {
         Log::spy();
         $s = $this->stats();
-        $ctx = $this->ctxAt('2026-01-01T00:00:00Z');
+        $ctx = new DeskContext(['json' => ['plugin_version_id' => 'v1']], 'backtest', false, [], new \DateTimeImmutable('2026-01-01T00:00:00Z', new \DateTimeZone('UTC')));
         $rule = ['field' => 'spread_bps', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]];
 
         // Three sweeps' worth of evaluations against the same stored (legacy) rule.

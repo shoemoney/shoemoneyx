@@ -55,9 +55,10 @@ class JsonRuleEvaluatorBetweenWarningDedupeTest extends TestCase
         );
     }
 
+    /** A ctx WITH a plugin identity — the dedupe (this file's whole subject) only applies when there is one to key on (round-9 review, see JsonRuleEvaluatorBetweenWarningKeyTest for the identity-less case). */
     private function ctxAt(string $utc): DeskContext
     {
-        return new DeskContext([], 'backtest', false, [], new \DateTimeImmutable($utc, new \DateTimeZone('UTC')));
+        return new DeskContext(['json' => ['plugin_version_id' => 'v1']], 'backtest', false, [], new \DateTimeImmutable($utc, new \DateTimeZone('UTC')));
     }
 
     #[Test]
@@ -71,8 +72,8 @@ class JsonRuleEvaluatorBetweenWarningDedupeTest extends TestCase
         // Simulate what a PRIOR `php artisan desk:risk` process already recorded: the exact cache
         // key this rule/strategy/value combination would use, seeded directly — no static array
         // involved at all, exactly like a fresh process that never called between() before would
-        // see. Empty strategy key ('') matches the no-plugin-context $ctx used here.
-        $key = JsonRuleEvaluator::BETWEEN_WARNING_CACHE_PREFIX.'|spread_bps|'.json_encode($expected);
+        // see.
+        $key = JsonRuleEvaluator::BETWEEN_WARNING_CACHE_PREFIX.'v1|spread_bps|'.json_encode($expected);
         Cache::put($key, true, now()->addHour());
 
         // THIS process's static state (if the old code's array were still in play) has never seen
@@ -95,7 +96,7 @@ class JsonRuleEvaluatorBetweenWarningDedupeTest extends TestCase
         Log::shouldHaveReceived('warning')->once();
 
         // Simulate the cache entry expiring (an hour has passed) by clearing it directly.
-        $key = JsonRuleEvaluator::BETWEEN_WARNING_CACHE_PREFIX.'|spread_bps|'.json_encode($rule['value']);
+        $key = JsonRuleEvaluator::BETWEEN_WARNING_CACHE_PREFIX.'v1|spread_bps|'.json_encode($rule['value']);
         Cache::forget($key);
 
         JsonRuleEvaluator::fires($rule, $s, null, $ctx);
