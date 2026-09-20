@@ -199,9 +199,18 @@ final class JsonRuleEvaluator
             // Tracked so forgetLoggedBetweenWarnings() below can forget only ITS OWN keys —
             // never the whole cache store.
             self::$warnedKeys[$seenKey] = true;
-            // Cache::add() only writes (and returns true) when the key is absent — an atomic
-            // "was this already logged" check-and-set, not a read-then-write race.
-            if (Cache::add($seenKey, true, self::BETWEEN_WARNING_TTL_SECONDS)) {
+            try {
+                // Cache::add() only writes (and returns true) when the key is absent — an atomic
+                // "was this already logged" check-and-set, not a read-then-write race.
+                if (Cache::add($seenKey, true, self::BETWEEN_WARNING_TTL_SECONDS)) {
+                    Log::warning($message);
+                }
+            } catch (\Throwable $e) {
+                // Round-10 review, NIT: the dedupe used to be a static PHP array, which could
+                // never throw. A cache-store outage turning this into an uncaught exception would
+                // bubble up through fires() into runRiskSweep()'s outer catch, reporting
+                // "risk evaluation failed" and an 'error' action for the whole position instead
+                // of just skipping this one rule's dedupe — degrade to "always log" instead.
                 Log::warning($message);
             }
 
