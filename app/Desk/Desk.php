@@ -771,14 +771,20 @@ class Desk
                 } else {
                     $p->markPrice($stats->price);
                     $decision = $strategy->risk($p, $stats, $ctx);
-                    if (($p->meta['zero_price_sweeps'] ?? 0) !== 0 || ($p->meta['force_close_sweeps'] ?? 0) !== 0 || ($p->meta['force_close_attempts'] ?? 0) !== 0 || ($p->meta['force_close_terminal_reported'] ?? false) !== false) {
+                    if (($p->meta['zero_price_sweeps'] ?? 0) !== 0 || ($p->meta['force_close_sweeps'] ?? 0) !== 0 || ($p->meta['force_close_attempts'] ?? 0) !== 0 || ($p->meta['force_close_terminal_reported'] ?? false) !== false || ($p->meta['force_close_terminal_sweeps'] ?? 0) !== 0) {
                         // Price recovered — the whole force-close escalation state is stale, clear it
                         // so a FUTURE stall starts its own backoff/terminal count from zero.
+                        // Round-10 review, MINOR: force_close_terminal_sweeps (the re-report
+                        // cadence counter) was left out of both this condition and the reset
+                        // below — docs/RISK.md's manual-recovery snippet clears it, so a later
+                        // terminal episode that started at a stale nonzero count re-reported on
+                        // a phase-shifted cadence instead of matching the documented behaviour.
                         $p->meta = array_merge($p->meta ?? [], [
                             'zero_price_sweeps' => 0,
                             'force_close_sweeps' => 0,
                             'force_close_attempts' => 0,
                             'force_close_terminal_reported' => false,
+                            'force_close_terminal_sweeps' => 0,
                         ]);
                     }
                     $p->save();
