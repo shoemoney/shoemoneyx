@@ -2,6 +2,7 @@
 
 namespace Tests;
 
+use App\Desk\Strategies\JsonRuleEvaluator;
 use App\Services\Indicators\IndicatorCache;
 use App\Services\Market\CandleStore;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
@@ -24,5 +25,10 @@ abstract class TestCase extends BaseTestCase
         // Same reasoning as CandleStore::forgetLocal() above: IndicatorCache's memo also lives
         // outside the container.
         IndicatorCache::forgetAll();
+
+        // Same reasoning again: JsonRuleEvaluator's "between" legacy-value warning is deduped
+        // per (strategy key, rule) for the life of the PHP process, so two tests asserting on it
+        // with the same field/value would otherwise see each other's dedupe state.
+        JsonRuleEvaluator::forgetLoggedBetweenWarnings();
     }
 }

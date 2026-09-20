@@ -100,6 +100,48 @@ class JsonRuleEvaluatorOpsTest extends TestCase
         );
     }
 
+    /**
+     * Round-8 review, MINOR: docs/STRATEGY_SCHEMA_V2.md says this logs "the first time it is
+     * evaluated", but the code logged on EVERY evaluation — one warning line per sweep for as
+     * long as the broken definition kept getting loaded, not the one-time announcement the doc
+     * promises. Repeated evaluations of the SAME rule for the SAME strategy must log only once.
+     */
+    #[Test]
+    public function between_logs_only_once_across_repeated_evaluations_of_the_same_rule(): void
+    {
+        Log::spy();
+        $s = $this->stats();
+        $ctx = $this->ctxAt('2026-01-01T00:00:00Z');
+        $rule = ['field' => 'spread_bps', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]];
+
+        // Three sweeps' worth of evaluations against the same stored (legacy) rule.
+        JsonRuleEvaluator::fires($rule, $s, null, $ctx);
+        JsonRuleEvaluator::fires($rule, $s, null, $ctx);
+        JsonRuleEvaluator::fires($rule, $s, null, $ctx);
+
+        Log::shouldHaveReceived('warning')->once();
+    }
+
+    /**
+     * The dedupe key includes the strategy key so ONE broken plugin going quiet never silences
+     * the warning for a DIFFERENT plugin with its own broken "between" rule on the same field.
+     */
+    #[Test]
+    public function between_logs_again_for_a_different_strategy_key_with_the_same_broken_rule(): void
+    {
+        Log::spy();
+        $s = $this->stats();
+        $rule = ['field' => 'spread_bps', 'op' => 'between', 'value' => ['lo' => 1, 'hi' => 1000]];
+        $ctxA = new DeskContext(['json' => ['plugin_key' => 'plugin-a']], 'backtest', false, [], new \DateTimeImmutable('2026-01-01T00:00:00Z', new \DateTimeZone('UTC')));
+        $ctxB = new DeskContext(['json' => ['plugin_key' => 'plugin-b']], 'backtest', false, [], new \DateTimeImmutable('2026-01-01T00:00:00Z', new \DateTimeZone('UTC')));
+
+        JsonRuleEvaluator::fires($rule, $s, null, $ctxA);
+        JsonRuleEvaluator::fires($rule, $s, null, $ctxA);
+        JsonRuleEvaluator::fires($rule, $s, null, $ctxB);
+
+        Log::shouldHaveReceived('warning')->twice();
+    }
+
     /** Sanity control: a healthy list value must not log anything, or the assertion above proves nothing. */
     #[Test]
     public function between_logs_nothing_for_a_healthy_list_value(): void

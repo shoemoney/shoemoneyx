@@ -132,7 +132,7 @@ final class JsonRuleEvaluator
             // still has count() 2 but no index 0/1, which threw "Undefined array key 0" here for
             // any pre-existing definition the schema validator had waved through before it also
             // required a list (round-6 review) — fails closed instead.
-            'between' => self::between($field, $expected, $actual),
+            'between' => self::between($field, $expected, $actual, (string) ($ctx->param('json.plugin_key') ?? $ctx->param('json.plugin_version_id') ?? '')),
             // {value: [...]} — categorical/regime membership.
             'in' => is_array($expected) && in_array($actual, $expected, false),
             'not_in' => is_array($expected) && $expected !== [] && ! in_array($actual, $expected, false),
@@ -145,21 +145,38 @@ final class JsonRuleEvaluator
      * rejected a non-list "between" value since round 6, but nothing re-validates a definition
      * already on load — a row stored before that tightening still reaches here and used to fail
      * silently (bare `false`, no log line: fail-closed for entry/setup rules, but fail-OPEN for
-     * a v1 stop rule since those are OR'ed, or a v2 `all` group). Log once per evaluation so a
-     * legacy definition announces itself instead of just never firing again (round-7 review).
+     * a v1 stop rule since those are OR'ed, or a v2 `all` group). Docs (STRATEGY_SCHEMA_V2.md)
+     * say this logs "the first time it is evaluated" — round-8 review, MINOR: the code logged on
+     * EVERY evaluation instead, one line per sweep for as long as the broken definition stays
+     * loaded. Logged once per (strategy key, rule) per process via a static set, matching the doc.
      */
-    private static function between(string $field, mixed $expected, mixed $actual): bool
+    private static function between(string $field, mixed $expected, mixed $actual, string $stratKey = ''): bool
     {
         if (! is_array($expected) || count($expected) !== 2 || ! is_numeric($actual)) {
             return false;
         }
         if (! array_is_list($expected)) {
-            Log::warning("JsonRuleEvaluator: 'between' rule on field \"{$field}\" has a non-list value (".json_encode($expected).') — rejected at save since round 6; this stored definition will never fire until it is fixed to a JSON array [lo, hi]');
+            $seenKey = $stratKey.'|'.$field.'|'.json_encode($expected);
+            if (! isset(self::$loggedBetweenWarnings[$seenKey])) {
+                self::$loggedBetweenWarnings[$seenKey] = true;
+                Log::warning("JsonRuleEvaluator: 'between' rule on field \"{$field}\" has a non-list value (".json_encode($expected).') — rejected at save since round 6; this stored definition will never fire until it is fixed to a JSON array [lo, hi]');
+            }
 
             return false;
         }
 
         return $actual >= $expected[0] && $actual <= $expected[1];
+    }
+
+    /** Process-lifetime dedupe set for the "between" legacy-value warning above, keyed by (strategy key, field, value). */
+    private static array $loggedBetweenWarnings = [];
+
+    /** Same reasoning as CandleStore::forgetLocal()/IndicatorCache::forgetAll(): this memo lives
+     *  outside the container and survives the app rebuild between test methods, so tests must
+     *  clear it themselves. */
+    public static function forgetLoggedBetweenWarnings(): void
+    {
+        self::$loggedBetweenWarnings = [];
     }
 
     /**
