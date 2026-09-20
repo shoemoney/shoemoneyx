@@ -3,11 +3,14 @@
 // Onboards a fresh desk (mirrors tests/e2e/login-and-ai.mjs), logs back in, connects the agent
 // with OPENROUTER_API_KEY the same way, then in the Strategy Builder's agent chat pastes the
 // smx-pi-take-profit-v2.json definition with the instruction "apply this strategy, then backtest
-// BTC-USD for 30 days". The agent chat (StrategyAgent, /api/agent/conversations/{id}/turn) is the
-// only chat on this page wired to tools (strategy_json / run_backtest) — the separate "SMX AI
-// assist" chatbox (/api/strategy-assist) is stateless free-text with no tools and cannot apply or
-// backtest anything, so this journey drives the agent chat to actually exercise the capability the
-// task describes.
+// BTC-USD for 30 days with starting cash 25000". The agent chat (StrategyAgent, /api/agent/
+// conversations/{id}/turn) is the only chat on this page wired to tools (strategy_json /
+// run_backtest) — the separate "SMX AI assist" chatbox (/api/strategy-assist) is stateless
+// free-text with no tools and cannot apply or backtest anything, so this journey drives the agent
+// chat to actually exercise the capability the task describes. $25,000 (not the tool's own $1,000
+// default) is the amount that actually clears the whole-contract floor on this plugin's 5%-of-
+// equity entry size — see App\Ai\Tools\RunBacktestTool and config/desk.php perps.map — without it
+// every candidate entry sizes under one contract and the engine opens zero trades.
 //
 // Assertions are all literal outcomes read back through the API (and, for the chat reply, the
 // rendered DOM too), not just "the page didn't 500":
@@ -19,8 +22,12 @@
 //   - a backtests row exists (its id comes straight off the turn's own tool_events, not guessed),
 //     finished with status 'done' and no error, ran on BTC-USD, covered a ~30-day window, and its
 //     stats show real candle data consumed (obs > 0) — not just "reached a terminal status"
-//   - the assistant's final chat reply, and the same message as rendered in the chat DOM, both
-//     name the backtest id from the tool result
+//   - the engine was actually exercised, not just run to a terminal status doing nothing:
+//     entry_count > 0, at least one closed trade, and at least one trade exited through the
+//     plugin's own take_profit./stop. rule machinery rather than only end_of_test/liquidation
+//   - the assistant's final chat reply, and the same message as rendered in the chat DOM (scoped
+//     to the agent chat, not the page's separate free-text assist chat), both name the backtest
+//     id from the tool result
 //
 // The agent turn drives OpenRouter's free tier, which is unpinned-model roulette: some free
 // providers hard-reject the app's own tool schemas or mangle large tool-call JSON. The server this
@@ -85,10 +92,15 @@ function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
 
 // A bare \b<id>\b matched the backtest id anywhere it appeared as digits, including inside
 // "$1,000" or "1.0.0" — on a fresh sqlite desk the id is always 1, so that pattern passed even
-// when the agent never named the backtest at all. Require an id-shaped context ("backtest #1",
-// "#1", "backtest 1") instead of a bare number.
+// when the agent never named the backtest at all. The next fix required an id-shaped context
+// ("backtest #1", "#1", "backtest 1") instead of a bare number, but its own bare "#<id>"
+// alternative still matched a stray "#1" that had nothing to do with a backtest at all (e.g. a
+// take-profit "Rung #1"). Require the literal word "backtest" and let only a short, specific gap
+// (an optional "id" and/or "#", plus whitespace — never arbitrary prose) sit between it and the
+// number, so "Backtest #1", "backtest 1" and "backtest id 1" all match but "Rung #1" and "the
+// backtest returned 1 result" (the number there isn't the id, it's an unrelated word away) do not.
 function backtestIdPattern(id) {
-  return new RegExp('(?:backtest\\s*#?|#)\\s*' + id + '\\b', 'i');
+  return new RegExp('backtest(?:\\s+id)?\\s*#?\\s*' + id + '\\b', 'i');
 }
 
 // Belt-and-braces: strip grouped thousands ("$1,000") and dotted decimals/versions ("1.0.0",
@@ -111,7 +123,13 @@ function backtestIdMentioned(text, id) {
   const truePositive = 'Backtest #1 finished';
   assert.equal(backtestIdMentioned(falsePositive, 1), false, 'must NOT match id 1 inside "$1,000. Version 1.0.0."');
   assert.equal(backtestIdMentioned(truePositive, 1), true, 'must match "Backtest #1 finished"');
-  console.log('PASS self-check: backtest-id matcher rejects numeric noise, accepts "Backtest #<id>"');
+  // Isolate each layer the two checks above blur together: stripNumberNoise alone (a plain "1"
+  // sitting next to unrelated prose, no grouped/decimal noise involved) and backtestIdPattern
+  // alone (a "#1" with no "backtest" word anywhere near it — the false positive the old
+  // "(?:backtest\s*#?|#)" alternation let through).
+  assert.equal(backtestIdMentioned('The backtest returned 1 result.', 1), false, 'must NOT match a bare "1" that is just an unrelated word away from "backtest"');
+  assert.equal(backtestIdMentioned('Backtest complete. Equity #1,000.', 1), false, 'must NOT match id 1 hiding inside a later "#1,000" figure');
+  console.log('PASS self-check: backtest-id matcher rejects numeric noise and bare "#<id>", accepts "Backtest #<id>"');
 }
 
 async function pollBacktest(ctx, id, timeoutMs) {
@@ -151,8 +169,10 @@ try {
   const keyInput = page.locator('input[placeholder="sk-or-v1-…"]');
   await keyInput.waitFor({ timeout: 15000 });
   const pwGone = (await pw.count()) === 0;
-  const keyInputEnabled = await keyInput.isEnabled();
-  check('master-password step advanced to openrouter step', pwGone && keyInputEnabled, `pwInputGone=${pwGone} keyInputEnabled=${keyInputEnabled}`);
+  // keyInputEnabled used to gate this check too, but the input renders visible-and-disabled for
+  // one Vue flush right after the step change — a real flake, not a real failure — so the
+  // password input actually being gone is the check that means the step advanced.
+  check('master-password step advanced to openrouter step', pwGone, `pwInputGone=${pwGone}`);
 
   if (!OR_KEY) throw new Error('OPENROUTER_API_KEY is required for the openrouter wizard step');
   await keyInput.fill(OR_KEY);
@@ -212,7 +232,13 @@ try {
   // which is what actually gets a tool-calling free model to call strategy_json/run_backtest in
   // this one turn instead of stalling on an interview. The task's literal instruction opens the
   // message; this is the framing that makes it executable in a single turn.
-  const message = `apply this strategy, then backtest BTC-USD for 30 days. This strategy definition is already complete for every phase (setup, trigger, entry, management, exit, risk) exactly as written below. Do not ask any clarifying questions and do not run the phase interview for it. Call the strategy_json tool now with this exact definition (bump: patch, changelog: a short one-sentence description of this strategy), then call run_backtest for BTC-USD over a 30-day window. Once you have the backtest result, reply with a summary that writes the backtest id as #<id> (for example "Backtest #7 finished") and includes the number of trades, and stop there — do not call suggest_share, start_arena_seat, or offer anything else this turn.\n\n${JSON.stringify(strategyDef)}`;
+  // starting cash 25000 (RunBacktestTool's `cash` arg — App\Ai\Tools\RunBacktestTool::run()):
+  // at the plugin's own entry.size (5% of equity), $1,000 of starting cash only ever sizes a $50
+  // ticket, and every product here is whole-contract-floored (config/desk.php perps.map / Perps::
+  // contractsFor() — BTC-PERP's 0.01 BTC contract alone prices north of $50 at any realistic BTC
+  // price), so every candidate entry gets floored to zero contracts and the engine never opens a
+  // trade. $25,000 sizes a ~$1,250 ticket, clearing that floor.
+  const message = `apply this strategy, then backtest BTC-USD for 30 days with starting cash 25000. This strategy definition is already complete for every phase (setup, trigger, entry, management, exit, risk) exactly as written below. Do not ask any clarifying questions and do not run the phase interview for it. Call the strategy_json tool now with this exact definition (bump: patch, changelog: a short one-sentence description of this strategy), then call run_backtest for BTC-USD over a 30-day window with cash: 25000. Once you have the backtest result, reply with a summary that writes the backtest id as #<id> (for example "Backtest #7 finished") and includes the number of trades, and stop there — do not call suggest_share, start_arena_seat, or offer anything else this turn.\n\n${JSON.stringify(strategyDef)}`;
   const [turnResp] = await Promise.all([
     p2.waitForResponse((r) => /\/api\/agent\/conversations\/\d+\/turn$/.test(r.url()) && r.request().method() === 'POST', { timeout: AGENT_TIMEOUT }),
     (async () => {
@@ -229,7 +255,9 @@ try {
 
   // A tool/upstream failure mid-loop no longer discards the tool_events collected before it —
   // StrategyAgent::turn() now catches it and reports the reason here instead of a bare 500.
-  check('agent turn completed without an upstream/tool error', !turnBody?.error, String(turnBody?.error || '').slice(0, 300));
+  // Require a body at all: `!turnBody?.error` on a null turnBody (unparseable response) is
+  // `!undefined` === true, which would pass this check for a turn that never returned JSON.
+  check('agent turn completed without an upstream/tool error', !!turnBody && !turnBody.error, String(turnBody?.error || (turnBody ? '' : '(no JSON body)')).slice(0, 300));
 
   const strategyJsonEvent = toolEvents.find((e) => e.tool === 'strategy_json');
   check('agent turn called the strategy_json tool to save the plugin', !!strategyJsonEvent, JSON.stringify(strategyJsonEvent?.result));
@@ -247,7 +275,10 @@ try {
   const backtestIdForReply = backtestEvent?.result?.id;
   const idKnown = Number.isInteger(backtestIdForReply);
   check('chat transcript (API body) mentions the backtest id from the tool result', idKnown && backtestIdMentioned(reply, backtestIdForReply), `backtestId=${backtestIdForReply} reply=${reply.slice(0, 160)}`);
-  const lastAssistantBubble = (await p2.locator('.msg.assistant').last().innerText().catch(() => '')).trim();
+  // Scoped to the agent chat wrapper (data-testid="agent-chat" on StrategyBuilder.vue's <section
+  // class="agent">) — the page has a second, separate chatbox (SMX AI assist) whose own bubbles
+  // also carry ".msg.assistant", so an unscoped .last() could read the wrong transcript.
+  const lastAssistantBubble = (await p2.locator('[data-testid="agent-chat"] .msg.assistant').last().innerText().catch(() => '')).trim();
   check('chat transcript (rendered DOM) mentions the same backtest id', idKnown && backtestIdMentioned(lastAssistantBubble, backtestIdForReply), lastAssistantBubble.slice(0, 160));
 
   // ---- 5. Verify the plugin + version row via API (never only the HTTP 200 of the turn) -----
@@ -286,6 +317,19 @@ try {
   const obs = bt?.stats?.obs;
   check('backtest engine actually consumed candle data', typeof obs === 'number' && obs > 0, JSON.stringify(bt?.stats));
   check('backtest is pinned to a version of the applied plugin', pluginId != null && versionRows.some((v) => v.id === bt?.strategy_plugin_version_id), JSON.stringify({ backtestVersionId: bt?.strategy_plugin_version_id, pluginVersionIds: versionRows.map((v) => v.id) }));
+
+  // A terminal 'done' status with zero trades ("finished" by doing nothing) would still have
+  // passed every check above — the 25000-cash instruction exists specifically to clear the
+  // whole-contract floor and get the engine to actually open and manage a position, so assert
+  // that literally: real entries, real closed trades, and at least one trade closed through this
+  // strategy's own take_profit/stop machinery (App\Desk\Strategies\JsonPluginStrategy — rule
+  // strings like "take_profit.ladder.0" / "stop.pct_from_avg", not just "end_of_test"/"liquidation").
+  const entryCount = bt?.stats?.entry_count;
+  check('backtest actually opened positions (entry_count > 0)', typeof entryCount === 'number' && entryCount > 0, JSON.stringify({ entry_count: entryCount }));
+  const closedTrades = Array.isArray(bt?.trades) ? bt.trades : [];
+  check('backtest actually closed trades (trades > 0)', closedTrades.length > 0, JSON.stringify({ trades: closedTrades.length }));
+  const exitedViaStrategyRule = closedTrades.some((t) => typeof t?.rule === 'string' && (t.rule.startsWith('take_profit.') || t.rule.startsWith('stop.')));
+  check("at least one trade closed via the plugin's own take_profit./stop. rule", exitedViaStrategyRule, JSON.stringify(closedTrades.map((t) => t?.rule)));
 
   await shot(p2, '05-final');
   await fresh.close();
