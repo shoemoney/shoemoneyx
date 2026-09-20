@@ -39,6 +39,7 @@
 // PLAYWRIGHT_PATH at an existing node_modules/playwright (a global install works fine). Exit 0
 // only when every assertion held.
 import { createRequire } from 'node:module';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,6 +82,37 @@ async function json(ctx, url, opts = {}) {
   return { status: r.status(), body };
 }
 function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
+
+// A bare \b<id>\b matched the backtest id anywhere it appeared as digits, including inside
+// "$1,000" or "1.0.0" — on a fresh sqlite desk the id is always 1, so that pattern passed even
+// when the agent never named the backtest at all. Require an id-shaped context ("backtest #1",
+// "#1", "backtest 1") instead of a bare number.
+function backtestIdPattern(id) {
+  return new RegExp('(?:backtest\\s*#?|#)\\s*' + id + '\\b', 'i');
+}
+
+// Belt-and-braces: strip grouped thousands ("$1,000") and dotted decimals/versions ("1.0.0",
+// "v1.0") out of the text before testing, so a stray digit trapped inside one of those can never
+// satisfy the id pattern even if a context prefix happens to line up right before it.
+function stripNumberNoise(text) {
+  return text
+    .replace(/\d{1,3}(?:,\d{3})+/g, '')
+    .replace(/\d+(?:\.\d+)+/g, '');
+}
+
+function backtestIdMentioned(text, id) {
+  return backtestIdPattern(id).test(stripNumberNoise(text));
+}
+
+// Self-check the matcher before the browser even starts — a regression here would otherwise only
+// surface as a silently-passing e2e run against a desk whose first backtest id is always 1.
+{
+  const falsePositive = 'Ending equity: $1,000. Version 1.0.0.';
+  const truePositive = 'Backtest #1 finished';
+  assert.equal(backtestIdMentioned(falsePositive, 1), false, 'must NOT match id 1 inside "$1,000. Version 1.0.0."');
+  assert.equal(backtestIdMentioned(truePositive, 1), true, 'must match "Backtest #1 finished"');
+  console.log('PASS self-check: backtest-id matcher rejects numeric noise, accepts "Backtest #<id>"');
+}
 
 async function pollBacktest(ctx, id, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -180,7 +212,7 @@ try {
   // which is what actually gets a tool-calling free model to call strategy_json/run_backtest in
   // this one turn instead of stalling on an interview. The task's literal instruction opens the
   // message; this is the framing that makes it executable in a single turn.
-  const message = `apply this strategy, then backtest BTC-USD for 30 days. This strategy definition is already complete for every phase (setup, trigger, entry, management, exit, risk) exactly as written below. Do not ask any clarifying questions and do not run the phase interview for it. Call the strategy_json tool now with this exact definition (bump: patch, changelog: a short one-sentence description of this strategy), then call run_backtest for BTC-USD over a 30-day window. Once you have the backtest result, reply with a summary that includes the backtest id and the number of trades, and stop there — do not call suggest_share, start_arena_seat, or offer anything else this turn.\n\n${JSON.stringify(strategyDef)}`;
+  const message = `apply this strategy, then backtest BTC-USD for 30 days. This strategy definition is already complete for every phase (setup, trigger, entry, management, exit, risk) exactly as written below. Do not ask any clarifying questions and do not run the phase interview for it. Call the strategy_json tool now with this exact definition (bump: patch, changelog: a short one-sentence description of this strategy), then call run_backtest for BTC-USD over a 30-day window. Once you have the backtest result, reply with a summary that writes the backtest id as #<id> (for example "Backtest #7 finished") and includes the number of trades, and stop there — do not call suggest_share, start_arena_seat, or offer anything else this turn.\n\n${JSON.stringify(strategyDef)}`;
   const [turnResp] = await Promise.all([
     p2.waitForResponse((r) => /\/api\/agent\/conversations\/\d+\/turn$/.test(r.url()) && r.request().method() === 'POST', { timeout: AGENT_TIMEOUT }),
     (async () => {
@@ -213,10 +245,10 @@ try {
   // "a digit somewhere", and read it back out of the rendered chat DOM too so the check named
   // "chat transcript" actually looks at the transcript rather than only the turn's JSON body.
   const backtestIdForReply = backtestEvent?.result?.id;
-  const idPattern = Number.isInteger(backtestIdForReply) ? new RegExp(`\\b${backtestIdForReply}\\b`) : null;
-  check('chat transcript (API body) mentions the backtest id from the tool result', !!idPattern && idPattern.test(reply), `backtestId=${backtestIdForReply} reply=${reply.slice(0, 160)}`);
+  const idKnown = Number.isInteger(backtestIdForReply);
+  check('chat transcript (API body) mentions the backtest id from the tool result', idKnown && backtestIdMentioned(reply, backtestIdForReply), `backtestId=${backtestIdForReply} reply=${reply.slice(0, 160)}`);
   const lastAssistantBubble = (await p2.locator('.msg.assistant').last().innerText().catch(() => '')).trim();
-  check('chat transcript (rendered DOM) mentions the same backtest id', !!idPattern && idPattern.test(lastAssistantBubble), lastAssistantBubble.slice(0, 160));
+  check('chat transcript (rendered DOM) mentions the same backtest id', idKnown && backtestIdMentioned(lastAssistantBubble, backtestIdForReply), lastAssistantBubble.slice(0, 160));
 
   // ---- 5. Verify the plugin + version row via API (never only the HTTP 200 of the turn) -----
   const pluginsList = await json(fresh, '/api/strategy-plugins');
