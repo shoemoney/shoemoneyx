@@ -85,6 +85,7 @@ Two strategies ship as examples. `MeanReversionStrategy` is the default. `Custom
 Parameters layer as `config/desk.php` ← strategy `defaults()` ← the `settings` table ← `per_product.<PAIR>.<key>`.
 
 This repository ships example strategies only. Your edge is yours.
+- **Ten generic starter templates** (mean reversion, breakout, EMA cross, Bollinger, VWAP, MACD, volume spike, trend-follow, DCA grid, and a re-entry teaching example) are cataloged in [`docs/STARTER_TEMPLATES.md`](docs/STARTER_TEMPLATES.md).
 
 ## Farm
 
