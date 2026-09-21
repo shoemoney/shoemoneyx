@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "key": "smx-dca-grid",
+  "author": "shoemoney",
+  "meta": {
+    "name": "DCA Grid Buyer",
+    "description": "Starts a small position and adds fixed-size buys as price keeps dropping, averaging down on a grid until the whole position exits together in the green.",
+    "tags": ["dca", "grid", "averaging"],
+    "timeframe": "6h",
+    "assets": ["BTC-USD", "ETH-USD"]
+  },
+  "signals": {
+    "liquid": { "all": [ { "field": "volume_h24_usd", "op": ">", "value": 300000 } ] },
+    "pullback": { "all": [ { "field": "price_change_h24_pct", "op": "<", "value": -3 } ] }
+  },
+  "entry": {
+    "side": "long",
+    "when": ["liquid", "pullback"],
+    "confirm": [ { "field": "spread_bps", "op": "<=", "value": 30, "reason": "spread too wide" } ],
+    "size": { "mode": "pct_equity", "value": 2 }
+  },
+  "adds": [
+    { "trigger": { "field": "position.pnl_pct", "op": "<=", "value": -3 }, "size_pct": 100 },
+    { "trigger": { "field": "position.pnl_pct", "op": "<=", "value": -6 }, "size_pct": 100 },
+    { "trigger": { "field": "position.pnl_pct", "op": "<=", "value": -9 }, "size_pct": 100 }
+  ],
+  "take_profit": {
+    "from": "avg",
+    "ladder": [
+      { "at_pct": 2.0, "sell_pct_of_original": 100 }
+    ],
+    "reset_on_add": true
+  },
+  "stop": {
+    "pct_from_avg": 15.0,
+    "anchor": "avg",
+    "time_hours": null,
+    "rules": []
+  },
+  "risk": { "max_positions": 3, "daily_loss_cap_pct": 8, "leverage_cap": 1 }
+}
