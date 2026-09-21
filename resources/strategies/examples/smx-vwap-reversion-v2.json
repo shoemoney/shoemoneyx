@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "key": "smx-vwap-reversion",
+  "author": "shoemoney",
+  "meta": {
+    "name": "VWAP Reversion",
+    "description": "Buys when price drops noticeably below the session VWAP while momentum is oversold, betting on a snap back to fair value.",
+    "tags": ["vwap", "mean-reversion", "intraday"],
+    "timeframe": "15m",
+    "assets": ["BTC-USD", "ETH-USD"]
+  },
+  "signals": {
+    "liquid": { "all": [ { "field": "volume_h1_usd", "op": ">", "value": 50000 } ] },
+    "stretched_below_vwap": { "all": [
+      { "field": "price", "op": "<", "value": { "field": "ind.vwap" } },
+      { "field": "ind.rsi(14)", "op": "<", "value": 35 }
+    ] }
+  },
+  "entry": {
+    "side": "long",
+    "when": ["liquid", "stretched_below_vwap"],
+    "confirm": [ { "field": "spread_bps", "op": "<=", "value": 20, "reason": "spread too wide" } ],
+    "size": { "mode": "pct_equity", "value": 4 }
+  },
+  "take_profit": {
+    "from": "avg",
+    "ladder": [
+      { "at_pct": 1.0, "sell_pct_of_original": 100 }
+    ],
+    "reset_on_add": true
+  },
+  "stop": {
+    "pct_from_avg": 1.5,
+    "anchor": "avg",
+    "time_hours": 12,
+    "rules": [ { "field": "price", "op": "crosses_above", "value": { "field": "ind.vwap" }, "action": "close" } ]
+  },
+  "risk": { "max_positions": 3, "daily_loss_cap_pct": 5, "leverage_cap": 1 }
+}
