@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "key": "smx-trend-trailing-stop",
+  "author": "shoemoney",
+  "meta": {
+    "name": "Trend Follow (Trailing Stop Only)",
+    "description": "Enters an established uptrend and lets the whole position ride behind a trailing stop, with no profit-taking ladder to cap the upside.",
+    "tags": ["trend-following", "trailing-stop", "no-ladder"],
+    "timeframe": "6h",
+    "assets": ["BTC-USD", "ETH-USD"]
+  },
+  "signals": {
+    "liquid": { "all": [ { "field": "volume_h24_usd", "op": ">", "value": 400000 } ] },
+    "uptrend": { "all": [
+      { "field": "ind.ema(20)", "op": "crosses_above", "value": { "field": "ind.ema(50)" } },
+      { "field": "ind.adx(14)", "op": ">", "value": 25 }
+    ] }
+  },
+  "entry": {
+    "side": "long",
+    "when": ["liquid", "uptrend"],
+    "confirm": [ { "field": "spread_bps", "op": "<=", "value": 25, "reason": "spread too wide" } ],
+    "size": { "mode": "pct_equity", "value": 5 }
+  },
+  "take_profit": {
+    "runner": { "ttp": { "activate_pct": 3.0, "giveback_pct": 2.0 } }
+  },
+  "stop": {
+    "pct_from_avg": 6.0,
+    "anchor": "avg",
+    "time_hours": null,
+    "rules": []
+  },
+  "risk": { "max_positions": 3, "daily_loss_cap_pct": 5, "leverage_cap": 1 }
+}
