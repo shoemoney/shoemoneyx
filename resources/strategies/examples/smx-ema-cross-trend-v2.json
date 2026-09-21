@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "key": "smx-ema-cross-trend",
+  "author": "shoemoney",
+  "meta": {
+    "name": "EMA Cross Trend Follow",
+    "description": "Rides a new uptrend once the fast EMA crosses above the slow EMA, banking a little on the way and trailing the rest.",
+    "tags": ["trend-following", "ema", "crossover"],
+    "timeframe": "1h",
+    "assets": ["BTC-USD", "ETH-USD"]
+  },
+  "signals": {
+    "liquid": { "all": [ { "field": "volume_h24_usd", "op": ">", "value": 400000 } ] },
+    "golden_cross": { "all": [
+      { "field": "ind.ema(9)", "op": "crosses_above", "value": { "field": "ind.ema(21)" } },
+      { "field": "ind.adx(14)", "op": ">", "value": 20 }
+    ] }
+  },
+  "entry": {
+    "side": "long",
+    "when": ["liquid", "golden_cross"],
+    "confirm": [ { "field": "spread_bps", "op": "<=", "value": 25, "reason": "spread too wide" } ],
+    "size": { "mode": "pct_equity", "value": 5 }
+  },
+  "take_profit": {
+    "from": "avg",
+    "ladder": [
+      { "at_pct": 4.0, "sell_pct_of_original": 15 },
+      { "at_pct": 8.0, "sell_pct_of_original": 15 }
+    ],
+    "runner": { "ttp": { "activate_pct": 8.0, "giveback_pct": 3.0 } },
+    "reset_on_add": true
+  },
+  "stop": {
+    "pct_from_avg": 5.0,
+    "anchor": "avg",
+    "time_hours": null,
+    "rules": [ { "field": "ind.ema(9)", "op": "crosses_below", "value": { "field": "ind.ema(21)" }, "action": "close" } ]
+  },
+  "risk": { "max_positions": 3, "daily_loss_cap_pct": 5, "leverage_cap": 1 }
+}
