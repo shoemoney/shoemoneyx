@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "key": "smx-macd-momentum",
+  "author": "shoemoney",
+  "meta": {
+    "name": "MACD Momentum Flip",
+    "description": "Buys the moment the MACD line crosses above its signal line, catching momentum as it turns positive.",
+    "tags": ["macd", "momentum", "trend-following"],
+    "timeframe": "1h",
+    "assets": ["BTC-USD", "ETH-USD"]
+  },
+  "signals": {
+    "liquid": { "all": [ { "field": "volume_h24_usd", "op": ">", "value": 400000 } ] },
+    "macd_flip": { "all": [
+      { "field": "ind.macd(12,26,9).macd", "op": "crosses_above", "value": { "field": "ind.macd(12,26,9).signal" } }
+    ] }
+  },
+  "entry": {
+    "side": "long",
+    "when": ["liquid", "macd_flip"],
+    "confirm": [ { "field": "spread_bps", "op": "<=", "value": 25, "reason": "spread too wide" } ],
+    "size": { "mode": "pct_equity", "value": 4 }
+  },
+  "take_profit": {
+    "from": "avg",
+    "ladder": [
+      { "at_pct": 2.5, "sell_pct_of_original": 30 },
+      { "at_pct": 5.0, "sell_pct_of_original": 30 }
+    ],
+    "runner": { "ttp": { "activate_pct": 5.0, "giveback_pct": 1.5 } },
+    "reset_on_add": true
+  },
+  "stop": {
+    "pct_from_avg": 3.5,
+    "anchor": "avg",
+    "time_hours": 60,
+    "rules": [ { "field": "ind.macd(12,26,9).macd", "op": "crosses_below", "value": { "field": "ind.macd(12,26,9).signal" }, "action": "close" } ]
+  },
+  "risk": { "max_positions": 3, "daily_loss_cap_pct": 5, "leverage_cap": 1 }
+}
