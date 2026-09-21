@@ -56,7 +56,7 @@ const names = {
                 >
             </div>
             <div class="dx-lens-hint">
-                <i class="fa-solid fa-brain-circuit" aria-hidden="true"></i>
+                <i class="fa-solid fa-brain" aria-hidden="true"></i>
                 CONNECTED TO AI <span>CLICK / ENTER TO INSPECT ↗</span>
             </div>
         </div>

@@ -78,7 +78,7 @@ watch(() => props.motion, resetTilt);
         />
         <div class="pair-bottom">
             <span
-                ><i class="fa-solid fa-microchip-ai" aria-hidden="true"></i>
+                ><i class="fa-solid fa-microchip" aria-hidden="true"></i>
                 {{ pair.live ? "FEED LIVE" : "CACHED" }}</span
             ><strong :class="pair.pnl < 0 ? 'down' : 'up'">{{
                 signedCash(pair.pnl)

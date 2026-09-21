@@ -60,7 +60,7 @@ const bubbleSize = (pair) =>
         :aria-label="names[theme]"
     >
         <div class="pxo-instrument-label">
-            <i class="fa-solid fa-wave-pulse" aria-hidden="true"></i>
+            <i class="fa-solid fa-wave-square" aria-hidden="true"></i>
             <div>
                 <b>{{ names[theme] }}</b
                 ><small>{{ captions[theme] }}</small>

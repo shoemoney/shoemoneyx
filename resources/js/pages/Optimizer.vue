@@ -525,7 +525,7 @@ onUnmounted(() => {
                 class="mb-2 flex flex-wrap items-center gap-3 text-sm text-zinc-500"
             >
                 <span
-                    ><i class="fa-solid fa-chart-scatter mr-1 text-sky-400"></i
+                    ><i class="fa-solid fa-chart-diagram mr-1 text-sky-400"></i
                     >Candidate field</span
                 >
                 <select aria-label="Candidate coin" v-model="focus.coin" class="text-sm">
@@ -552,7 +552,7 @@ onUnmounted(() => {
                     trades · diamond = champion</span
                 >
             </div>
-            <div v-if="!points.length" class="research-empty research-empty--field"><div class="research-empty-orbit" aria-hidden="true"><i class="fa-solid fa-chart-scatter"></i></div><strong>{{ pointsError ? 'Candidate evidence unavailable' : pointsLoaded ? 'An open field of possibility' : 'Acquiring candidate evidence' }}</strong><p>{{ pointsError ? 'Reconnect to load the actual train and test scores.' : pointsLoaded ? 'No paired candidates match this selection. Try another coin, direction or tag.' : 'Each point will represent a real paired train and test result.' }}</p></div>
+            <div v-if="!points.length" class="research-empty research-empty--field"><div class="research-empty-orbit" aria-hidden="true"><i class="fa-solid fa-chart-diagram"></i></div><strong>{{ pointsError ? 'Candidate evidence unavailable' : pointsLoaded ? 'An open field of possibility' : 'Acquiring candidate evidence' }}</strong><p>{{ pointsError ? 'Reconnect to load the actual train and test scores.' : pointsLoaded ? 'No paired candidates match this selection. Try another coin, direction or tag.' : 'Each point will represent a real paired train and test result.' }}</p></div>
             <div v-if="points.length" class="grid gap-3 xl:grid-cols-[3fr_2fr]">
                 <OptimizerScatter
                     :points="points"

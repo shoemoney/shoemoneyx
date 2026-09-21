@@ -38,9 +38,9 @@ jobs:
 
   # node --test over the resources/js module graph — resources/js and
   # tests/Unit/Frontend import vue and @vue/compiler-sfc, so node_modules must
-  # have them. Installed into an isolated manifest (not the repo's
-  # package.json, which resolves gitignored file:.fa-pro/*.tgz FA Pro deps and
-  # would ENOENT on a fresh checkout) and copied into the workspace.
+  # have them. Installed into an isolated manifest (not the repo's full
+  # package.json/node_modules) and copied into the workspace, purely to keep
+  # this job fast — a plain `npm ci` from the repo root would also work now.
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -57,20 +57,15 @@ jobs:
           cp -R "$RUNNER_TEMP/fedeps/node_modules/." "$GITHUB_WORKSPACE/node_modules/"
       - run: npm run test:frontend
 
-  # feeder/feed.mjs imports ws/ioredis/mysql2, so this needs a real npm ci — which
-  # needs the FA Pro tarballs decrypted the same way image.yml's verify job does.
-  # Same-repo PRs only: fork PRs can't read FA_PRO_KEY.
+  # feeder/feed.mjs imports ws/ioredis/mysql2, so this needs a real npm ci over
+  # the repo's own package.json. Runs for every PR including forks now that
+  # Font Awesome is the free set and no secret gates the install.
   feeder:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Decrypt Font Awesome Pro
-        env:
-          FA_PRO_KEY: ${{ secrets.FA_PRO_KEY }}
-        run: openssl enc -d -aes-256-cbc -pbkdf2 -pass env:FA_PRO_KEY -in ops/ci/fa-pro.tar.gz.enc | tar xzf -
       - run: npm ci
       - run: npm run test:feeder

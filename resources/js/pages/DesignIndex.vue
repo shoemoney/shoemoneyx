@@ -49,7 +49,7 @@ onUnmounted(() => {
                 >
                 <router-link to="/dashboard" class="di-desk-link"
                     >Open trading desk
-                    <i class="fa-solid fa-arrow-up-right" aria-hidden="true"></i
+                    <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i
                 ></router-link>
             </header>
             <section class="di-intro" aria-labelledby="di-title">
@@ -100,7 +100,7 @@ onUnmounted(() => {
                     <router-link class="di-new-design" to="/singularity">
                         <span>10 NEW</span> THE SINGULARITY / ROBOT EFFECTS
                         <i
-                            class="fa-solid fa-arrow-up-right"
+                            class="fa-solid fa-arrow-up-right-from-square"
                             aria-hidden="true"
                         ></i>
                     </router-link>
@@ -110,7 +110,7 @@ onUnmounted(() => {
                     >
                         <span>NEW</span> EVENT HORIZON BLUE
                         <i
-                            class="fa-solid fa-arrow-up-right"
+                            class="fa-solid fa-arrow-up-right-from-square"
                             aria-hidden="true"
                         ></i>
                     </router-link>
@@ -120,7 +120,7 @@ onUnmounted(() => {
                     >
                         <span>NEW</span> SUPERNOVA BLUE
                         <i
-                            class="fa-solid fa-arrow-up-right"
+                            class="fa-solid fa-arrow-up-right-from-square"
                             aria-hidden="true"
                         ></i>
                     </router-link>
@@ -169,7 +169,7 @@ onUnmounted(() => {
                         ><span class="di-open-overlay"
                             >Explore {{ design.name }}
                             <i
-                                class="fa-solid fa-arrow-up-right"
+                                class="fa-solid fa-arrow-up-right-from-square"
                                 aria-hidden="true"
                             ></i
                         ></span>
@@ -182,7 +182,7 @@ onUnmounted(() => {
                         </div>
                         <span class="di-card-arrow"
                             ><i
-                                class="fa-solid fa-arrow-up-right"
+                                class="fa-solid fa-arrow-up-right-from-square"
                                 aria-hidden="true"
                             ></i
                         ></span>
@@ -215,7 +215,7 @@ onUnmounted(() => {
                     <span>ONE DESK. EVERY PERSPECTIVE.</span></span
                 ><a href="#gallery-top"
                     >Back to top
-                    <i class="fa-solid fa-arrow-up-right" aria-hidden="true"></i
+                    <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i
                 ></a>
             </footer>
         </div>

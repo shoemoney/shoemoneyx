@@ -17,7 +17,7 @@ defineProps({
             <span></span><span></span><span></span><b></b>
         </div>
         <div class="core-symbol">
-            <i class="fa-solid fa-brain-circuit" aria-hidden="true"></i>
+            <i class="fa-solid fa-brain" aria-hidden="true"></i>
         </div>
         <div class="core-title">
             {{ (strategy || "AI").toUpperCase() }}<span>INTELLIGENCE</span>

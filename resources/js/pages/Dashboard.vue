@@ -127,7 +127,7 @@ const metrics = computed(() => [
     {
         label: "Unrealised P&L",
         value: unreal.value,
-        icon: "fa-wave-pulse",
+        icon: "fa-wave-square",
         detail: partial.value
             ? "Incomplete position snapshot"
             : !loaded.value.positions
@@ -322,7 +322,7 @@ onUnmounted(() => {
                     <i
                         :class="[
                             'fa-solid',
-                            effects ? 'fa-wave-pulse' : 'fa-pause',
+                            effects ? 'fa-wave-square' : 'fa-pause',
                         ]"
                         aria-hidden="true"
                     ></i
@@ -450,7 +450,7 @@ onUnmounted(() => {
                     </div>
                     <div class="dc-core-title">
                         <i
-                            class="fa-solid fa-microchip-ai"
+                            class="fa-solid fa-microchip"
                             aria-hidden="true"
                         ></i
                         >Agent network <span>{{ agents.length }}</span>
@@ -559,7 +559,7 @@ onUnmounted(() => {
                 </div>
                 <router-link to="/positions" class="dc-text-button"
                     >All positions
-                    <i class="fa-solid fa-arrow-up-right" aria-hidden="true"></i
+                    <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i
                 ></router-link>
             </div>
             <p v-if="errors.positions" class="dc-error" role="status">
@@ -958,7 +958,7 @@ onUnmounted(() => {
                     <h2 id="dc-feed-title">The signal stream.</h2>
                 </div>
                 <i
-                    class="fa-solid fa-wave-pulse dc-section-icon"
+                    class="fa-solid fa-wave-square dc-section-icon"
                     aria-hidden="true"
                 ></i>
             </div>

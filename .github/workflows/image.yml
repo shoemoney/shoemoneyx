@@ -12,19 +12,15 @@ env:
 
 jobs:
   # Fails fast on a broken Dockerfile before anything gets tagged: single-arch, build only, no push.
-  # Same-repo PRs only: fork PRs can't read FA_PRO_KEY, so the decrypt step would fail for every outside contributor.
+  # Runs for every PR including forks — Font Awesome is the free set, so no secret gates this.
   verify:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       matrix:
         target: [app, nginx]
     steps:
       - uses: actions/checkout@v4
-      - name: Decrypt Font Awesome Pro
-        env:
-          FA_PRO_KEY: ${{ secrets.FA_PRO_KEY }}
-        run: openssl enc -d -aes-256-cbc -pbkdf2 -pass env:FA_PRO_KEY -in ops/ci/fa-pro.tar.gz.enc | tar xzf -
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
@@ -55,10 +51,6 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Decrypt Font Awesome Pro
-        env:
-          FA_PRO_KEY: ${{ secrets.FA_PRO_KEY }}
-        run: openssl enc -d -aes-256-cbc -pbkdf2 -pass env:FA_PRO_KEY -in ops/ci/fa-pro.tar.gz.enc | tar xzf -
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:

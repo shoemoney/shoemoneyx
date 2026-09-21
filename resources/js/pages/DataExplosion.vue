@@ -471,7 +471,7 @@ onUnmounted(() => {
                     ><router-link to="/dashboard" class="dx-desk-link"
                         >Enter desk
                         <i
-                            class="fa-solid fa-arrow-up-right"
+                            class="fa-solid fa-arrow-up-right-from-square"
                             aria-hidden="true"
                         ></i
                     ></router-link>
@@ -532,7 +532,7 @@ onUnmounted(() => {
                         <span>{{ pnlParts[0] }}</span
                         ><small v-if="pnlParts[1]">.{{ pnlParts[1] }}</small
                         ><i
-                            class="fa-solid fa-arrow-up-right"
+                            class="fa-solid fa-arrow-up-right-from-square"
                             aria-hidden="true"
                         ></i>
                     </div>
@@ -615,7 +615,7 @@ onUnmounted(() => {
                 <div class="dx-stat">
                     <span
                         ><i
-                            class="fa-solid fa-chart-scatter"
+                            class="fa-solid fa-chart-diagram"
                             aria-hidden="true"
                         ></i
                         >NOTIONAL EXPOSURE</span
@@ -660,7 +660,7 @@ onUnmounted(() => {
             <section class="dx-intelligence" aria-label="AI trading pipeline">
                 <span class="dx-intelligence-title"
                     ><i
-                        class="fa-solid fa-brain-circuit"
+                        class="fa-solid fa-brain"
                         aria-hidden="true"
                     ></i>
                     AI GUIDANCE</span
@@ -844,7 +844,7 @@ onUnmounted(() => {
                 >
                     <div class="dx-market-toolbar">
                         <h2>
-                            <i class="fa-solid fa-grid-2" aria-hidden="true"></i
+                            <i class="fa-solid fa-table-cells-large" aria-hidden="true"></i
                             >{{
                                 family === "redline"
                                     ? "THE TIMING BOARD"
@@ -1028,7 +1028,7 @@ onUnmounted(() => {
                     <header>
                         <span
                             ><i
-                                class="fa-solid fa-chart-scatter"
+                                class="fa-solid fa-chart-diagram"
                                 aria-hidden="true"
                             ></i
                             >BANK SNAPSHOT</span
@@ -1074,7 +1074,7 @@ onUnmounted(() => {
                     <header>
                         <span
                             ><i
-                                class="fa-solid fa-brain-circuit"
+                                class="fa-solid fa-brain"
                                 aria-hidden="true"
                             ></i
                             >LATEST AI SCAN</span
@@ -1228,7 +1228,7 @@ onUnmounted(() => {
                     </div>
                 </dl>
                 <div class="dx-detail-guidance">
-                    <i class="fa-solid fa-brain-circuit" aria-hidden="true"></i>
+                    <i class="fa-solid fa-brain" aria-hidden="true"></i>
                     <div>
                         <strong>{{
                             selectedPair.decision
@@ -1294,7 +1294,7 @@ onUnmounted(() => {
                     :to="`/chart/${selectedPair.id}`"
                     >Open full chart
                     <i
-                        class="fa-solid fa-arrow-up-right"
+                        class="fa-solid fa-arrow-up-right-from-square"
                         aria-hidden="true"
                     ></i></router-link
             ></template>

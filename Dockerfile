@@ -22,14 +22,11 @@ RUN composer install --no-dev --no-interaction --no-scripts --no-autoloader --pr
 FROM node:22-bookworm-slim AS feeder-deps
 WORKDIR /feeder
 COPY package.json package-lock.json ./
-# Font Awesome Pro is installed from local tarballs (.fa-pro, gitignored): the feeder stage needs them for npm ci
-COPY .fa-pro ./.fa-pro
 RUN npm ci --omit=dev --ignore-scripts
 
 FROM node:22-bookworm-slim AS frontend-build
 WORKDIR /app
 COPY package.json package-lock.json ./
-COPY .fa-pro ./.fa-pro
 RUN npm ci
 COPY . .
 # REVERB_APP_KEY is the pusher-protocol public key (like Pusher's own JS key: identifies the app,

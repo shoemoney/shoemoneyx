@@ -275,7 +275,7 @@ onUnmounted(() => {
                 }}</span
                 ><router-link to="/dashboard" class="open-desk"
                     >Open desk
-                    <i class="fa-solid fa-arrow-up-right" aria-hidden="true"></i
+                    <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i
                 ></router-link>
             </div>
         </header>
@@ -406,7 +406,7 @@ onUnmounted(() => {
                             >{{ pairs.length }} connected pairs</span
                         ><span
                             ><i
-                                class="fa-solid fa-microchip-ai"
+                                class="fa-solid fa-microchip"
                                 aria-hidden="true"
                             ></i
                             >{{
@@ -510,7 +510,7 @@ onUnmounted(() => {
                 <div>
                     <span
                         ><i
-                            class="fa-solid fa-chart-scatter"
+                            class="fa-solid fa-chart-diagram"
                             aria-hidden="true"
                         ></i
                         >OPEN POSITIONS</span
@@ -582,7 +582,7 @@ onUnmounted(() => {
                     class="intelligence-label"
                     :class="{ 'pxo-ai-receiving': latestEvent?.agent === 'AI' }"
                 >
-                    <i class="fa-solid fa-brain-circuit" aria-hidden="true"></i
+                    <i class="fa-solid fa-brain" aria-hidden="true"></i
                     ><span
                         >{{
                             (snapshot?.strategy || "AI").toUpperCase()
@@ -899,7 +899,7 @@ onUnmounted(() => {
                                                 alt=""
                                             />{{ ticker(p.id)
                                             }}<i
-                                                class="fa-solid fa-arrow-up-right"
+                                                class="fa-solid fa-arrow-up-right-from-square"
                                                 aria-hidden="true"
                                             ></i>
                                         </button>
@@ -932,7 +932,7 @@ onUnmounted(() => {
                                     <td>
                                         <span class="table-pipe"></span
                                         ><i
-                                            class="fa-solid fa-microchip-ai"
+                                            class="fa-solid fa-microchip"
                                             aria-hidden="true"
                                         ></i
                                         ><span class="table-live">{{
@@ -948,7 +948,7 @@ onUnmounted(() => {
                 <div v-else class="pair-field">
                     <div class="pair-bus" aria-hidden="true">
                         <span
-                            ><i class="fa-solid fa-microchip-ai"></i
+                            ><i class="fa-solid fa-microchip"></i
                             >{{ (snapshot?.strategy || "AI").toUpperCase() }} /
                             CONNECTED TO EVERY PAIR</span
                         >
@@ -1061,7 +1061,7 @@ onUnmounted(() => {
                                 ><span class="event-agent">{{ e.agent }}</span
                                 ><span>{{ e.message }}</span
                                 ><i
-                                    class="fa-solid fa-arrow-up-right"
+                                    class="fa-solid fa-arrow-up-right-from-square"
                                     aria-hidden="true"
                                 ></i></div
                         ></TransitionGroup>
@@ -1085,7 +1085,7 @@ onUnmounted(() => {
                 <aside class="intelligence-panel">
                     <div class="eyebrow">
                         <i
-                            class="fa-solid fa-brain-circuit"
+                            class="fa-solid fa-brain"
                             aria-hidden="true"
                         ></i
                         >THE INTELLIGENCE LAYER
@@ -1113,7 +1113,7 @@ onUnmounted(() => {
                     <router-link to="/optimizer"
                         >Explore the intelligence
                         <i
-                            class="fa-solid fa-arrow-up-right"
+                            class="fa-solid fa-arrow-up-right-from-square"
                             aria-hidden="true"
                         ></i
                     ></router-link>
@@ -1218,7 +1218,7 @@ onUnmounted(() => {
                     class="open-desk"
                     @click="selected = null"
                     >Open full chart
-                    <i class="fa-solid fa-arrow-up-right" aria-hidden="true"></i
+                    <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i
                 ></router-link>
             </div>
         </dialog>

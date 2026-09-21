@@ -1,6 +1,6 @@
 SUI logo: https://github.com/trustwallet/assets/blob/master/blockchains/sui/info/logo.png
 
-Other currency icons are supplied by the existing `cryptocurrency-icons` package. Interface and AI icons use the existing licensed Font Awesome Pro installation.
+Other currency icons are supplied by the existing `cryptocurrency-icons` package. Interface and AI icons use the existing Font Awesome (free) installation.
 
 ## Coinbase asset artwork — 2026-09-06
 

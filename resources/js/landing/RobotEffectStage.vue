@@ -943,7 +943,7 @@ onUnmounted(() => {
                     <span
                         >{{ ticker(market.id) }} <small>/ USD</small
                         ><i
-                            class="fa-solid fa-arrow-up-right"
+                            class="fa-solid fa-arrow-up-right-from-square"
                             aria-hidden="true"
                         ></i
                     ></span>

@@ -162,7 +162,7 @@ onUnmounted(() => {
             </template>
             <template v-else>
                 <span v-for="n in 24" :key="n" :style="{ '--ray': n }"></span>
-                <i class="fa-solid fa-brain-circuit"></i>
+                <i class="fa-solid fa-brain"></i>
             </template>
         </div>
     </div>

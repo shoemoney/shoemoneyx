@@ -34,7 +34,6 @@ dump.rdb
 
 
 # Font Awesome Pro tarballs packed from a licensed install (never commit)
-.fa-pro/
 
 # browser-check artefacts
 .playwright-mcp/
