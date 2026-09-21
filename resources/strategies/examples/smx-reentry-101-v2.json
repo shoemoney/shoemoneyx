@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "key": "smx-reentry-101",
+  "author": "shoemoney",
+  "meta": {
+    "name": "Re-Entry 101 (Teaching Template)",
+    "description": "A bare-bones example that only teaches one thing: sell a slice at a target, buy it back cheaper on a dip, then cash out the re-buy once it is profitable.",
+    "tags": ["education", "reentry", "beginner"],
+    "timeframe": "1h",
+    "assets": ["BTC-USD"]
+  },
+  "signals": {
+    "liquid": { "all": [ { "field": "volume_h24_usd", "op": ">", "value": 250000 } ] }
+  },
+  "entry": {
+    "side": "long",
+    "when": ["liquid"],
+    "size": { "mode": "pct_equity", "value": 3 }
+  },
+  "take_profit": {
+    "from": "avg",
+    "ladder": [
+      { "at_pct": 2.0, "sell_pct_of_original": 50 }
+    ],
+    "reset_on_add": true
+  },
+  "reentry": {
+    "when": "entry",
+    "after_rungs": 1,
+    "retrace": { "of": "pct", "min": 1.0, "stay_above_avg": true },
+    "size": { "mode": "usd", "value": 50 },
+    "min_spacing_x_fees": 1,
+    "cash_out": { "when": "green_after_fees", "sell_pct_of_reentry": 100, "remainder": "runner" },
+    "max_per_position": 1
+  },
+  "stop": {
+    "pct_from_avg": 3.0,
+    "anchor": "avg",
+    "time_hours": null,
+    "rules": []
+  },
+  "risk": { "max_positions": 2, "daily_loss_cap_pct": 5, "leverage_cap": 1 }
+}
