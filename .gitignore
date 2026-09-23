@@ -53,3 +53,6 @@ storage/e2e/
 
 # local build artifacts (video renders, generated stills)
 /output/
+
+# leftover licensed Font Awesome Pro tarballs — never commit these
+.fa-pro/
