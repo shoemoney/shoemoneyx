@@ -135,16 +135,18 @@ unexpected error`.
 ### 5. `support-chat-deepseek.mjs` — assist chat with deepseek model selection
 
 Proves the SMX "AI assist" support chat (`/api/strategy-assist`) correctly routes requests to
-`deepseek/deepseek-v4-flash` — the model config/ai.php lists under `recommended` and nudges free
-users toward for strategy drafting — and that the model picker persists across sessions. The
-journey validates that deepseek-v4-flash appears in the builder's live Recommended model list,
-that selecting it via the assist chat's model dropdown and persisting to localStorage actually
-routes the next call there (verified both by request body and by the response's own `model` field
-echoed from the real OpenRouter reply, proving the call was actually served by that model and not
-silently routed elsewhere), that the reply is real model output containing a JSON code block for
-strategy drafting, and that the free-model nudge banner appears when on a free model and clicking
-it switches the picker and persists to localStorage. No backtest or marketplace-AMI path — just
-the bare assist chat against a fresh desk's onboarding and Settings state.
+`deepseek/deepseek-v4-flash` — a model config/ai.php lists under `recommended` — and that the
+model picker persists across sessions. The journey validates that deepseek-v4-flash appears in
+the builder's live Recommended model list, that selecting it via the assist chat's model
+dropdown and persisting to localStorage actually routes the next call there (verified both by
+request body and by the response's own `model` field echoed from the real OpenRouter reply,
+proving the call was actually served by that model and not silently routed elsewhere), that the
+reply is real model output containing a JSON code block for strategy drafting, and that the
+free-model nudge banner appears when on a free model and clicking it switches the picker and
+persists to localStorage. The nudge banner names the nudge model from config/ai.php (the
+vision-exp sibling, offered for backtest review, not flash itself). No backtest or
+marketplace-AMI path — just the bare assist chat against a fresh desk's onboarding and Settings
+state.
 
 Checks: `root redirects to onboarding on a fresh desk` · `master-password step advanced to
 openrouter step` · `openrouter step accepted the key (server validated it against OpenRouter)` ·
@@ -162,9 +164,11 @@ without an unexpected error`.
 
 ## Fresh-desk recipe
 
-Run each journey against its own throwaway sqlite desk — **never the shared LAN MariaDB.** All
-five scripts default to a different port (8010–8014) so they can run concurrently against five
-separate desks if you want, or reuse one desk sequentially and reset between journeys (below).
+Run each journey against its own throwaway sqlite desk — **never the shared LAN MariaDB.** Four
+scripts default to ports 8010–8013; `support-chat-deepseek.mjs` also defaults to 8010, colliding
+with `login-and-ai.mjs`. To run all five concurrently, set `E2E_BASE` explicitly for one of them
+(e.g., `http://127.0.0.1:8110` for `support-chat-deepseek`), or reuse one desk sequentially and
+reset between journeys (below).
 
 ```bash
 # 0. One-time: get an OpenRouter key out of the aigate vault (never hardcode or print it)
@@ -204,8 +208,9 @@ Repeat step 5 for `strategy-v2-lifecycle.mjs`, `agent-apply-and-backtest.mjs` (n
 `OPENROUTER_MODEL` set on the server as above), `chart-and-positions.mjs` (needs `php artisan`
 on `$PATH` in the same shell, since it shells out to `php artisan tinker` against
 `E2E_BASE`'s own repo checkout to seed its fixture), and `support-chat-deepseek.mjs` (tests the
-assist chat's model picker for deepseek-v4-flash; uses a fresh desk with no backtest or
-marketplace-AMI bootstrap).
+assist chat's model picker; needs a live `OPENROUTER_API_KEY` and makes real paid calls with the
+model pinned to `deepseek/deepseek-v4-flash`, overridable via `E2E_SUPPORT_MODEL`; uses a fresh
+desk with no backtest or marketplace-AMI bootstrap).
 
 ### Between-journey reset
 
