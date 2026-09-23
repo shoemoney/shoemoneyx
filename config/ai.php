@@ -41,4 +41,14 @@ return [
         'reason' => 'Backtest review reads charts and long results; the flash model does it for pennies.',
     ],
 
+    // The intent lint (App\Desk\Strategies\DefinitionCheck): whether it runs at all, and how
+    // long a save waits on it. The model, threshold and question text are NOT here — they are
+    // one calibrated triple and live as constants on DefinitionCheck so a .env edit can't
+    // desynchronise them from the measurement they came from.
+    'intent_lint' => [
+        'enabled' => (bool) env('AI_INTENT_LINT', true),
+        'timeout_seconds' => (int) env('AI_INTENT_LINT_TIMEOUT', 3),
+        'cache_ttl_seconds' => 3600,
+    ],
+
 ];
