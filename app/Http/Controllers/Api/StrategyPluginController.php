@@ -91,7 +91,7 @@ class StrategyPluginController extends Controller
             return $plugin;
         });
 
-        return response()->json(['valid' => true, 'errors' => [], 'plugin' => $plugin], 201);
+        return response()->json(['valid' => true, 'errors' => [], 'warnings' => $result['warnings'] ?? [], 'plugin' => $plugin], 201);
     }
 
     /** @return array{valid: bool, errors: array<int, mixed>} */

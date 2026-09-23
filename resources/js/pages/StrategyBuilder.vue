@@ -31,6 +31,7 @@ const DEFAULT_JSON = `{
 
 const doc = ref(DEFAULT_JSON);
 const errors = ref([]);
+const warnings = ref([]);
 const valid = ref(null);
 const busy = ref(false);
 const saved = ref([]);
@@ -174,18 +175,18 @@ function parsed() {
 }
 
 async function validate() {
-    busy.value = true; errors.value = []; valid.value = null;
+    busy.value = true; errors.value = []; warnings.value = []; valid.value = null;
     const p = parsed();
     if (!p.ok) { errors.value = ['Invalid JSON: ' + p.error]; valid.value = false; busy.value = false; return; }
     try {
         const res = await api.post('/strategy-plugins/validate', { definition: p.value });
-        valid.value = res.valid; errors.value = res.errors || [];
+        valid.value = res.valid; errors.value = res.errors || []; warnings.value = res.warnings || [];
     } catch (e) { errors.value = [e.message]; valid.value = false; }
     busy.value = false;
 }
 
 async function save() {
-    busy.value = true; saveMsg.value = ''; errors.value = [];
+    busy.value = true; saveMsg.value = ''; errors.value = []; warnings.value = [];
     const p = parsed();
     if (!p.ok) { errors.value = ['Invalid JSON: ' + p.error]; busy.value = false; return; }
     try {
@@ -193,6 +194,7 @@ async function save() {
         currentId.value = res.plugin?.id || null;
         currentVersion.value = res.plugin?.current_version || null;
         saveMsg.value = `Saved as v${currentVersion.value}.`;
+        warnings.value = res.warnings || [];
         changelog.value = '';
         applySuggest(p.value);
         await Promise.all([loadSaved(), loadVersions(currentId.value), loadReviews(currentId.value)]);
@@ -409,6 +411,9 @@ async function sendAgentMessage() {
                 <ul v-if="errors.length" class="errors">
                     <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
                 </ul>
+                <ul v-if="warnings.length" class="warnings">
+                    <li v-for="(w, i) in warnings" :key="i"><code>{{ w.path }}</code> {{ w.message }}</li>
+                </ul>
                 <h2>Community strategies</h2>
                 <div class="community">
                     <p v-if="communitySync" class="hint">
@@ -526,6 +531,7 @@ textarea { width: 100%; font-family: monospace; font-size: 0.85rem; }
 .row input { flex: 1; }
 .ok { color: green; } .bad { color: red; }
 .errors { color: red; }
+.warnings { color: #a06a00; }
 .chat { border: 1px solid #ccc; min-height: 300px; max-height: 60vh; overflow-y: auto; padding: 0.5rem; }
 .msg { margin: 0.5rem 0; padding: 0.5rem; border-radius: 6px; }
 .msg.user { background: #eef; }
