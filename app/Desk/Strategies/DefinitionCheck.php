@@ -94,29 +94,29 @@ final class DefinitionCheck
             return null;
         }
 
-        $cacheKey = 'intent-lint:'.self::MODEL.':'.hash('sha256', json_encode($definition));
-        $cached = Cache::get($cacheKey);
-        if (is_float($cached)) {
-            return $cached;
-        }
-
-        $userKey = CurrentUser::key();
-        if (! $this->keys->exists($userKey)) {
-            return null;
-        }
-
         try {
+            $cacheKey = 'intent-lint:'.self::MODEL.':'.hash('sha256', json_encode($definition, JSON_THROW_ON_ERROR));
+            $cached = Cache::get($cacheKey);
+            if (is_numeric($cached)) {
+                return (float) $cached;
+            }
+
+            $userKey = CurrentUser::key();
+            if (! $this->keys->exists($userKey)) {
+                return null;
+            }
+
             $probability = $this->decisions
                 ->decide($userKey, $definition, [self::ANSWER_ID => new DecisionQuestion(self::QUESTION)], self::MODEL)
                 ->probability(self::ANSWER_ID);
+
+            if ($probability !== null) {
+                Cache::put($cacheKey, $probability, (int) config('ai.intent_lint.cache_ttl_seconds', 3600));
+            }
+
+            return $probability;
         } catch (\Throwable) {
             return null;
         }
-
-        if ($probability !== null) {
-            Cache::put($cacheKey, $probability, (int) config('ai.intent_lint.cache_ttl_seconds', 3600));
-        }
-
-        return $probability;
     }
 }

@@ -9,6 +9,7 @@ use App\Ai\DecisionResponse;
 use App\Desk\Strategies\DefinitionCheck;
 use App\Models\AiConnection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Tests\Feature\Fixtures\FakeDecisionClient;
 use Tests\TestCase;
 
@@ -154,6 +155,67 @@ class DefinitionCheckTest extends TestCase
         // grade, and matched pairs only reach ~0.79, so any number shown gets misread as
         // a percentage. Fail here rather than let someone helpfully put it back.
         $this->assertStringNotContainsString('0.13', $result['warnings'][0]['message']);
+    }
+
+    public function test_invalid_utf8_skips_the_advisory_without_throwing(): void
+    {
+        $this->connect();
+        $fake = $this->fake(new DecisionResponse(['intent_match' => 0.05], 'jev-1.13'));
+        $definition = $this->v2Definition(['meta' => ['description' => "buy the dip \xB1"]]);
+
+        $result = app(DefinitionCheck::class)->run($definition);
+
+        $this->assertTrue($result['valid']);
+        $this->assertSame([], $result['warnings']);
+        $this->assertSame([], $fake->calls);
+    }
+
+    public function test_redis_numeric_cache_hit_does_not_repeat_the_decision_call(): void
+    {
+        $this->connect();
+        config(['cache.default' => 'redis']);
+        $definition = $this->v2Definition(['key' => 'redis-memo-'.bin2hex(random_bytes(8))]);
+        $cacheKey = 'intent-lint:'.DefinitionCheck::MODEL.':'.hash('sha256', json_encode($definition));
+        $fake = $this->fake(
+            new DecisionResponse(['intent_match' => 0.13], 'jev-1.13'),
+            new DecisionResponse(['intent_match' => 0.9], 'jev-1.13'),
+        );
+
+        try {
+            $first = app(DefinitionCheck::class)->run($definition);
+            $this->assertSame('0.13', Cache::get($cacheKey));
+            $second = app(DefinitionCheck::class)->run($definition);
+
+            $this->assertSame($first, $second);
+            $this->assertCount(1, $fake->calls);
+        } finally {
+            Cache::forget($cacheKey);
+        }
+    }
+
+    public function test_cache_read_failure_does_not_block_validation(): void
+    {
+        $this->connect();
+        $fake = $this->fake(new DecisionResponse(['intent_match' => 0.05], 'jev-1.13'));
+        Cache::shouldReceive('get')->once()->andThrow(new \RuntimeException('cache unavailable'));
+
+        $result = app(DefinitionCheck::class)->run($this->v2Definition());
+
+        $this->assertTrue($result['valid']);
+        $this->assertSame([], $result['warnings']);
+        $this->assertSame([], $fake->calls);
+    }
+
+    public function test_cache_write_failure_does_not_block_saving(): void
+    {
+        $this->connect();
+        $this->fake(new DecisionResponse(['intent_match' => 0.05], 'jev-1.13'));
+        Cache::shouldReceive('get')->once()->andReturn(null);
+        Cache::shouldReceive('put')->once()->andThrow(new \RuntimeException('cache unavailable'));
+
+        $this->postJson('/api/strategy-plugins', ['definition' => $this->v2Definition(['key' => 'cache-write-failure'])])
+            ->assertCreated()
+            ->assertJson(['valid' => true, 'warnings' => []]);
     }
 
     public function test_the_save_path_is_unaffected_when_the_lint_fails(): void

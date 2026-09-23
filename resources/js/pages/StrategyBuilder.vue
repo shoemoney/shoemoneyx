@@ -99,6 +99,7 @@ async function restoreVersion(version) {
     try {
         const res = await api.post(`/strategy-plugins/${currentId.value}/versions/${version}/restore`, { bump: bump.value });
         doc.value = JSON.stringify(res.version.definition, null, 2);
+        warnings.value = [];
         currentVersion.value = res.plugin.current_version;
         applySuggest(res.version.definition);
         saveMsg.value = `Restored v${version} as v${res.plugin.current_version}.`;
@@ -214,7 +215,7 @@ async function loadOne(id) {
         currentVersion.value = p.current_version || null;
         autoBacktest.value = !!p.auto_backtest;
         applySuggest(p.definition);
-        errors.value = []; valid.value = null; saveMsg.value = ''; btResult.value = null;
+        errors.value = []; warnings.value = []; valid.value = null; saveMsg.value = ''; btResult.value = null;
         await Promise.all([loadVersions(id), loadReviews(id)]);
     } catch (e) { errors.value = [e.message]; }
 }
@@ -247,7 +248,7 @@ function importFile(ev) {
     const r = new FileReader();
     r.onload = () => {
         doc.value = String(r.result || '');
-        currentId.value = null; errors.value = []; valid.value = null; saveMsg.value = '';
+        currentId.value = null; errors.value = []; warnings.value = []; valid.value = null; saveMsg.value = '';
         const imp = parsed();
         if (imp.ok) applySuggest(imp.value);
     };
@@ -290,7 +291,7 @@ async function sendChat() {
 function useJsonFromChat(content) {
     const m = content.match(/```json\s*([\s\S]*?)```/);
     if (m) {
-        doc.value = m[1].trim(); errors.value = []; valid.value = null; saveMsg.value = '';
+        doc.value = m[1].trim(); errors.value = []; warnings.value = []; valid.value = null; saveMsg.value = '';
         const imp = parsed();
         if (imp.ok) { applySuggest(imp.value); save(); }
     }
