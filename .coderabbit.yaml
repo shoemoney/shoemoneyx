@@ -1,0 +1,130 @@
+# CodeRabbit review config — https://docs.coderabbit.ai/guides/configure-coderabbit
+# Schema: https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+language: en-US
+
+tone_instructions: >-
+  Be direct and concrete. This is a trading system: when money, sizing, or risk is involved, say what breaks and on what input. Skip praise and style nitpicks unless they hide a bug. Many contributors are new to OSS, so give the why in one line.
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  suggested_labels: true
+  auto_apply_labels: false
+  suggested_reviewers: false
+  poem: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - main
+
+  path_filters:
+    - "!public/build/**"
+    - "!public/coin-icons/**"
+    - "!docs/media/**"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+    - "!package-lock.json"
+    - "!composer.lock"
+
+  path_instructions:
+    - path: "database/migrations/**"
+      instructions: >-
+        The test suite runs on SQLite in memory but production runs MariaDB in strict mode.
+        SQLite ignores declared string lengths, so a column that is too narrow passes every
+        test and then throws on the first real write. For every string/varchar column, check
+        the declared length against the longest value any code path can actually write,
+        including enum-like status and action strings. Flag any new or altered column where
+        that is not obviously safe. Also flag missing down() methods and missing indexes on
+        columns used in where clauses by the trading loop.
+
+    - path: "app/Desk/**"
+      instructions: >-
+        This is the live trading loop: scan, vet, size, fills, and risk. Real money can be at
+        stake. Scrutinise order sizing arithmetic, float vs decimal handling on prices and
+        quantities, off-by-one on ladder rungs, and any path that could place an order without
+        passing the risk check. Risk is the final authority and must never be bypassed or
+        short-circuited. Flag any new code path that can reach order submission without it.
+
+    - path: "app/Desk/Strategies/**"
+      instructions: >-
+        Strategy schema v2. The indicator table is deliberately closed and the formula grammar
+        is bounded. Reject anything that widens the grammar toward arbitrary evaluation, such
+        as eval, variable functions, or unbounded recursion, since strategy files are user
+        supplied. Check that every new indicator declares its arity, outputs, and integer
+        argument positions consistently with the existing table.
+
+    - path: "app/Exchange/**"
+      instructions: >-
+        Every adapter implements one shared contract across 110 exchanges. Check that new or
+        changed methods keep the same return shapes, units, and error semantics as the other
+        adapters, and that symbol and precision handling is not hardcoded to one venue. Network
+        calls need timeouts and must not retry unbounded against a rate limit.
+
+    - path: "**/*.php"
+      instructions: >-
+        Laravel 13 conventions. Prefer framework idioms over hand-rolled equivalents. Watch for
+        N+1 queries, unbounded SELECTs on tables that grow without limit such as failed_jobs and
+        job_batches, and missing casts on model attributes.
+
+    - path: "resources/js/**"
+      instructions: >-
+        Vue 3 with the composition API. Check for reactivity that is silently lost by destructuring
+        props or reactive objects, chart instances or intervals that are never torn down on unmount,
+        and polling that replaces accumulated state rather than merging into it.
+
+    - path: ".github/workflows/**"
+      instructions: >-
+        Check that no secret can reach the logs, that third-party actions are pinned rather than
+        floating on a tag, and that jobs which need secrets are skipped for pull requests from
+        forks instead of failing.
+
+  tools:
+    gitleaks:
+      enabled: true
+    osvScanner:
+      enabled: true
+    semgrep:
+      enabled: true
+    phpstan:
+      enabled: true
+      level: default
+    phpmd:
+      enabled: true
+    phpcs:
+      enabled: true
+    eslint:
+      enabled: true
+    biome:
+      enabled: true
+    actionlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    hadolint:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: false
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
