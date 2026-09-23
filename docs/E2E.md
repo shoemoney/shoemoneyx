@@ -150,17 +150,14 @@ state.
 
 Checks: `root redirects to onboarding on a fresh desk` · `master-password step advanced to
 openrouter step` · `openrouter step accepted the key (server validated it against OpenRouter)` ·
-`wizard reports completed=true via /api/onboarding` · `fresh session is sent to /login once a
-master password exists` · `correct password leaves /login` · `builder shows the Connected chip` ·
-`Recommended models list includes deepseek/deepseek-v4-flash` · `saving the assist chat's model
-picker to deepseek/deepseek-v4-flash persists in localStorage` · `next assist chat turn routed
-to deepseek/deepseek-v4-flash (request body model field)` · `next assist chat turn routed to
-deepseek/deepseek-v4-flash (response body model field echoed from OpenRouter)` · `assist chat
-reply is real model output (non-empty, not a client error)` · `assist chat reply for strategy
-drafting contains a JSON code block` · `free-model nudge banner appears and names the nudge
-model from config/ai.php` · `clicking the nudge banner's "try" link switches the assist chat's
-model picker` · `nudge banner click persists the switched model to localStorage` · `run completed
-without an unexpected error`.
+`login left /login` · `deepseek/deepseek-v4-flash is in the live /api/ai/models recommended
+list` · `the assist chat model dropdown offers deepseek/deepseek-v4-flash as an option` ·
+`selecting the model persists it to localStorage (savePrefs)` · `assist chat produced a real,
+non-canned reply` · `the reply drafts an actual strategy (contains a JSON code block)` · `a
+/api/strategy-assist call was captured` · `the request body asked for deepseek/deepseek-v4-flash`
+· `the server's response echoes deepseek/deepseek-v4-flash as the model that actually replied` ·
+`the free-model nudge banner appears when pinned to a free model` · `the nudge names a concrete
+switch-to model` · `clicking the nudge persists its model to localStorage`.
 
 ## Fresh-desk recipe
 
