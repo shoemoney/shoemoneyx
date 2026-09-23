@@ -6,6 +6,37 @@ Laravel 13 · Vue 3 · Redis · MySQL/MariaDB · TradingView lightweight-charts.
 
 > **NFA.** Paper first. Start with a number you are fine watching hit zero.
 
+## 🎥 Watch the walkthrough
+
+Fifteen minutes, every feature, explained like you're five. Install paths, the first-run wizard,
+the charts, the desk cycle, backtests, the optimizer, and a deep dive on building a strategy.
+
+[![Watch the SMX walkthrough](docs/media/walkthrough.png)](https://github.com/shoemoney/shoemoneyx/releases/download/v0.2.1/smx-walkthrough.mp4)
+
+<details>
+<summary>Chapters</summary>
+
+| | |
+|---|---|
+| 0:13 | Why I built this, and the honest warning |
+| 1:29 | Three ways to run it |
+| 2:49 | First-run setup wizard |
+| 3:16 | Why a paper desk still needs an exchange |
+| 5:05 | Charts and sub-minute candles |
+| 6:05 | The desk: scan, vet, size, fills |
+| 7:14 | Backtests and why fees matter |
+| 7:52 | Optimizer and walk-forward |
+| 9:21 | Strategy builder |
+| 11:53 | Take profit, the ladder and the runner |
+| 12:44 | Pi re-entry |
+| 13:47 | The stop that re-anchors |
+| 14:40 | The built-in AI assistant |
+
+Subtitles (`captions.srt`) ship alongside the video on the
+[v0.2.1 release](https://github.com/shoemoney/shoemoneyx/releases/tag/v0.2.1).
+
+</details>
+
 ## What it does
 
 ```
