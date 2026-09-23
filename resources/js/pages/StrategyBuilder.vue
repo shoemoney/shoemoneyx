@@ -384,6 +384,12 @@ async function sendAgentMessage() {
                     <span v-if="valid === true" class="ok">Valid</span>
                     <span v-if="valid === false" class="bad">Invalid</span>
                     <span v-if="saveMsg" class="ok">{{ saveMsg }}</span>
+                    <!-- The warning list sits below the fold at 1280x900, so a definition that
+                         validates cleanly but drifts from its description would otherwise read as
+                         an unqualified green "Valid". This puts the count where the eye already is. -->
+                    <a v-if="warnings.length" class="warn-jump" href="#builder-warnings">
+                        {{ warnings.length }} warning{{ warnings.length === 1 ? '' : 's' }}
+                    </a>
                 </div>
                 <div class="row">
                     <span>Export:</span>
@@ -411,7 +417,7 @@ async function sendAgentMessage() {
                 <ul v-if="errors.length" class="errors">
                     <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
                 </ul>
-                <ul v-if="warnings.length" class="warnings">
+                <ul v-if="warnings.length" id="builder-warnings" class="warnings">
                     <li v-for="(w, i) in warnings" :key="i"><code>{{ w.path }}</code> {{ w.message }}</li>
                 </ul>
                 <h2>Community strategies</h2>
@@ -532,6 +538,7 @@ textarea { width: 100%; font-family: monospace; font-size: 0.85rem; }
 .ok { color: green; } .bad { color: red; }
 .errors { color: red; }
 .warnings { color: #a06a00; }
+.warn-jump { color: #a06a00; font-weight: 600; text-decoration: underline; }
 .chat { border: 1px solid #ccc; min-height: 300px; max-height: 60vh; overflow-y: auto; padding: 0.5rem; }
 .msg { margin: 0.5rem 0; padding: 0.5rem; border-radius: 6px; }
 .msg.user { background: #eef; }
