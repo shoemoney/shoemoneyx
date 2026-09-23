@@ -53,7 +53,7 @@ same JSON, and the hub can render a "how this works" poster from it without a hu
   "author": "shoemoney",
   "meta": {
     "name": "SMX π Take Profit",
-    "description": "Nibble 2/4/8/10% at +1.5/3/4.5/6%, run the rest on a TTP, π re-entry on the dip, cash it out green after fees, 2.5% fail-safe.",
+    "description": "Buys a liquid market with 24h momentum (RSI under 70) and nibbles 2/4/8/10% at +1.5/3/4.5/6%, runs the rest on a TTP, π re-entry on the dip, cashes out green after fees, 2.5% fail-safe.",
     "tags": ["take-profit", "ladder", "reentry", "smx"],
     "timeframe": "1h",
     "assets": ["BTC-USD", "ETH-USD"]

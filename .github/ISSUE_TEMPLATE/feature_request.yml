@@ -1,0 +1,61 @@
+name: 💡 Feature request
+description: Suggest something the desk should do that it does not do yet
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adding an exchange? You do not need an issue for that. `CONTRIBUTING.md` has the adapter
+        recipe, and adapter pull requests are the most wanted contribution here.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that you cannot do today?
+      description: Describe the problem, not the solution. This is the part that decides whether it gets built.
+      placeholder: I want to stop a strategy automatically after it loses three trades in a row, and there is no way to express that.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: Your proposed behaviour. Rough is fine.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the system?
+      options:
+        - Strategy builder / schema
+        - Desk (scan, vet, size, fills)
+        - Risk and stops
+        - Backtester or farm
+        - Optimizer / walk-forward
+        - Charts and candles
+        - Exchanges
+        - Dashboard / UI
+        - Install, Docker or AMI
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What are you doing instead right now?
+      description: Workarounds, other tools, or manual steps. This tells us how much it hurts.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched existing issues and this is not already requested
+          required: true
+        - label: This is not a proprietary trading strategy I want implemented for me
+          required: true

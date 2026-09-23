@@ -1,0 +1,107 @@
+name: 🐛 Bug report
+description: Something behaved differently than you expected
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Two things before you start.
+
+        **Never paste API keys, secrets, account ids or order ids.** Scrub logs first.
+        **Found a security problem?** Do not file it here. Email security@shoemoney.com instead. See SECURITY.md.
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      description: Describe the behaviour you were expecting, in one or two sentences.
+      placeholder: I expected the desk to open a position when the entry signal fired.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened?
+      description: What you saw instead. Include the exact error text if there was one.
+      placeholder: No position was opened and the log showed "risk check rejected - no reason given".
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that triggers it. If it only happens sometimes, say how often.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker (docker/up.sh)
+        - From source (composer install + npm ci)
+        - AWS machine image
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Paper or live?
+      description: If you were trading live, say so plainly. It changes how urgently this gets looked at.
+      options:
+        - Paper (DESK_MODE=paper)
+        - Live (DESK_MODE=live)
+        - Neither, it broke before I got that far
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: "Release tag, Docker image tag, or the output of: git rev-parse --short HEAD"
+      placeholder: v0.2.1 or 8e5c9cc
+    validations:
+      required: true
+
+  - type: input
+    id: exchange
+    attributes:
+      label: Exchange and timeframe
+      description: Which venue and which candle size. Write "none" if the bug has nothing to do with market data.
+      placeholder: kraken, 30s
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "From storage/logs/laravel.log, the browser console, or docker compose logs. Scrub keys and account ids first. This is rendered as a code block, no backticks needed."
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, your strategy JSON with secrets removed, or what you already tried.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I removed every API key, secret and account id from what I pasted above
+          required: true
+        - label: I searched existing issues and this is not already reported
+          required: true

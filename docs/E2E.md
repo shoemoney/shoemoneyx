@@ -1,7 +1,7 @@
 # E2E journeys
 
-Four Playwright scripts in `tests/e2e/*.mjs` drive a real, running desk through a browser —
-onboarding, login, the Strategy Builder, the agent, and the chart — and assert on literal
+Five Playwright scripts in `tests/e2e/*.mjs` drive a real, running desk through a browser —
+onboarding, login, the Strategy Builder, the agent, the chart, and the support chat — and assert on literal
 outcomes read back through the app's own API and DOM, never just "the page didn't 500". Each
 script is a standalone Node ESM file (`node tests/e2e/<name>.mjs`), prints `PASS`/`FAIL` per
 check, writes `results.json` + screenshots to `E2E_OUT` (default `storage/e2e`), and exits
@@ -11,7 +11,7 @@ non-zero if any check failed.
 sqlite file on a throwaway desk (fresh onboarding wizard each time), never the fleet database —
 see the recipe below.
 
-## The four journeys
+## The five journeys
 
 ### 1. `login-and-ai.mjs` — onboarding, login gate, internal AI, chart auth
 
@@ -132,11 +132,40 @@ edge triggered a second /api/udf/history request with an earlier "to" than the f
 older-window request came back with real bars (candle count grew)` · `run completed without an
 unexpected error`.
 
+### 5. `support-chat-deepseek.mjs` — assist chat with deepseek model selection
+
+Proves the SMX "AI assist" support chat (`/api/strategy-assist`) correctly routes requests to
+`deepseek/deepseek-v4-flash` — a model config/ai.php lists under `recommended` — and that the
+model picker persists across sessions. The journey validates that deepseek-v4-flash appears in
+the builder's live Recommended model list, that selecting it via the assist chat's model
+dropdown and persisting to localStorage actually routes the next call there (verified both by
+request body and by the response's own `model` field echoed from the real OpenRouter reply,
+proving the call was actually served by that model and not silently routed elsewhere), that the
+reply is real model output containing a JSON code block for strategy drafting, and that the
+free-model nudge banner appears when on a free model and clicking it switches the picker and
+persists to localStorage. The nudge banner names the nudge model from config/ai.php (the
+vision-exp sibling, offered for backtest review, not flash itself). No backtest or
+marketplace-AMI path — just the bare assist chat against a fresh desk's onboarding and Settings
+state.
+
+Checks: `root redirects to onboarding on a fresh desk` · `master-password step advanced to
+openrouter step` · `openrouter step accepted the key (server validated it against OpenRouter)` ·
+`login left /login` · `deepseek/deepseek-v4-flash is in the live /api/ai/models recommended
+list` · `the assist chat model dropdown offers deepseek/deepseek-v4-flash as an option` ·
+`selecting the model persists it to localStorage (savePrefs)` · `assist chat produced a real,
+non-canned reply` · `the reply drafts an actual strategy (contains a JSON code block)` · `a
+/api/strategy-assist call was captured` · `the request body asked for deepseek/deepseek-v4-flash`
+· `the server's response echoes deepseek/deepseek-v4-flash as the model that actually replied` ·
+`the free-model nudge banner appears when pinned to a free model` · `the nudge names a concrete
+switch-to model` · `clicking the nudge persists its model to localStorage`.
+
 ## Fresh-desk recipe
 
-Run each journey against its own throwaway sqlite desk — **never the shared LAN MariaDB.** All
-four scripts default to a different port (8010–8013) so they can run concurrently against four
-separate desks if you want, or reuse one desk sequentially and reset between journeys (below).
+Run each journey against its own throwaway sqlite desk — **never the shared LAN MariaDB.** Four
+scripts default to ports 8010–8013; `support-chat-deepseek.mjs` also defaults to 8010, colliding
+with `login-and-ai.mjs`. To run all five concurrently, set `E2E_BASE` explicitly for one of them
+(e.g., `http://127.0.0.1:8110` for `support-chat-deepseek`), or reuse one desk sequentially and
+reset between journeys (below).
 
 ```bash
 # 0. One-time: get an OpenRouter key out of the aigate vault (never hardcode or print it)
@@ -173,9 +202,12 @@ E2E_BASE=http://127.0.0.1:8010 E2E_OUT="$S/out" OPENROUTER_API_KEY="$OPENROUTER_
 ```
 
 Repeat step 5 for `strategy-v2-lifecycle.mjs`, `agent-apply-and-backtest.mjs` (needs
-`OPENROUTER_MODEL` set on the server as above), and `chart-and-positions.mjs` (needs `php artisan`
+`OPENROUTER_MODEL` set on the server as above), `chart-and-positions.mjs` (needs `php artisan`
 on `$PATH` in the same shell, since it shells out to `php artisan tinker` against
-`E2E_BASE`'s own repo checkout to seed its fixture).
+`E2E_BASE`'s own repo checkout to seed its fixture), and `support-chat-deepseek.mjs` (tests the
+assist chat's model picker; needs a live `OPENROUTER_API_KEY` and makes real paid calls with the
+model pinned to `deepseek/deepseek-v4-flash`, overridable via `E2E_SUPPORT_MODEL`; uses a fresh
+desk with no backtest or marketplace-AMI bootstrap).
 
 ### Between-journey reset
 

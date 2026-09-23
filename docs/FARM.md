@@ -71,8 +71,8 @@ memory pressure) before assuming anything is actually broken. Only fall back to 
 builder (the NAS, wired into `buildx` as a remote node) if retries are consistently failing.
 
 ## Run a sweep on the farm
-    bin/desk sweep --queue --strategy=a1 --products=BTC-USD --days=30 --set=fees.taker_rate=0.0002 \
-      --grid="a1.engine.x1=3,4,5,6" --grid="a1.tp_max_pct=2,3,4" --csv=/tmp/x.csv
+    bin/desk sweep --queue --strategy=mr --products=BTC-USD --days=30 --set=fees.taker_rate=0.0002 \
+      --grid="mr.entry_z=1.5,2.0,2.5,3.0" --grid="mr.qty_pct=5,10,15,20" --csv=/tmp/x.csv
     # rows land in the Backtests page like any other run; the command waits, then ranks.
 
 Throughput (rough): M4 Max core ≈ 1 backtest-month of 2m bars / 20 s. Ultra ≈ 24 workers, Z890 ≈ 24–32,
