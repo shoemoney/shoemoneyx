@@ -9,6 +9,7 @@ use App\Ai\Exceptions\AiGateException;
 use App\Ai\Exceptions\AiNoConnectionException;
 use App\Desk\Assist\SmxPrompt;
 use App\Desk\Strategies\BacktestVersionPin;
+use App\Desk\Strategies\DefinitionCheck;
 use App\Desk\Strategies\PluginMarkdownExporter;
 use App\Desk\Strategies\PluginPineExporter;
 use App\Desk\Strategies\SchemaMigrator;
@@ -42,11 +43,11 @@ class StrategyPluginController extends Controller
         return response()->json($plugin);
     }
 
-    public function validate(Request $request): JsonResponse
+    public function validate(Request $request, DefinitionCheck $check): JsonResponse
     {
         $data = $request->validate(['definition' => 'required|array']);
 
-        return response()->json(self::runValidator($data['definition']));
+        return response()->json($check->run($data['definition']));
     }
 
     /**
@@ -55,7 +56,7 @@ class StrategyPluginController extends Controller
      * on that version row. A brand-new plugin always starts at 1.0.0 regardless
      * of `bump`.
      */
-    public function store(Request $request): JsonResponse
+    public function store(Request $request, DefinitionCheck $check): JsonResponse
     {
         $data = $request->validate([
             'definition' => 'required|array',
@@ -64,7 +65,7 @@ class StrategyPluginController extends Controller
         ]);
 
         $def = $data['definition'];
-        $result = self::runValidator($def);
+        $result = $check->run($def);
         if (! $result['valid']) {
             return response()->json($result, 422);
         }
@@ -91,13 +92,7 @@ class StrategyPluginController extends Controller
             return $plugin;
         });
 
-        return response()->json(['valid' => true, 'errors' => [], 'plugin' => $plugin], 201);
-    }
-
-    /** @return array{valid: bool, errors: array<int, mixed>} */
-    private static function runValidator(array $definition): array
-    {
-        return SchemaMigrator::validateForSave($definition);
+        return response()->json(['valid' => true, 'errors' => [], 'warnings' => $result['warnings'], 'plugin' => $plugin], 201);
     }
 
     /**

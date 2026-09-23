@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Ai\Contracts\ChatClient;
 use App\Ai\CurrentUser;
+use App\Ai\OpenRouterKey;
 use App\Ai\OpenRouterOAuth;
 use App\Http\Controllers\Controller;
 use App\Models\AiCall;
@@ -24,14 +25,13 @@ class AiController extends Controller
      * A self-hoster who set OPENROUTER_API_KEY counts as connected without an
      * AiConnection row, so there is no label and no live key lookup to make.
      */
-    public function status(OpenRouterOAuth $oauth, ChatClient $client): JsonResponse
+    public function status(OpenRouterOAuth $oauth, ChatClient $client, OpenRouterKey $keys): JsonResponse
     {
         $connection = AiConnection::activeFor(CurrentUser::key());
-        $envKey = (string) config('services.openrouter.key');
         $defaultModel = $client->defaultModel();
 
         return response()->json([
-            'connected' => $connection !== null || $envKey !== '',
+            'connected' => $keys->exists(CurrentUser::key()),
             'provider' => 'openrouter',
             'label' => $connection?->label,
             'default_model' => $defaultModel,

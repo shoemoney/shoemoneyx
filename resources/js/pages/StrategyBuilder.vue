@@ -31,6 +31,7 @@ const DEFAULT_JSON = `{
 
 const doc = ref(DEFAULT_JSON);
 const errors = ref([]);
+const warnings = ref([]);
 const valid = ref(null);
 const busy = ref(false);
 const saved = ref([]);
@@ -98,6 +99,7 @@ async function restoreVersion(version) {
     try {
         const res = await api.post(`/strategy-plugins/${currentId.value}/versions/${version}/restore`, { bump: bump.value });
         doc.value = JSON.stringify(res.version.definition, null, 2);
+        warnings.value = [];
         currentVersion.value = res.plugin.current_version;
         applySuggest(res.version.definition);
         saveMsg.value = `Restored v${version} as v${res.plugin.current_version}.`;
@@ -174,18 +176,18 @@ function parsed() {
 }
 
 async function validate() {
-    busy.value = true; errors.value = []; valid.value = null;
+    busy.value = true; errors.value = []; warnings.value = []; valid.value = null;
     const p = parsed();
     if (!p.ok) { errors.value = ['Invalid JSON: ' + p.error]; valid.value = false; busy.value = false; return; }
     try {
         const res = await api.post('/strategy-plugins/validate', { definition: p.value });
-        valid.value = res.valid; errors.value = res.errors || [];
+        valid.value = res.valid; errors.value = res.errors || []; warnings.value = res.warnings || [];
     } catch (e) { errors.value = [e.message]; valid.value = false; }
     busy.value = false;
 }
 
 async function save() {
-    busy.value = true; saveMsg.value = ''; errors.value = [];
+    busy.value = true; saveMsg.value = ''; errors.value = []; warnings.value = [];
     const p = parsed();
     if (!p.ok) { errors.value = ['Invalid JSON: ' + p.error]; busy.value = false; return; }
     try {
@@ -193,6 +195,7 @@ async function save() {
         currentId.value = res.plugin?.id || null;
         currentVersion.value = res.plugin?.current_version || null;
         saveMsg.value = `Saved as v${currentVersion.value}.`;
+        warnings.value = res.warnings || [];
         changelog.value = '';
         applySuggest(p.value);
         await Promise.all([loadSaved(), loadVersions(currentId.value), loadReviews(currentId.value)]);
@@ -212,7 +215,7 @@ async function loadOne(id) {
         currentVersion.value = p.current_version || null;
         autoBacktest.value = !!p.auto_backtest;
         applySuggest(p.definition);
-        errors.value = []; valid.value = null; saveMsg.value = ''; btResult.value = null;
+        errors.value = []; warnings.value = []; valid.value = null; saveMsg.value = ''; btResult.value = null;
         await Promise.all([loadVersions(id), loadReviews(id)]);
     } catch (e) { errors.value = [e.message]; }
 }
@@ -245,7 +248,7 @@ function importFile(ev) {
     const r = new FileReader();
     r.onload = () => {
         doc.value = String(r.result || '');
-        currentId.value = null; errors.value = []; valid.value = null; saveMsg.value = '';
+        currentId.value = null; errors.value = []; warnings.value = []; valid.value = null; saveMsg.value = '';
         const imp = parsed();
         if (imp.ok) applySuggest(imp.value);
     };
@@ -288,7 +291,7 @@ async function sendChat() {
 function useJsonFromChat(content) {
     const m = content.match(/```json\s*([\s\S]*?)```/);
     if (m) {
-        doc.value = m[1].trim(); errors.value = []; valid.value = null; saveMsg.value = '';
+        doc.value = m[1].trim(); errors.value = []; warnings.value = []; valid.value = null; saveMsg.value = '';
         const imp = parsed();
         if (imp.ok) { applySuggest(imp.value); save(); }
     }
@@ -382,6 +385,12 @@ async function sendAgentMessage() {
                     <span v-if="valid === true" class="ok">Valid</span>
                     <span v-if="valid === false" class="bad">Invalid</span>
                     <span v-if="saveMsg" class="ok">{{ saveMsg }}</span>
+                    <!-- The warning list sits below the fold at 1280x900, so a definition that
+                         validates cleanly but drifts from its description would otherwise read as
+                         an unqualified green "Valid". This puts the count where the eye already is. -->
+                    <a v-if="warnings.length" class="warn-jump" href="#builder-warnings">
+                        {{ warnings.length }} warning{{ warnings.length === 1 ? '' : 's' }}
+                    </a>
                 </div>
                 <div class="row">
                     <span>Export:</span>
@@ -408,6 +417,9 @@ async function sendAgentMessage() {
                 </div>
                 <ul v-if="errors.length" class="errors">
                     <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
+                </ul>
+                <ul v-if="warnings.length" id="builder-warnings" class="warnings">
+                    <li v-for="(w, i) in warnings" :key="i"><code>{{ w.path }}</code> {{ w.message }}</li>
                 </ul>
                 <h2>Community strategies</h2>
                 <div class="community">
@@ -526,6 +538,8 @@ textarea { width: 100%; font-family: monospace; font-size: 0.85rem; }
 .row input { flex: 1; }
 .ok { color: green; } .bad { color: red; }
 .errors { color: red; }
+.warnings { color: #a06a00; }
+.warn-jump { color: #a06a00; font-weight: 600; text-decoration: underline; }
 .chat { border: 1px solid #ccc; min-height: 300px; max-height: 60vh; overflow-y: auto; padding: 0.5rem; }
 .msg { margin: 0.5rem 0; padding: 0.5rem; border-radius: 6px; }
 .msg.user { background: #eef; }
