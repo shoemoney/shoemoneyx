@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Security vulnerability
+    url: https://github.com/shoemoney/shoemoneyx/security/policy
+    about: Do not open a public issue. Email security@shoemoney.com and you will hear back within 72 hours.
+  - name: 💬 Question, setup help, or "is this normal?"
+    url: https://github.com/shoemoney/shoemoneyx/discussions
+    about: Ask in Discussions. The issue tracker is for confirmed bugs and feature requests.
+  - name: 📺 Full walkthrough video
+    url: https://www.youtube.com/watch?v=C4hcYyPkhB0
+    about: Fifteen minutes covering install, the strategy builder, take profit and stops. Most setup questions are answered here.
