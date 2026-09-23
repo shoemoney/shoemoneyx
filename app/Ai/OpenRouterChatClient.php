@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace App\Ai;
 
 use App\Ai\Contracts\ChatClient;
-use App\Ai\Exceptions\AiNoConnectionException;
-use App\Models\AiConnection;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
@@ -21,14 +19,14 @@ final class OpenRouterChatClient implements ChatClient
 
     private const BACKOFF_SECONDS = 30;
 
-    public function __construct(private readonly Gate $gate) {}
+    public function __construct(private readonly Gate $gate, private readonly OpenRouterKey $keys) {}
 
     public function chat(array $messages, array $tools = [], ?string $model = null, array $options = []): ChatResponse
     {
         $userKey = CurrentUser::key();
         $this->gate->ensureAllowed($userKey);
 
-        $apiKey = $this->resolveKey($userKey);
+        $apiKey = $this->keys->require($userKey);
         $model ??= $this->defaultModel();
 
         $body = array_merge($options, ['model' => $model, 'messages' => $messages]);
@@ -85,24 +83,6 @@ final class OpenRouterChatClient implements ChatClient
         // once the payload grows to include a tool result (cURL error 28). 150s still leaves room
         // for a second round trip inside AgentController's 300s set_time_limit for one turn.
         ])->timeout(150)->post(self::ENDPOINT, $body);
-    }
-
-    /** @throws AiNoConnectionException when neither a connected account nor the self-host env key exists */
-    private function resolveKey(string $userKey): string
-    {
-        $connection = AiConnection::activeFor($userKey);
-        if ($connection !== null) {
-            $connection->forceFill(['last_used_at' => now()])->save();
-
-            return $connection->key;
-        }
-
-        $envKey = (string) config('services.openrouter.key');
-        if ($envKey !== '') {
-            return $envKey;
-        }
-
-        throw new AiNoConnectionException('No OpenRouter account connected.');
     }
 
     private static function parse(array $json, string $requestedModel): ChatResponse
