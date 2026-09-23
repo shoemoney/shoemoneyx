@@ -148,7 +148,12 @@ class DefinitionCheckTest extends TestCase
 
         $this->assertTrue($result['valid']);
         $this->assertSame('meta.description', $result['warnings'][0]['path']);
-        $this->assertStringContainsString('0.13', $result['warnings'][0]['message']);
+        $this->assertNotSame('', trim($result['warnings'][0]['message']));
+
+        // The probability must not reach the reader. It is a separation signal, not a
+        // grade, and matched pairs only reach ~0.79, so any number shown gets misread as
+        // a percentage. Fail here rather than let someone helpfully put it back.
+        $this->assertStringNotContainsString('0.13', $result['warnings'][0]['message']);
     }
 
     public function test_the_save_path_is_unaffected_when_the_lint_fails(): void

@@ -58,13 +58,14 @@ final class DefinitionCheck
 
         $probability = $schema['valid'] ? $this->intentMatch($definition) : null;
         if ($probability !== null && $probability < self::THRESHOLD) {
+            // The number deliberately does not appear here. Matched pairs top out around
+            // 0.79, so the score is a separation signal, not a grade, and a reader shown
+            // "0.04" reads it as a percentage and argues with it instead of re-reading
+            // their rules.
             $warnings[] = [
                 'path' => 'meta.description',
-                'message' => sprintf(
-                    'The rules may not do what the description says (intent match %.2f). '
-                        .'Re-read the rules against the description before trusting a backtest.',
-                    $probability,
-                ),
+                'message' => 'The rules may not do what the description says. '
+                    .'Re-read the rules against the description before trusting a backtest.',
             ];
         }
 
