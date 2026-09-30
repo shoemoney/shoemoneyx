@@ -20,6 +20,7 @@ use App\Support\ParamNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 
 class DeskController extends Controller
 {
@@ -78,8 +79,17 @@ class DeskController extends Controller
         'size.min_ticket_usd' => [0.0, 1_000_000.0, false],
     ];
 
+    /** A parent-map write (key "size", value {kelly_cap_pct: 5}) is flattened so every leaf is checked under its full key. */
     private function assertSaneRiskValue(string $key, mixed $value): void
     {
+        if (is_array($value)) {
+            foreach (Arr::dot($value) as $leaf => $leafValue) {
+                $this->assertSaneRiskValue($key.'.'.$leaf, $leafValue);
+            }
+
+            return;
+        }
+
         $bare = preg_replace('/^per_product\.[^.]+\./', '', $key);
         if (! isset(self::RISK_RANGES[$bare])) {
             return;
