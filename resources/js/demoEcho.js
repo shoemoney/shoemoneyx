@@ -21,6 +21,7 @@ export function createDemoEcho({ clock = globalThis, isHidden = () => globalThis
     }
     function stop() { if (timer !== null) clock.clearInterval(timer); timer = null; }
     return {
+        private(name) { return this.channel(name); },
         channel(name) {
             if (!channels.has(name)) channels.set(name, new Map());
             if (timer === null) timer = clock.setInterval(tick, 1000);

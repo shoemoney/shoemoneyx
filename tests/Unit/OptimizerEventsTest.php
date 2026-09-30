@@ -23,7 +23,7 @@ class OptimizerEventsTest extends TestCase
         ]);
         $e = new BacktestScored($b);
 
-        $this->assertSame('optimizer', $e->broadcastOn()[0]->name);
+        $this->assertSame('private-optimizer', $e->broadcastOn()[0]->name);
         $this->assertSame('backtest.scored', $e->broadcastAs());
         $w = $e->broadcastWith();
         $this->assertSame('ETH-USD', $w['coin']);
