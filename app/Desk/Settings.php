@@ -20,6 +20,18 @@ class Settings
     /** Keys the generic settings API never returns or edits. */
     public const SECRET_KEYS = ['master_password'];
 
+    /** True for a secret key or any dotted key beneath one (master_password.x would shadow it). */
+    public static function isSecret(string $key): bool
+    {
+        foreach (self::SECRET_KEYS as $secret) {
+            if ($key === $secret || str_starts_with($key, $secret.'.')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function overrides(): array
     {
         return Cache::remember(self::CACHE_KEY, 30, function () {

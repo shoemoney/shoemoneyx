@@ -116,6 +116,8 @@ class MasterPasswordTest extends TestCase
 
         $this->putJson('/api/settings', ['key' => 'master_password', 'value' => ''], $headers)->assertStatus(422);
         $this->deleteJson('/api/settings/master_password', [], $headers)->assertStatus(422);
+        $this->putJson('/api/settings', ['key' => 'master_password.shadow', 'value' => 'x'], $headers)->assertStatus(422);
+        $this->deleteJson('/api/settings/master_password.shadow', [], $headers)->assertStatus(422);
 
         $this->assertSame('secret', app(Settings::class)->masterPassword());
         $this->getJson('/api/status')->assertUnauthorized();
