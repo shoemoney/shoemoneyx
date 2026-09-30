@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Desk\Chief;
+use App\Desk\DeskLogin;
 use App\Desk\Settings;
 use App\Models\AiConnection;
 use App\Models\Setting;
@@ -98,13 +99,27 @@ class OnboardingTest extends TestCase
 
         $this->assertSame('trustno1', app(Settings::class)->masterPassword());
         $this->assertSame('trustno1', Setting::find('master_password')?->value);
-        $this->assertTrue(session('desk_authed'));
+        $this->assertTrue(DeskLogin::check(app('session.store')));
+        $this->assertStringNotContainsString('trustno1', (string) session('desk_authed'));
 
-        // Set once, the desk token gate now enforces it on every other API call — exactly
-        // like it always has for an operator-configured MASTER_PASSWORD, just persisted
-        // through Settings instead of .env.
+        // The browser that set it stays logged in through its session; any other client
+        // now needs the password, exactly as for an operator-configured MASTER_PASSWORD.
+        $this->getJson('/api/onboarding')->assertOk();
+        $this->flushSession();
         $this->getJson('/api/onboarding')->assertUnauthorized();
         $this->getJson('/api/onboarding', ['X-Desk-Token' => 'trustno1'])->assertOk();
+    }
+
+    public function test_later_steps_work_with_the_csrf_token_rotated_by_the_password_step(): void
+    {
+        $this->get('/login');
+        $staleToken = session()->token();
+
+        $fresh = $this->postJson('/api/onboarding/master-password', ['password' => 'trustno1'])->assertOk()->json('csrf_token');
+
+        $this->assertNotSame($staleToken, $fresh);
+        $this->postJson('/api/onboarding/openrouter', [], ['X-CSRF-TOKEN' => $staleToken])->assertStatus(419);
+        $this->postJson('/api/onboarding/openrouter', [], ['X-CSRF-TOKEN' => $fresh])->assertStatus(422);
     }
 
     public function test_master_password_step_accepts_an_empty_password_for_a_trusted_local_desk(): void

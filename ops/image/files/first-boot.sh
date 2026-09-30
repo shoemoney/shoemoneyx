@@ -98,7 +98,7 @@ MASTER_PASSWORD=$MASTER_PASSWORD
 DB_PASSWORD=$DB_PASSWORD
 
 MASTER_PASSWORD is the bootstrap password (this instance's ID); onboarding makes you replace it.
-It gates every page and the API (X-Desk-Token header or ?token=).
+It gates every page and the API (log in at /login; scripts send the X-Desk-Token header).
 DB_PASSWORD is the local 'shoemoneyx' MariaDB user, reachable only from the compose network.
 EOF
 chmod 600 "$CREDS_FILE"

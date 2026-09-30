@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 use App\Desk\Strategies\CustomStrategy;
+use App\Desk\Strategies\JsonPluginStrategy;
 use App\Desk\Strategies\MeanReversionStrategy;
 
 /*
@@ -26,7 +27,7 @@ return [
     'strategies' => [
         'mr' => MeanReversionStrategy::class,
         'custom' => CustomStrategy::class,
-        'json' => \App\Desk\Strategies\JsonPluginStrategy::class,
+        'json' => JsonPluginStrategy::class,
     ],
 
     // Which Coinbase products form the tradeable universe.
@@ -211,8 +212,8 @@ return [
         'base_url' => env('WORLDMONITOR_URL', ''),
     ],
 
-    // One master password gating every page (web session) and the API
-    // (X-Desk-Token header or ?token=). Empty = gate off, private network only.
+    // One master password gating every page and the API. Browsers use the login session;
+    // scripts send it as the X-Desk-Token header. Empty = gate off, private network only.
     'master_password' => env('MASTER_PASSWORD'),
 
     // Shown on the login page while the master password is still the bootstrap value (no

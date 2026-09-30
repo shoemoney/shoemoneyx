@@ -17,6 +17,9 @@ class Settings
 {
     private const CACHE_KEY = 'desk:settings';
 
+    /** Keys the generic settings API never returns or edits. */
+    public const SECRET_KEYS = ['master_password'];
+
     public function overrides(): array
     {
         return Cache::remember(self::CACHE_KEY, 30, function () {
@@ -110,7 +113,7 @@ class Settings
         $base = config('desk');
         unset($base['strategies'], $base['telegram']);
 
-        return array_replace_recursive($base, $strategy->defaults(), $this->overrides());
+        return Arr::except(array_replace_recursive($base, $strategy->defaults(), $this->overrides()), self::SECRET_KEYS);
     }
 
     /** @return array<string, mixed> flattened dotted view of merged params (for the settings UI) */
