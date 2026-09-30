@@ -19,3 +19,4 @@ Schedule::command('desk:report --send')->dailyAt('23:59');
 Schedule::command('agent:backtest-loop')->everyFifteenMinutes()->withoutOverlapping();
 Schedule::command('strategies:sync')->everySixHours()->withoutOverlapping();
 Schedule::command('hub:report-contests')->everyMinute()->withoutOverlapping();
+Schedule::command('model:prune')->daily();

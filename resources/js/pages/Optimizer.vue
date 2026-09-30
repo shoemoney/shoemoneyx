@@ -258,7 +258,7 @@ function subscribe() {
                 toastMs("error", toastSeconds.value),
             );
     });
-    echo.channel("optimizer")
+    echo.private("optimizer")
         .listen(".backtest.scored", (e) => {
             stamps.push(Date.now());
             stamps = stamps.filter((t) => t > Date.now() - 5000);

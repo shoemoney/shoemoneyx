@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Events;
 
 use App\Models\OptimizerRound;
-use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 
@@ -19,7 +19,7 @@ class OptimizerRoundScored implements ShouldBroadcastNow
 
     public function broadcastOn(): array
     {
-        return [new Channel('optimizer')];
+        return [new PrivateChannel('optimizer')];
     }
 
     public function broadcastAs(): string
