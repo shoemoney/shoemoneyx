@@ -105,6 +105,7 @@ class DeskController extends Controller
         if (! is_numeric($value) || ! is_finite((float) $value) || ($minExclusive ? $value <= $min : $value < $min) || $value > $max) {
             abort(422, sprintf('%s must be a number %s %s and <= %s', $bare, $minExclusive ? '>' : '>=', $min, $max));
         }
+        abort_if($bare === 'size.max_open_positions' && floor((float) $value) !== (float) $value, 422, 'size.max_open_positions must be a whole number');
     }
 
     public function deleteSetting(string $key, Settings $settings): JsonResponse

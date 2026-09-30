@@ -136,4 +136,13 @@ class PluginSizingCapsTest extends TestCase
         $this->putJson('/api/settings', ['key' => 'size.kelly_cap_pct', 'value' => [5]])->assertStatus(422);
         $this->putJson('/api/settings', ['key' => 'per_product.BTC-USD.size', 'value' => ['kelly_cap_pct' => [5]]])->assertStatus(422);
     }
+
+    public function test_max_open_positions_must_be_integral(): void
+    {
+        config(['cache.default' => 'array']);
+        $this->putJson('/api/settings', ['key' => 'size.max_open_positions', 'value' => 2.5])->assertStatus(422);
+        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['max_open_positions' => 2.5]])->assertStatus(422);
+        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['max_open_positions' => '2']])->assertOk();
+        $this->putJson('/api/settings', ['key' => 'size.max_open_positions', 'value' => '3'])->assertOk();
+    }
 }
