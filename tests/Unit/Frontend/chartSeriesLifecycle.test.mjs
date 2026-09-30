@@ -11,9 +11,8 @@ const api = { get(url) { return new Promise((resolve, reject) => requests.push({
 let timers = new Map(), timerId = 0;
 globalThis.setInterval = (fn) => { const id = ++timerId; timers.set(id, fn); return id; };
 globalThis.clearInterval = (id) => timers.delete(id);
-globalThis.document = { hidden: false, listeners: new Set(), addEventListener(_n, fn) { this.listeners.add(fn); }, removeEventListener(_n, fn) { this.listeners.delete(fn); }, emit() { for (const fn of [...this.listeners]) fn(); } };
+globalThis.document = { hidden: false, listeners: new Set(), addEventListener(_n, fn) { this.listeners.add(fn); }, removeEventListener(_n, fn) { this.listeners.delete(fn); }, querySelector: () => ({ content: 'csrf' }), emit() { for (const fn of [...this.listeners]) fn(); } };
 globalThis.window = { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }), addEventListener() {}, removeEventListener() {} };
-globalThis.localStorage = { getItem: (key) => (key === 'desk_token' ? 'token' : null) };
 function deferredRequests() { return requests.splice(0); }
 async function instance(file, initialProps, exposed) {
     const { descriptor } = parse(await fs.readFile(new URL(file, base), 'utf8'), { filename: file });
@@ -103,7 +102,8 @@ assert.equal(page.result.loading.value, true);
 
 const initial = nextFetch();
 assert.match(initial.url, /\/api\/udf\/history\?.*symbol=BTC-USD.*resolution=1/);
-assert.equal(initial.init.headers['X-Desk-Token'], 'token', 'the desk token rides along on every history fetch');
+assert.equal(initial.init.headers['X-CSRF-TOKEN'], 'csrf', 'the session CSRF token rides along on every history fetch');
+assert.equal(initial.init.headers['X-Desk-Token'], undefined, 'the master password never leaves the server');
 respondJson(initial, history([100, 160, 220]));
 await settle();
 assert.equal(page.result.loading.value, false, 'loading clears once the first bar set lands');

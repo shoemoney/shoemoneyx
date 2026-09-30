@@ -78,7 +78,10 @@ case "${1:-help}" in
             for i in $(seq 1 "$n"); do nohup php artisan queue:work redis --queue=backtests,backtests-light --tries=1 --timeout=3600 --sleep=2 --max-jobs=200 --name="worker-$(hostname -s)-$i" > storage/logs/worker-$i.log 2>&1 &! done
             echo "$n workers on queue=backtests → storage/logs/worker-*.log   (stop: pkill -f queue=backtests)" ;;
   sweep)    shift; art desk:sweep "$@" ;;
-  image)    docker buildx create --use --name shoemoneyx 2>/dev/null || true
+  image)    if [[ "${2:-}" == *--push* ]]; then
+              [[ -z "$(command git status --porcelain)" ]] || { echo "refusing --push from a dirty tree (untracked/uncommitted files would ship in the public image) - commit or clean first" >&2; exit 1; }
+            else echo "note: local image builds use your working tree; never push one built from a dirty tree" >&2; fi
+            docker buildx create --use --name shoemoneyx 2>/dev/null || true
             docker buildx build --platform linux/arm64,linux/amd64 -t ghcr.io/shoemoney/shoemoneyx:latest ${2:---load} . ;;
   compose)  docker/up.sh ;;
   push)     shift; git add -A; git commit -qm "${1:-wip $(date +%F\ %H:%M)}" || true; git push -q origin HEAD; echo "pushed $(git rev-parse --short HEAD)" ;;

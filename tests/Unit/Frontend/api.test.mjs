@@ -40,3 +40,42 @@ test('request failures still reach page error handling', async (t) => {
     }));
     await assert.rejects(api.put('/settings', { key: 'mode', value: 'invalid' }), /mode must be paper or live/);
 });
+
+test('logged-in browser sends the session CSRF token, never a stored password', async (t) => {
+    globalThis.document = { querySelector: (sel) => (sel === 'meta[name="csrf-token"]' ? { content: 'csrf-abc' } : null) };
+    t.after(() => { delete globalThis.document; });
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        calls.push(options);
+        return { ok: true, text: async () => '{}' };
+    });
+
+    await api.post('/desk/stop');
+
+    assert.equal(calls[0].headers['X-CSRF-TOKEN'], 'csrf-abc');
+    assert.equal(calls[0].headers['X-Desk-Token'], undefined);
+});
+
+test('an expired or logged-out session sends the browser back to login', async (t) => {
+    const visited = [];
+    globalThis.location = { assign: (url) => visited.push(url) };
+    t.after(() => { delete globalThis.location; });
+    t.mock.method(globalThis, 'fetch', async () => ({
+        ok: false, status: 401, statusText: 'Unauthorized', text: async () => '{"message":"bad desk token"}',
+    }));
+
+    await assert.rejects(api.get('/status'), /bad desk token/);
+    assert.deepEqual(visited, ['/login']);
+});
+
+test('a rotated CSRF token reloads the page to pick up the fresh one', async (t) => {
+    let reloaded = 0;
+    globalThis.location = { assign() {}, reload: () => { reloaded++; } };
+    t.after(() => { delete globalThis.location; });
+    t.mock.method(globalThis, 'fetch', async () => ({
+        ok: false, status: 419, statusText: 'Page Expired', text: async () => '{"message":"CSRF token mismatch"}',
+    }));
+
+    await assert.rejects(api.post('/desk/stop'), /CSRF token mismatch/);
+    assert.equal(reloaded, 1);
+});
