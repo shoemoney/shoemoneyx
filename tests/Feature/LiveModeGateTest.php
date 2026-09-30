@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Desk\Settings;
 use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -140,6 +141,32 @@ class LiveModeGateTest extends TestCase
 
         $this->artisan('desk:ctl', ['action' => 'set', 'arg' => 'mode', 'value' => 'paper'])->assertSuccessful();
         $this->assertSame('paper', app(Settings::class)->mode());
+    }
+
+    public function test_single_value_settings_reject_descendants_and_arrays(): void
+    {
+        foreach (['mode', 'strategy', 'exchange', 'live_confirm', 'use_scheduler'] as $key) {
+            $this->putJson('/api/settings', ['key' => $key.'.x', 'value' => 'live'])->assertStatus(422);
+            $this->putJson('/api/settings', ['key' => $key, 'value' => ['a' => 1]])->assertStatus(422);
+        }
+
+        $this->assertSame('paper', app(Settings::class)->mode());
+        $this->assertSame([], Setting::where('key', 'like', 'mode%')->get()->all());
+    }
+
+    public function test_legacy_nested_or_array_mode_rows_do_not_crash_the_desk(): void
+    {
+        Setting::create(['key' => 'mode.x', 'value' => 'live']);
+        Setting::create(['key' => 'strategy', 'value' => ['a' => 1]]);
+        Cache::forget('desk:settings');
+
+        $this->assertSame('paper', app(Settings::class)->mode());
+        $this->assertSame('mr', app(Settings::class)->strategyKey());
+        $this->getJson('/api/status')->assertOk();
+
+        (require database_path('migrations/2026_09_30_000004_purge_nested_scalar_setting_rows.php'))->up();
+        $this->assertNull(Setting::find('mode.x'));
+        $this->assertNull(Setting::find('strategy'));
     }
 
     public function test_onboarding_only_ever_writes_paper_mode(): void

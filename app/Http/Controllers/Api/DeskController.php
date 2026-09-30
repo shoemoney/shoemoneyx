@@ -71,6 +71,8 @@ class DeskController extends Controller
         $data = $request->validate(['key' => 'required|string|max:120', 'value' => 'present']);
         abort_unless(Settings::isCanonicalKey($data['key']), 422, 'invalid setting key');
         abort_if(Settings::isSecret($data['key']), 422, 'change the master password from onboarding');
+        abort_if(Settings::isUnderScalarKey($data['key']), 422, "{$data['key']}: nothing may be nested under a single-value setting");
+        abort_if(Settings::isScalarKey($data['key']) && is_array($data['value']), 422, "{$data['key']} must be a single value");
         $v = ParamNormalizer::normalize($data['key'], $data['value']);
         $this->assertSaneRiskValue($data['key'], $v);
         if ($data['key'] === 'mode' && ! in_array($v, ['paper', 'live'], true)) {

@@ -58,7 +58,12 @@ class OnboardingController extends Controller
         }
 
         $changing = ! $settings->needsPasswordSetup();
-        $rules = ['password' => 'required|string|min:12|max:200|confirmed'];
+        $rules = ['password' => ['required', 'string', 'min:12', 'confirmed', function ($attribute, $value, $fail) {
+            // bcrypt reads only the first 72 bytes, so a longer password would be silently truncated.
+            if (is_string($value) && strlen($value) > 72) {
+                $fail('Use at most 72 bytes: longer passwords are silently cut short by the hashing algorithm.');
+            }
+        }]];
         if ($changing) {
             $rules['current_password'] = 'required|string|max:200';
         }

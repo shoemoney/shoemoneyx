@@ -51,7 +51,29 @@ class Settings
      */
     public static function isStorableKey(string $key): bool
     {
-        return self::isCanonicalKey($key) && ($key === 'master_password' || ! self::isSecret($key));
+        return self::isCanonicalKey($key)
+            && ($key === 'master_password' || ! self::isSecret($key))
+            && ! self::isUnderScalarKey($key);
+    }
+
+    /** Top-level settings read as one plain value; nothing may be nested beneath them. */
+    public const SCALAR_KEYS = ['mode', 'strategy', 'exchange', 'live_confirm', 'use_scheduler', 'cycle_budget_seconds'];
+
+    public static function isScalarKey(string $key): bool
+    {
+        return in_array($key, self::SCALAR_KEYS, true);
+    }
+
+    /** True for mode.x and the like: a descendant would turn the scalar into an array. */
+    public static function isUnderScalarKey(string $key): bool
+    {
+        foreach (self::SCALAR_KEYS as $scalar) {
+            if (str_starts_with($key, $scalar.'.')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function overrides(): array
@@ -103,7 +125,7 @@ class Settings
 
     public function mode(): string
     {
-        return (string) $this->get('mode', 'paper');
+        return $this->scalarString('mode', 'paper');
     }
 
     /**
@@ -214,9 +236,17 @@ class Settings
         $this->set('master_password', Hash::make($password));
     }
 
+    /** A stored non-scalar value (legacy array rows) falls back to the config default instead of crashing. */
+    private function scalarString(string $key, string $default): string
+    {
+        $value = $this->get($key, $default);
+
+        return is_scalar($value) ? (string) $value : (string) config('desk.'.$key, $default);
+    }
+
     public function strategyKey(): string
     {
-        return (string) $this->get('strategy', 'mr');
+        return $this->scalarString('strategy', 'mr');
     }
 
     /** Full merged parameter tree for a strategy. */

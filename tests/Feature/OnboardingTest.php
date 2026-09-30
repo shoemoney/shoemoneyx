@@ -158,13 +158,23 @@ class OnboardingTest extends TestCase
         $this->assertNull(Setting::find('master_password'));
     }
 
+    public function test_master_password_limit_is_72_bytes_not_characters(): void
+    {
+        $tooLong = str_repeat('a', 73);
+        $this->postJson('/api/onboarding/master-password', ['password' => $tooLong, 'password_confirmation' => $tooLong])
+            ->assertStatus(422)->assertJsonValidationErrors('password');
+
+        // 24 three-byte characters = 72 bytes exactly.
+        $multiByte = str_repeat('€', 24);
+        $this->assertSame(72, strlen($multiByte));
+        $this->postJson('/api/onboarding/master-password', ['password' => $multiByte, 'password_confirmation' => $multiByte])->assertOk();
+        $this->assertTrue(app(Settings::class)->verifyMasterPassword($multiByte));
+    }
+
     public function test_master_password_step_enforces_length_limits(): void
     {
         $short = str_repeat('a', 11);
         $this->postJson('/api/onboarding/master-password', ['password' => $short, 'password_confirmation' => $short])->assertStatus(422)->assertJsonValidationErrors('password');
-
-        $long = str_repeat('a', 201);
-        $this->postJson('/api/onboarding/master-password', ['password' => $long, 'password_confirmation' => $long])->assertStatus(422)->assertJsonValidationErrors('password');
 
         $min = str_repeat('a', 12);
         $this->postJson('/api/onboarding/master-password', ['password' => $min, 'password_confirmation' => $min])->assertOk();
