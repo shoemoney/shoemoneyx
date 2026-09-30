@@ -14,6 +14,7 @@ use App\Models\DeskEvent;
 use App\Models\Fill;
 use App\Models\OrderIntent;
 use App\Models\Position;
+use ccxt\DuplicateOrderId;
 use ccxt\InsufficientFunds;
 use ccxt\RequestTimeout;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -708,6 +709,23 @@ class LiveOrderIdempotencyTest extends TestCase
 
         $this->assertSame('unknown', $executor->buy('BTC-USD', 100.0, 100.0)->status);
         $this->assertSame(1, count($this->venue->attempts));
+    }
+
+    public function test_a_ccxt_duplicate_order_id_stays_pending_until_the_original_is_found(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->has['fetchOrders'] = true;
+        $client->createThrows = new DuplicateOrderId('duplicate');
+        $executor = new CcxtExecutor($client, 'stubex');
+
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $intent = OrderIntent::sole();
+        $this->assertSame('pending', $intent->status);
+        $client->stubOrderList = [['id' => 'original-1', 'clientOrderId' => $intent->client_order_id, 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0, 'fee' => ['cost' => 0.0]]];
+
+        $this->assertSame('filled', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $this->assertCount(1, $client->clientOrderIds);
+        $this->assertSame('resolved', $intent->fresh()->status);
     }
 
     public function test_a_ccxt_resend_after_grace_reuses_the_client_id(): void
