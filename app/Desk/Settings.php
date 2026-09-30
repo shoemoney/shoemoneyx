@@ -8,6 +8,7 @@ use App\Desk\Contracts\Strategy;
 use App\Models\Setting;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
 
 /**
  * Layered configuration: config/desk.php <- strategy defaults <- settings table.
@@ -106,38 +107,111 @@ class Settings
     }
 
     /**
-     * The effective master password: an onboarding-set override if one exists, else
-     * MASTER_PASSWORD from .env. The single source every gate (MasterPassword, DeskToken,
-     * DeskAuthController, app.blade.php) should read instead of config('desk.master_password')
-     * directly — it is how the onboarding wizard can set a password without an env edit.
-     * Falls back to the env value on a DB failure so the page shell (public demo included)
-     * never 500s over an unreachable settings table.
+     * The password the owner chose during setup, stored only as a Hash::make() hash. Null until
+     * they set one (an empty or malformed row counts as unset). The .env MASTER_PASSWORD is not
+     * this: it is a one-time bootstrap key, see bootstrapKey().
      */
-    public function masterPassword(): string
+    private function storedPasswordHash(): ?string
     {
         try {
-            $password = $this->get('master_password', '');
+            $stored = Arr::get($this->overrides(), 'master_password');
 
-            return is_array($password) ? (string) config('desk.master_password', '') : (string) $password;
+            return is_string($stored) && $stored !== '' ? $stored : null;
         } catch (\Throwable) {
-            return (string) config('desk.master_password', '');
+            return null;
+        }
+    }
+
+    /** MASTER_PASSWORD from .env: the EC2 instance ID on AMIs, the generated value from docker/up.sh. */
+    private function bootstrapKey(): string
+    {
+        return (string) config('desk.master_password', '');
+    }
+
+    /** True when any credential can open the desk: the owner's password or a bootstrap key. */
+    public function hasMasterPassword(): bool
+    {
+        return $this->storedPasswordHash() !== null || $this->bootstrapKey() !== '';
+    }
+
+    /**
+     * True while the .env bootstrap key is the only credential (the owner has not chosen a password
+     * yet). Drives the login hint; sessions that signed in with it are limited to the set-password screen.
+     */
+    public function masterPasswordIsBootstrap(): bool
+    {
+        return $this->storedPasswordHash() === null && $this->bootstrapKey() !== '';
+    }
+
+    /** True until the owner has chosen their own password, whether or not a bootstrap key exists. */
+    public function needsPasswordSetup(): bool
+    {
+        return $this->storedPasswordHash() === null;
+    }
+
+    public function verifyMasterPassword(string $candidate): bool
+    {
+        $hash = $this->storedPasswordHash();
+        if ($hash === null) {
+            return $this->isBootstrapKey($candidate);
+        }
+
+        try {
+            return Hash::check($candidate, $hash);
+        } catch (\Throwable) {
+            return false;
         }
     }
 
     /**
-     * True when the effective master password is still the .env value nobody has overridden
-     * from onboarding/Settings yet ("bootstrap" password) — false once an override row exists,
-     * regardless of what it's set to (including an explicit empty override). Drives the login
-     * page hint and the onboarding "you signed in with the bootstrap password" nudge. Fails
-     * quiet to false on a DB error, same posture as masterPassword().
+     * True when $candidate is the .env bootstrap key, which buyers paste by hand from a console
+     * column: surrounding whitespace and letter case are ignored (an instance ID is lowercase
+     * hex), still compared in constant time. Only this key is forgiving; the owner's own password
+     * is always exact. The owner's password may never equal it.
      */
-    public function masterPasswordIsBootstrap(): bool
+    public function isBootstrapKey(string $candidate): bool
     {
-        try {
-            return ! Arr::has($this->overrides(), 'master_password');
-        } catch (\Throwable) {
+        $bootstrap = strtolower(trim($this->bootstrapKey()));
+
+        return $bootstrap !== '' && hash_equals($bootstrap, strtolower(trim($candidate)));
+    }
+
+    /**
+     * verifyMasterPassword for the X-Desk-Token header, which arrives on every script request. A
+     * bcrypt check costs tens of milliseconds, so a success is remembered for a minute under a key
+     * derived from the token and the current credential (the token itself is never stored, and a
+     * password change makes the old key unreachable).
+     */
+    public function verifyToken(string $token): bool
+    {
+        if ($this->storedPasswordHash() === null) {
+            return $this->verifyMasterPassword($token);
+        }
+
+        $key = 'desk:token-ok:'.hash('sha256', $token."\0".$this->credentialFingerprintSource());
+        if (Cache::get($key) === true) {
+            return true;
+        }
+        if (! $this->verifyMasterPassword($token)) {
             return false;
         }
+        Cache::put($key, true, 60);
+
+        return true;
+    }
+
+    /**
+     * Stable string that changes whenever the credential does: the stored hash, else the bootstrap
+     * key, else empty (nothing can authenticate). DeskLogin keys its session fingerprint on it.
+     */
+    public function credentialFingerprintSource(): string
+    {
+        return $this->storedPasswordHash() ?? $this->bootstrapKey();
+    }
+
+    public function setMasterPassword(string $password): void
+    {
+        $this->set('master_password', Hash::make($password));
     }
 
     public function strategyKey(): string

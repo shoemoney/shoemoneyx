@@ -7,12 +7,17 @@ namespace Tests\Feature;
 use App\Support\SiteMetadata;
 use DOMDocument;
 use DOMXPath;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class SiteMetadataTest extends TestCase
 {
+    use RefreshDatabase;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -94,6 +99,8 @@ class SiteMetadataTest extends TestCase
         }
         $this->assertSame('https://shoemoneyx.com/chart', $this->html('/chart/BTC-USD')->evaluate('string(//link[@rel="canonical"]/@href)'));
         config(['site.demo' => false]);
+        // The private desk checks its login gate in the database; only public pages must stay DB-free.
+        Event::forget(QueryExecuted::class);
         $this->get('/robots.txt')->assertOk()->assertSee('Disallow: /', false);
         foreach (['/llms.txt', '/llms-full.txt', '/sitemap.xml', '/ai.txt', '/.well-known/ai.txt', '/index.md'] as $path) {
             $this->get($path)->assertNotFound();

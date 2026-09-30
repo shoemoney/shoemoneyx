@@ -10,8 +10,9 @@ use Closure;
 use Illuminate\Http\Request;
 
 /**
- * Web gate: when MASTER_PASSWORD is set, every page requires the login
- * session first. Empty password = gate off (trusted local desk).
+ * Web gate: every page requires the login session first. Until the owner has chosen their own
+ * password (a session that signed in with the bootstrap key, or a fresh install with no
+ * credential at all), the only page available is the set-password screen under /onboarding.
  */
 class MasterPassword
 {
@@ -22,13 +23,18 @@ class MasterPassword
             return $next($request);
         }
 
-        $master = app(Settings::class)->masterPassword();
-        if ($master !== '' && ! DeskLogin::check($request->session())) {
+        $settings = app(Settings::class);
+        $onboarding = $request->is('onboarding', 'onboarding/*');
+
+        if (! $settings->hasMasterPassword()) {
+            return $onboarding ? $next($request) : redirect('/onboarding');
+        }
+
+        if (! DeskLogin::check($request->session())) {
             return redirect('/login');
         }
 
-        // DESK_REQUIRE_MASTER_PASSWORD fails closed: no password yet means onboarding only.
-        if ($master === '' && config('desk.require_master_password') && ! $request->is('onboarding', 'onboarding/*')) {
+        if ($settings->needsPasswordSetup() && ! $onboarding) {
             return redirect('/onboarding');
         }
 

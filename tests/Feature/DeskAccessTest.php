@@ -39,13 +39,13 @@ class DeskAccessTest extends TestCase
         Log::shouldNotHaveReceived('warning');
     }
 
-    public function test_all_page_data_is_available_without_a_token_and_ignores_stale_credentials(): void
+    public function test_all_page_data_is_available_to_the_owner_and_ignores_the_retired_api_token(): void
     {
-        // Old deployments may retain this setting or browsers may still send the retired header.
+        // Old deployments may retain this setting or scripts may still send it in the query string.
         // Neither is an access credential anymore.
         config(['desk.api_token' => 'retired-setting']);
 
-        foreach ([['', []], ['?token=outdated', []], ['', ['X-Desk-Token' => 'outdated']]] as [$query, $headers]) {
+        foreach ([['', []], ['?token=outdated', []]] as [$query, $headers]) {
             foreach (['settings', 'products', 'backtests', 'runs', 'candidates', 'fills',
                 'optimizer/champions', 'optimizer/rounds', 'optimizer/candidates?coin=BTC-USD',
                 'udf/config', 'udf/time', 'udf/search'] as $endpoint) {
@@ -58,13 +58,21 @@ class DeskAccessTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_the_retired_api_token_value_is_rejected_as_a_credential(): void
+    {
+        config(['desk.api_token' => 'retired-setting']);
+        $this->getJson('/api/settings', ['X-Desk-Token' => 'retired-setting'])->assertUnauthorized();
+        $this->getJson('/api/settings', ['X-Desk-Token' => 'outdated'])->assertUnauthorized();
+    }
+
     public function test_settings_changes_and_reset_work_without_a_shared_secret(): void
     {
         config(['desk.api_token' => 'retired-setting']);
         $this->putJson('/api/settings', ['key' => 'size.kelly_cap_pct', 'value' => '0.04'])->assertOk();
         $this->assertSame(0.04, $this->getJson('/api/settings')->json('overrides')['size.kelly_cap_pct']);
         $this->deleteJson('/api/settings/size.kelly_cap_pct?token=outdated')->assertOk();
-        $this->assertDatabaseCount('settings', 0);
+        // Only the owner's password row remains.
+        $this->assertDatabaseCount('settings', 1);
         Http::assertNothingSent();
     }
 
@@ -79,7 +87,7 @@ class DeskAccessTest extends TestCase
         $this->app->instance(Chief::class, $chief);
 
         foreach (['halt', 'resume', 'start', 'stop'] as $action) {
-            $this->postJson('/api/desk/'.$action, [], ['X-Desk-Token' => 'outdated'])->assertOk()->assertJsonPath('ok', true);
+            $this->postJson('/api/desk/'.$action)->assertOk()->assertJsonPath('ok', true);
         }
 
         Http::assertNothingSent();

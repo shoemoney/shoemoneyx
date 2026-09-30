@@ -58,10 +58,11 @@ if [[ ! -f "$ENV_FILE" ]]; then
     [REVERB_SERVER_HOST]="0.0.0.0"
     [REVERB_SERVER_PORT]="8812"
   )
-  # An image's first boot can hand in a known bootstrap password (the EC2 instance ID) and the
-  # login-page hint / exposed-desk flag the app reads; a plain self-hoster leaves these unset.
+  # An image's first boot can hand in a known one-time first-login key (the EC2 instance ID) and the
+  # login-page hint and AWS region the app reads; a plain self-hoster leaves these unset.
   [[ -n "${MASTER_PASSWORD_HINT:-}" ]] && OVERRIDES[MASTER_PASSWORD_HINT]="$MASTER_PASSWORD_HINT"
-  [[ -n "${DESK_REQUIRE_MASTER_PASSWORD:-}" ]] && OVERRIDES[DESK_REQUIRE_MASTER_PASSWORD]="$DESK_REQUIRE_MASTER_PASSWORD"
+  [[ -n "${DESK_AWS_REGION:-}" ]] && OVERRIDES[DESK_AWS_REGION]="$DESK_AWS_REGION"
+  [[ -n "${DESK_FIRST_LOGIN_GUIDE:-}" ]] && OVERRIDES[DESK_FIRST_LOGIN_GUIDE]="$DESK_FIRST_LOGIN_GUIDE"
   for key in "${!OVERRIDES[@]}"; do
     set_env "$key" "${OVERRIDES[$key]}"
   done
@@ -91,4 +92,4 @@ MASTER_PASSWORD="$(grep '^MASTER_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 echo
 echo "shoemoneyx desk is up: https://localhost"
 echo "MASTER_PASSWORD=$MASTER_PASSWORD"
-echo "(log in with it in the browser; scripts send it as the X-Desk-Token header)"
+echo "(one-time key: log in with it in the browser, then choose your own password; scripts use that password as the X-Desk-Token header)"

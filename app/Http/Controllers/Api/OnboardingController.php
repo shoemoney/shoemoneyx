@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Ai\CurrentUser;
 use App\Ai\OpenRouterOAuth;
 use App\Desk\Chief;
+use App\Desk\DeskAuthThrottle;
 use App\Desk\DeskLogin;
 use App\Desk\Onboarding\OnboardingWizard;
 use App\Desk\Settings;
@@ -16,6 +17,7 @@ use App\Models\AiConnection;
 use App\Strategies\Sync\StrategySync;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 /**
  * First-run wizard: no key -> paper trading, in under five minutes. Each step but
@@ -49,20 +51,37 @@ class OnboardingController extends Controller
 
     private function masterPassword(Request $request, OnboardingWizard $wizard): JsonResponse
     {
-        $required = (bool) config('desk.require_master_password');
-        $exposedMessage = 'A password is required because this desk is reachable from the internet.';
+        $settings = app(Settings::class);
 
-        $data = $request->validate(
-            ['password' => $required ? 'required|string|min:12|max:200' : 'nullable|string|max:200'],
-            ['password.required' => $exposedMessage, 'password.min' => $exposedMessage],
-        );
-        $password = (string) ($data['password'] ?? '');
+        if (DeskAuthThrottle::tooManyFailures($request)) {
+            DeskAuthThrottle::lockout($request);
+        }
 
-        app(Settings::class)->set('master_password', $password);
+        $changing = ! $settings->needsPasswordSetup();
+        $rules = ['password' => 'required|string|min:12|max:200|confirmed'];
+        if ($changing) {
+            $rules['current_password'] = 'required|string|max:200';
+        }
+        $data = $request->validate($rules, [
+            'password.min' => 'Choose a password of at least 12 characters.',
+            'password.confirmed' => 'The two passwords do not match.',
+        ]);
+
+        if ($changing && ! $settings->verifyMasterPassword($data['current_password'])) {
+            DeskAuthThrottle::recordFailure($request);
+
+            throw ValidationException::withMessages(['current_password' => 'The current password is wrong.']);
+        }
+
+        if ($settings->isBootstrapKey($data['password'])) {
+            throw ValidationException::withMessages(['password' => 'Choose a password different from the first-login key.']);
+        }
+
+        $settings->setMasterPassword($data['password']);
         DeskLogin::grant($request->session());
-        $wizard->markDone('master-password', ['password_set' => $password !== '']);
+        $wizard->markDone('master-password', ['password_set' => true]);
 
-        return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => $password !== '', 'csrf_token' => $request->session()->token()]);
+        return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => true, 'csrf_token' => $request->session()->token()]);
     }
 
     private function openrouter(Request $request, OnboardingWizard $wizard): JsonResponse

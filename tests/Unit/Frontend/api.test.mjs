@@ -79,3 +79,19 @@ test('a rotated CSRF token reloads the page to pick up the fresh one', async (t)
     await assert.rejects(api.post('/desk/stop'), /CSRF token mismatch/);
     assert.equal(reloaded, 1);
 });
+
+test('a session limited to the set-password screen is sent to onboarding, once', async (t) => {
+    const visited = [];
+    globalThis.location = { pathname: '/dashboard', assign: (url) => visited.push(url) };
+    t.after(() => { delete globalThis.location; });
+    t.mock.method(globalThis, 'fetch', async () => ({
+        ok: false, status: 403, statusText: 'Forbidden', text: async () => '{"error":"set_password_required"}',
+    }));
+
+    await assert.rejects(api.get('/status'), /set_password_required/);
+    assert.deepEqual(visited, ['/onboarding']);
+
+    globalThis.location.pathname = '/onboarding';
+    await assert.rejects(api.get('/status'), /set_password_required/);
+    assert.deepEqual(visited, ['/onboarding']);
+});

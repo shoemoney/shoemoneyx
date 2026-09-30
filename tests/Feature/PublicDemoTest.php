@@ -6,13 +6,18 @@ namespace Tests\Feature;
 
 use App\Desk\Chief;
 use App\Desk\Desk;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class PublicDemoTest extends TestCase
 {
+    use RefreshDatabase;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -71,6 +76,8 @@ class PublicDemoTest extends TestCase
         $bank = $this->getJson('/api/status')->assertJsonPath('demo', true)->json('bank');
         $this->assertEqualsWithDelta($bank['cash'] + $bank['positions_value'], $bank['equity'], .001);
         config(['site.demo' => false]);
+        // The private desk checks its login gate in the database; only demo pages must stay DB-free.
+        Event::forget(QueryExecuted::class);
         $this->get('/dashboard')->assertOk()->assertDontSee('INTERACTIVE DEMO')->assertSee('data-demo="false"', false);
     }
 }

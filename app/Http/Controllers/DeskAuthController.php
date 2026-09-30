@@ -15,7 +15,11 @@ class DeskAuthController extends Controller
 {
     public function show(Request $request): View|RedirectResponse
     {
-        if (app(Settings::class)->masterPassword() === '' || DeskLogin::check($request->session())) {
+        $settings = app(Settings::class);
+        if (! $settings->hasMasterPassword()) {
+            return redirect('/onboarding');
+        }
+        if (DeskLogin::check($request->session())) {
             return redirect('/');
         }
 
@@ -30,11 +34,12 @@ class DeskAuthController extends Controller
             DeskAuthThrottle::lockout($request);
         }
 
-        $master = app(Settings::class)->masterPassword();
-        if ($master !== '' && hash_equals($master, (string) $request->input('password'))) {
+        $settings = app(Settings::class);
+        if ($settings->hasMasterPassword() && $settings->verifyMasterPassword((string) $request->input('password'))) {
             DeskLogin::grant($request->session());
 
-            return redirect('/');
+            // The bootstrap key is one-time: its session can only reach the set-password screen.
+            return redirect($settings->needsPasswordSetup() ? '/onboarding' : '/');
         }
 
         DeskAuthThrottle::recordFailure($request);

@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Desk\Chief;
 use App\Desk\Desk;
+use App\Desk\DeskAuthThrottle;
 use App\Desk\EndOfDayReport;
 use App\Desk\Exceptions\CycleInProgressException;
 use App\Desk\Settings;
@@ -21,6 +22,7 @@ use App\Support\ParamNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class DeskController extends Controller
 {
@@ -77,6 +79,9 @@ class DeskController extends Controller
         if ($data['key'] === 'strategy' && ! isset(config('desk.strategies')[$v])) {
             abort(422, 'unknown strategy');
         }
+        if ($data['key'] === 'mode' && $v === 'live') {
+            $this->requireLivePassword($request, $settings);
+        }
         $settings->set($data['key'], $v);
 
         return response()->json(['ok' => true, 'key' => $data['key'], 'value' => $v]);
@@ -131,10 +136,35 @@ class DeskController extends Controller
         }
     }
 
-    public function deleteSetting(string $key, Settings $settings): JsonResponse
+    /**
+     * Going live needs the master password typed again, even from a logged-in browser (logins last
+     * about a year) and even with a valid X-Desk-Token: the header alone is not enough.
+     */
+    private function requireLivePassword(Request $request, Settings $settings): void
+    {
+        if (DeskAuthThrottle::tooManyFailures($request)) {
+            DeskAuthThrottle::lockout($request);
+        }
+
+        $password = $request->input('password');
+        if (! is_string($password) || $password === '') {
+            throw ValidationException::withMessages(['password' => 'password required to go live']);
+        }
+        if (! $settings->verifyMasterPassword($password)) {
+            DeskAuthThrottle::recordFailure($request);
+
+            throw ValidationException::withMessages(['password' => 'wrong password']);
+        }
+    }
+
+    public function deleteSetting(string $key, Request $request, Settings $settings): JsonResponse
     {
         abort_unless(Settings::isCanonicalKey($key), 422, 'invalid setting key');
         abort_if(Settings::isSecret($key), 422, 'change the master password from onboarding');
+        // Dropping the override hands the mode back to DESK_MODE, which may be live.
+        if ($key === 'mode' && config('desk.mode') === 'live') {
+            $this->requireLivePassword($request, $settings);
+        }
         $settings->forget($key);
 
         return response()->json(['ok' => true]);

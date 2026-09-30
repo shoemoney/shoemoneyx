@@ -11,6 +11,7 @@ use App\Exchange\Contracts\MarketData;
 use App\Models\PaperLedger;
 use App\Models\Position;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 
 class DeskControl extends Command
 {
@@ -61,8 +62,8 @@ class DeskControl extends Command
             case 'paper-reset':
                 // Children first: MariaDB refuses the parent delete when a cascading child row is locked by another session.
                 $ids = Position::mode('paper')->pluck('id');
-                \Illuminate\Support\Facades\DB::table('risk_checks')->whereIn('position_id', $ids)->delete();
-                \Illuminate\Support\Facades\DB::table('fills')->whereIn('position_id', $ids)->update(['position_id' => null]);
+                DB::table('risk_checks')->whereIn('position_id', $ids)->delete();
+                DB::table('fills')->whereIn('position_id', $ids)->update(['position_id' => null]);
                 Position::mode('paper')->delete();
                 PaperLedger::truncate();
                 $this->info('paper book reset; starting cash will be re-deposited on next use');
@@ -70,6 +71,14 @@ class DeskControl extends Command
             case 'set':
                 $v = $this->argument('value');
                 $v = is_numeric($v) ? $v + 0 : (in_array($v, ['true', 'false'], true) ? $v === 'true' : $v);
+                if ($this->argument('arg') === 'mode' && strtolower(trim((string) $v)) === 'live') {
+                    $password = $this->secret('Master password (required to go live)');
+                    if (! is_string($password) || $password === '' || ! $settings->verifyMasterPassword($password)) {
+                        $this->error('wrong password, mode not changed');
+
+                        return self::FAILURE;
+                    }
+                }
                 $settings->set((string) $this->argument('arg'), $v);
                 $this->info('set '.$this->argument('arg').' = '.json_encode($v));
                 break;

@@ -137,18 +137,25 @@ if [[ "$UP" -eq 1 ]]; then
 fi
 
 if [[ -n "$MASTER_PASSWORD" ]]; then
-  log "asserting GET /api/status is 200 with paper mode"
+  # The first-login key is one-time: as an X-Desk-Token it may only read onboarding and set the
+  # owner's password, so /api/status must refuse it while /api/onboarding answers.
+  log "asserting the bootstrap key is restricted to the set-password screen"
   BODY_FILE="$(mktemp)"
   HTTP_CODE="$(curl -k -s -m 10 -o "$BODY_FILE" -w '%{http_code}' \
     -H "X-Desk-Token: $MASTER_PASSWORD" "https://$PUBLIC_IP/api/status" || echo "000")"
   BODY="$(cat "$BODY_FILE")"
   rm -f "$BODY_FILE"
-  if [[ "$HTTP_CODE" != "200" ]]; then
-    fail "GET /api/status returned HTTP $HTTP_CODE (expected 200); body: $BODY"
-  elif [[ "$BODY" != *'"mode":"paper"'* ]]; then
-    fail "GET /api/status body did not contain \"mode\":\"paper\"; body: $BODY"
+  if [[ "$HTTP_CODE" != "403" || "$BODY" != *set_password_required* ]]; then
+    fail "GET /api/status with the bootstrap key returned HTTP $HTTP_CODE (expected 403 set_password_required); body: $BODY"
   else
-    log "OK: /api/status is 200 and paper mode"
+    log "OK: /api/status refuses the bootstrap key with set_password_required"
+  fi
+  HTTP_CODE="$(curl -k -s -m 10 -o /dev/null -w '%{http_code}' \
+    -H "X-Desk-Token: $MASTER_PASSWORD" "https://$PUBLIC_IP/api/onboarding" || echo "000")"
+  if [[ "$HTTP_CODE" != "200" ]]; then
+    fail "GET /api/onboarding with the bootstrap key returned HTTP $HTTP_CODE (expected 200)"
+  else
+    log "OK: /api/onboarding accepts the bootstrap key"
   fi
 fi
 
