@@ -13,9 +13,9 @@ use App\Desk\Strategies\DefinitionCheck;
 use App\Desk\Strategies\PluginMarkdownExporter;
 use App\Desk\Strategies\PluginPineExporter;
 use App\Desk\Strategies\SchemaMigrator;
+use App\Http\Controllers\Controller;
 use App\Hub\HubException;
 use App\Hub\Publisher;
-use App\Http\Controllers\Controller;
 use App\Jobs\RunBacktest;
 use App\Models\Backtest;
 use App\Models\Product;
@@ -28,6 +28,7 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Validation\ValidationException;
 
 class StrategyPluginController extends Controller
 {
@@ -43,9 +44,19 @@ class StrategyPluginController extends Controller
         return response()->json($plugin);
     }
 
+    private const MAX_DEFINITION_BYTES = 65536;
+
+    private function assertDefinitionSize(array $definition): void
+    {
+        if (strlen((string) json_encode($definition)) > self::MAX_DEFINITION_BYTES) {
+            throw ValidationException::withMessages(['definition' => 'definition must be at most 64KB of JSON']);
+        }
+    }
+
     public function validate(Request $request, DefinitionCheck $check): JsonResponse
     {
         $data = $request->validate(['definition' => 'required|array']);
+        $this->assertDefinitionSize($data['definition']);
 
         return response()->json($check->run($data['definition']));
     }
@@ -65,6 +76,7 @@ class StrategyPluginController extends Controller
         ]);
 
         $def = $data['definition'];
+        $this->assertDefinitionSize($def);
         $result = $check->run($def);
         if (! $result['valid']) {
             return response()->json($result, 422);

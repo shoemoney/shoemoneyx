@@ -44,7 +44,7 @@ case "${1:-help}" in
     pgrep -x redis-server >/dev/null || (brew services start redis >/dev/null 2>&1 || redis-server --daemonize yes)
     trap 'kill 0' EXIT INT TERM
     npm run dev &
-    art serve --port="${PORT:-8000}" &
+    APP_ENV=local APP_DEBUG=true art serve --port="${PORT:-8000}" &
     art queue:work --tries=1 --timeout=3600 &
     node feeder/feed.mjs &
     art desk:run

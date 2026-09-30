@@ -42,7 +42,7 @@ class FormulaTest extends TestCase
         $this->assertNull(Formula::evaluate(Formula::parse('0'), []));
         $this->assertNull(Formula::evaluate(Formula::parse('sold_qty * (0 - 5)'), ['sold_qty' => 10]));
 
-        $overflow = implode(' * ', array_fill(0, 31, '99999999999999999'));
+        $overflow = implode(' * ', array_fill(0, 15, '9999999999999999999999'));
         $this->assertNull(Formula::evaluate(Formula::parse($overflow), []));
     }
 

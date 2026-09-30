@@ -113,7 +113,7 @@ class Chief
 
         $wm = (string) $this->settings->get('worldmonitor.base_url', '');
         if ($wm !== '') {
-            $checks['worldmonitor'] = $this->try(fn () => Http::timeout(5)->get(rtrim($wm, '/').'/api/market/v1/get-fear-greed-index')->ok());
+            $checks['worldmonitor'] = $this->try(fn () => self::safeWorldMonitorUrl($wm) && Http::timeout(5)->get(rtrim($wm, '/').'/api/market/v1/get-fear-greed-index')->ok());
         }
 
         $green = count(array_filter($checks));
@@ -133,6 +133,30 @@ class Chief
             'mode' => $this->settings->mode(),
             'strategy' => $this->settings->strategyKey(),
         ];
+    }
+
+    /**
+     * WorldMonitor is a local instance, so loopback/LAN stay allowed; only non-http schemes and
+     * link-local/cloud-metadata addresses (169.254.0.0/16, fd00:ec2::/32) are refused.
+     */
+    public static function safeWorldMonitorUrl(string $url): bool
+    {
+        $parts = parse_url($url);
+        if (! in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) || empty($parts['host'])) {
+            return false;
+        }
+        $host = trim($parts['host'], '[]');
+        $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (gethostbynamel($host) ?: []);
+        foreach ($ips as $ip) {
+            if (str_starts_with($ip, '169.254.')) {
+                return false;
+            }
+            if (str_starts_with(strtolower($ip), 'fd00:ec2:') || str_starts_with(strtolower($ip), 'fe80:')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function try(callable $fn): bool
