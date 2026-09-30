@@ -16,7 +16,7 @@ class OrderIntent extends Model
     {
         return [
             'requested_usd' => 'float', 'decision_price' => 'float',
-            'context' => 'array', 'resolved_at' => 'datetime',
+            'context' => 'array', 'resolved_at' => 'datetime', 'sent_at' => 'datetime',
         ];
     }
 
@@ -36,6 +36,17 @@ class OrderIntent extends Model
             'status' => 'resolved', 'outcome' => $outcome, 'resolved_at' => now(),
             'note' => $note ?? $this->note,
         ])->save();
+    }
+
+    public function scopeVenue(Builder $q, string $venue): Builder
+    {
+        return $q->where('venue', $venue);
+    }
+
+    /** Seconds since a send was last attempted (creation counts as the first attempt). */
+    public function secondsSinceSent(): int
+    {
+        return (int) max(0, now()->getTimestamp() - ($this->sent_at ?? $this->created_at)->getTimestamp());
     }
 
     public function ageSeconds(): int

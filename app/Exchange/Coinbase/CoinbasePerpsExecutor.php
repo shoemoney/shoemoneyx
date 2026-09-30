@@ -39,6 +39,11 @@ class CoinbasePerpsExecutor implements Executor, ReconcilesOrders
 
     public function __construct(private CoinbaseService $coinbase) {}
 
+    public function orderVenue(): string
+    {
+        return 'coinbase_perps';
+    }
+
     public function mode(): string
     {
         return 'live';
@@ -154,7 +159,7 @@ class CoinbasePerpsExecutor implements Executor, ReconcilesOrders
         };
 
         return $this->submitOrder($method, $spotPid, $productId, $side, $requested, $decisionPrice,
-            ['spot_pid' => $spotPid, 'short' => $short, 'contracts' => $plan->contracts],
+            ['spot_pid' => $spotPid, 'short' => $short, 'contracts' => $plan->contracts, 'size' => $plan->contracts],
             fn (string $clientOrderId) => $this->coinbase->marketContracts($account, $productId, $side, $plan->contracts, $clientOrderId));
     }
 

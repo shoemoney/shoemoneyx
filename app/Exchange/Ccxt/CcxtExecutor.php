@@ -12,6 +12,7 @@ use App\Models\OrderIntent;
 use ccxt\ArgumentsRequired;
 use ccxt\AuthenticationError;
 use ccxt\BadRequest;
+use ccxt\DuplicateOrderId;
 use ccxt\Exchange;
 use ccxt\InsufficientFunds;
 use ccxt\InvalidOrder;
@@ -55,7 +56,7 @@ class CcxtExecutor implements Executor, ReconcilesOrders
             return OrderResult::rejected('error', $usd, $decisionPrice, "{$this->ccxtId} sizes market buys in base units and no decision price was given");
         }
 
-        return $this->submitOrder('buy', $productId, $productId, 'BUY', $usd, $decisionPrice, ['requested' => $usd],
+        return $this->submitOrder('buy', $productId, $productId, 'BUY', $usd, $decisionPrice, ['requested' => $usd, 'size' => $usd],
             fn (string $clientOrderId) => $byCost
                 ? $this->client->create_market_buy_order_with_cost($symbol, $usd, ['clientOrderId' => $clientOrderId])
                 : $this->client->create_order($symbol, 'market', 'buy', $usd / $decisionPrice, null, ['clientOrderId' => $clientOrderId]));
@@ -65,7 +66,7 @@ class CcxtExecutor implements Executor, ReconcilesOrders
     {
         $symbol = Symbols::toCcxt($productId);
 
-        return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['requested' => $qty],
+        return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['requested' => $qty, 'size' => $qty],
             fn (string $clientOrderId) => $this->client->create_order($symbol, 'market', 'sell', $qty, null, ['clientOrderId' => $clientOrderId]));
     }
 
@@ -82,6 +83,11 @@ class CcxtExecutor implements Executor, ReconcilesOrders
     /** Only definitive venue refusals are safe to call "not placed"; a timeout or a 5xx may hide a live order. */
     protected function ambiguousFailure(\Throwable $e): bool
     {
+        // A duplicate id means the ORIGINAL order exists: look it up, never treat it as a refusal.
+        if ($e instanceof DuplicateOrderId) {
+            return true;
+        }
+
         return ! ($e instanceof InvalidOrder || $e instanceof InsufficientFunds || $e instanceof BadRequest
             || $e instanceof AuthenticationError || $e instanceof NotSupported || $e instanceof ArgumentsRequired);
     }
@@ -112,6 +118,11 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         return ($this->client->has['fetchOrder'] ?? false) ? 6 : 0;
     }
 
+    public function orderVenue(): string
+    {
+        return 'ccxt:'.$this->ccxtId;
+    }
+
     protected function fetchOrderRecord(OrderIntent $intent): array
     {
         if (! ($this->client->has['fetchOrder'] ?? false)) {
@@ -124,7 +135,7 @@ class CcxtExecutor implements Executor, ReconcilesOrders
     /** By venue id when we have one; otherwise by scanning the venue's order lists for our clientOrderId. */
     protected function lookupOrder(OrderIntent $intent): ?array
     {
-        if ($intent->venue_order_id) {
+        if ($intent->venue_order_id && ($this->client->has['fetchOrder'] ?? false)) {
             return $this->fetchOrderRecord($intent);
         }
 
@@ -140,7 +151,8 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         }
         foreach ($lists as $method) {
             foreach ($this->client->{$method}($symbol, $since) as $order) {
-                if (($order['clientOrderId'] ?? null) === $intent->client_order_id) {
+                if (($order['clientOrderId'] ?? null) === $intent->client_order_id
+                    || ($intent->venue_order_id && (string) ($order['id'] ?? '') === $intent->venue_order_id)) {
                     return $order;
                 }
             }
@@ -151,7 +163,13 @@ class CcxtExecutor implements Executor, ReconcilesOrders
 
     protected function orderTerminal(array $order): bool
     {
-        return in_array((string) ($order['status'] ?? ''), self::TERMINAL, true);
+        if (in_array((string) ($order['status'] ?? ''), self::TERMINAL, true)) {
+            return true;
+        }
+
+        // A venue with no fetchOrder can never show us a later status, so whatever its create response
+        // reports as filled is all there will ever be (what this adapter always booked before).
+        return ! ($this->client->has['fetchOrder'] ?? false) && (float) ($order['filled'] ?? 0) > 0;
     }
 
     /** The venue's own order record, turned into what the desk books. Called only for a terminal order. */

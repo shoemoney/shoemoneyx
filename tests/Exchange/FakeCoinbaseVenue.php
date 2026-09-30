@@ -32,6 +32,11 @@ class FakeCoinbaseVenue extends CoinbaseService
 
     public bool $listFails = false;
 
+    public bool $respondDuplicate = false;
+
+    /** Runs once, the next time the venue is asked about an order: lets a test interleave a second process. */
+    public ?\Closure $onLookup = null;
+
     public string $orderStatus = 'FILLED';
 
     public float $price = 100.0;
@@ -55,6 +60,7 @@ class FakeCoinbaseVenue extends CoinbaseService
 
     public function getOrder(CoinbaseAccount $account, string $orderId): array
     {
+        $this->fireLookupHook();
         if ($this->readbackFails) {
             throw new ConnectionException('readback timed out');
         }
@@ -69,11 +75,21 @@ class FakeCoinbaseVenue extends CoinbaseService
 
     public function findOrderByClientId(CoinbaseAccount $account, string $productId, string $clientOrderId, \DateTimeInterface $since): ?array
     {
+        $this->fireLookupHook();
         if ($this->listFails) {
             throw new ConnectionException('order history timed out');
         }
 
         return $this->orders[$clientOrderId] ?? null;
+    }
+
+    private function fireLookupHook(): void
+    {
+        if ($this->onLookup !== null) {
+            $hook = $this->onLookup;
+            $this->onLookup = null;
+            $hook();
+        }
     }
 
     public function landedCount(): int
@@ -110,6 +126,10 @@ class FakeCoinbaseVenue extends CoinbaseService
 
         if ($this->timeoutAfterPlacing) {
             throw new ConnectionException('cURL error 28: operation timed out');
+        }
+
+        if ($this->respondDuplicate) {
+            return ['success' => false, 'error_response' => ['error' => 'DUPLICATE_CLIENT_ORDER_ID', 'message' => 'duplicate']];
         }
 
         return ['success' => true, 'success_response' => ['order_id' => $this->orders[(string) $clientOrderId]['order_id']]];

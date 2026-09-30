@@ -24,6 +24,11 @@ class CoinbaseExecutor implements Executor, ReconcilesOrders
 
     public function __construct(private CoinbaseService $coinbase) {}
 
+    public function orderVenue(): string
+    {
+        return 'coinbase_spot';
+    }
+
     public function mode(): string
     {
         return 'live';
@@ -49,7 +54,7 @@ class CoinbaseExecutor implements Executor, ReconcilesOrders
     {
         $account = $this->account();
 
-        return $this->submitOrder('buy', $productId, $productId, 'BUY', $usd, $decisionPrice, [],
+        return $this->submitOrder('buy', $productId, $productId, 'BUY', $usd, $decisionPrice, ['size' => $usd],
             fn (string $clientOrderId) => $this->coinbase->marketBuy($account, $productId, $usd, $clientOrderId));
     }
 
@@ -59,7 +64,7 @@ class CoinbaseExecutor implements Executor, ReconcilesOrders
         $qty = floor($qty * 10 ** $precision) / 10 ** $precision;
         $account = $this->account();
 
-        return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, [],
+        return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['size' => $qty],
             fn (string $clientOrderId) => $this->coinbase->marketSell($account, $productId, $qty, $precision, $clientOrderId));
     }
 

@@ -48,6 +48,9 @@ trait SubmitsOrdersIdempotently
         return null;
     }
 
+    /** Which executor owns an intent (spot and perps are both mode 'live'); reconcile only ever touches its own. */
+    abstract public function orderVenue(): string;
+
     abstract protected function resultFromOrder(OrderIntent $intent, array $create, array $order): OrderResult;
 
     /** How a failed create reads in notes and logs; venues may prefix their id. */
@@ -67,11 +70,16 @@ trait SubmitsOrdersIdempotently
      */
     protected function submitOrder(string $method, string $deskPid, string $venuePid, string $side, float $requestedUsd, float $decisionPrice, array $context, \Closure $send): OrderResult
     {
-        $intent = OrderIntent::pending()->mode($this->mode())->where('desk_product_id', $deskPid)->orderBy('id')->first();
+        $intent = OrderIntent::pending()->mode($this->mode())->venue($this->orderVenue())->where('desk_product_id', $deskPid)->orderBy('id')->first();
 
         if ($intent !== null) {
             if ($intent->method !== $method) {
                 return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "unresolved {$intent->method} order {$intent->client_order_id} on {$deskPid}; not sending {$method} until it is reconciled");
+            }
+            $size = (float) ($context['size'] ?? 0);
+            $pendingSize = (float) ($intent->context['size'] ?? 0);
+            if (abs($size - $pendingSize) > 1e-6 * max(1.0, abs($pendingSize))) {
+                return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "unresolved {$method} order {$intent->client_order_id} was for a different size ({$pendingSize}, now {$size}); its own outcome is booked by reconcile, not handed to this call");
             }
             $settled = $this->reconcilePending($intent, $requestedUsd, $decisionPrice);
             if ($settled !== null) {
@@ -81,7 +89,7 @@ trait SubmitsOrdersIdempotently
             $intent->forceFill(['requested_usd' => $requestedUsd, 'decision_price' => $decisionPrice, 'context' => $context])->save();
         } else {
             $intent = OrderIntent::create([
-                'mode' => $this->mode(), 'desk_product_id' => $deskPid, 'venue_product_id' => $venuePid,
+                'mode' => $this->mode(), 'venue' => $this->orderVenue(), 'sent_at' => now(), 'desk_product_id' => $deskPid, 'venue_product_id' => $venuePid,
                 'method' => $method, 'side' => $side, 'client_order_id' => (string) Str::uuid(),
                 'requested_usd' => $requestedUsd, 'decision_price' => $decisionPrice, 'context' => $context,
             ]);
@@ -92,11 +100,13 @@ trait SubmitsOrdersIdempotently
 
     private function sendIntent(OrderIntent $intent, float $requestedUsd, float $decisionPrice, \Closure $send): OrderResult
     {
+        $intent->forceFill(['sent_at' => now()])->save();
         try {
             $create = $send($intent->client_order_id);
         } catch (\Throwable $e) {
             if ($this->ambiguousFailure($e)) {
-                $intent->forceFill(['note' => 'create outcome unknown: '.$this->failureNote($e)])->save();
+                // The venue may have processed it any time up to now: the grace window restarts here.
+                $intent->forceFill(['sent_at' => now(), 'note' => 'create outcome unknown: '.$this->failureNote($e)])->save();
                 Log::error('live order outcome unknown after a failed create; holding further orders on this product', [
                     'client_order_id' => $intent->client_order_id, 'product' => $intent->desk_product_id, 'error' => $e->getMessage(),
                 ]);
@@ -173,14 +183,14 @@ trait SubmitsOrdersIdempotently
         }
 
         $grace = (int) config('desk.live_orders.not_found_grace_seconds', 120);
-        if ($intent->ageSeconds() < $grace) {
-            return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "order {$intent->client_order_id} not visible at the venue yet ({$intent->ageSeconds()}s old); waiting out the {$grace}s grace window");
+        if ($intent->secondsSinceSent() < $grace) {
+            return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "order {$intent->client_order_id} not visible at the venue yet ({$intent->secondsSinceSent()}s since sent); waiting out the {$grace}s grace window");
         }
 
         return null;
     }
 
-    /** Non-consuming venue lookup for the desk's reconcile pass; see ReconcilesOrders. */
+    /** Pure venue lookup for the desk's reconcile pass; see ReconcilesOrders. Never writes. */
     public function reconcile(OrderIntent $intent): ?OrderResult
     {
         try {
@@ -191,15 +201,17 @@ trait SubmitsOrdersIdempotently
             return null;
         }
 
-        if ($order === null) {
-            if ($intent->ageSeconds() >= (int) config('desk.live_orders.not_found_grace_seconds', 120)) {
-                $intent->resolve('abandoned', 'order never reached the venue');
-            }
+        return $order !== null && $this->orderTerminal($order) ? $this->resultFromOrder($intent, [], $order) : null;
+    }
 
-            return null;
+    public function confirmedAbsent(OrderIntent $intent): bool
+    {
+        try {
+            return $this->lookupOrder($intent) === null
+                && $intent->secondsSinceSent() >= (int) config('desk.live_orders.not_found_grace_seconds', 120);
+        } catch (\Throwable) {
+            return false;
         }
-
-        return $this->orderTerminal($order) ? $this->resultFromOrder($intent, [], $order) : null;
     }
 
     private function unknownFor(OrderIntent $intent, float $requestedUsd, float $decisionPrice, string $note, ?string $venueOrderId = null, array $raw = []): OrderResult

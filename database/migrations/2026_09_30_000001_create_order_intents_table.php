@@ -19,6 +19,7 @@ return new class extends Migration
         Schema::create('order_intents', function (Blueprint $table) {
             $table->id();
             $table->string('mode', 8);
+            $table->string('venue', 40);                           // which executor sent it: spot and perps are both mode 'live'
             $table->string('desk_product_id', 32);                 // what the desk calls it (BTC-USD)
             $table->string('venue_product_id', 32);                // what the order went to (BIP-20DEC30-CDE on perps)
             $table->string('method', 12);                          // buy|sell|open_short|cover_short
@@ -31,10 +32,11 @@ return new class extends Migration
             $table->decimal('decision_price', 24, 10)->default(0);
             $table->json('context')->nullable();
             $table->text('note')->nullable();
+            $table->timestamp('sent_at')->nullable();              // last time a send was attempted; the grace window runs from here
             $table->timestamp('resolved_at')->nullable();
             $table->timestamps();
 
-            $table->index(['mode', 'desk_product_id', 'status']);
+            $table->index(['mode', 'venue', 'desk_product_id', 'status']);
         });
     }
 
