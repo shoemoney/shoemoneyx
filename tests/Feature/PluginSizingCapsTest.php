@@ -177,7 +177,7 @@ class PluginSizingCapsTest extends TestCase
         $this->assertRejected('size', ['' => 2], 'size.');
         $this->assertRejected('paper', ['a' => ['b c' => 1]], 'paper.a.b c');
         $this->assertRejected('per_product.BTC-USD.mr', ['tf.x!' => 1], 'per_product.BTC-USD.mr.tf.x!');
-        $this->assertRejected('paper', ['caf\u{e9}' => 1], 'paper.caf');
+        $this->assertRejected('paper', ["caf\u{e9}" => 1], 'paper.caf'); // JSON escapes the é in the error
     }
 
     public function test_a_valid_nested_write_is_accepted(): void
