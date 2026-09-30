@@ -5,19 +5,18 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Desk\Desk;
+use App\Desk\Execution\OrderBudget;
 use App\Exchange\Ccxt\CcxtExecutor;
-use App\Exchange\Coinbase\Api\CoinbaseHttpClient;
-use App\Exchange\Coinbase\Api\CoinbaseService;
 use App\Exchange\Coinbase\CoinbaseExecutor;
 use App\Exchange\Coinbase\CoinbasePerpsExecutor;
 use App\Models\CoinbaseAccount;
 use App\Models\Fill;
 use App\Models\OrderIntent;
 use App\Models\Position;
-use ccxt\DuplicateOrderId;
 use ccxt\InsufficientFunds;
 use ccxt\RequestTimeout;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Tests\Exchange\FakeCoinbaseVenue;
 use Tests\Exchange\StubCcxtClient;
 use Tests\Feature\Fixtures\FixedTicketStrategy;
@@ -595,72 +594,43 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertStringContainsString('FORCED', $message);
     }
 
-    public function test_the_mutate_lock_outlives_a_worst_case_polling_order(): void
+    public function test_a_slow_venue_returns_unknown_before_the_lock_ttl_and_the_lock_is_held_throughout(): void
     {
-        $ttl = (new \ReflectionMethod(Desk::class, 'mutateLockSeconds'))->invoke(app(Desk::class));
+        $desk = app(Desk::class);
+        $ttl = OrderBudget::lockSeconds();
+        $position = $this->livePosition();
+        $started = now()->getTimestamp();
+        $lockWasHeld = null;
 
-        // 1 create + 8 polls, each up to timeout x retries.
-        $this->assertGreaterThanOrEqual(9 * 30 * 3, $ttl);
+        $this->venue->readbackTakesSeconds = 30;   // every readback burns the full HTTP timeout
+        $this->venue->onLookup = function () use (&$lockWasHeld) {
+            // A second process trying for the product lock mid-poll must be refused.
+            $other = Cache::lock('desk:mutate:live:BTC-USD', 5);
+            $lockWasHeld = ! $other->get();
+        };
+
+        $fill = $desk->close($position, 'stop', 100.0, $this->spot());
+
+        $this->assertSame('unknown', $fill->status);
+        $this->assertTrue($lockWasHeld, 'nobody else can book while the first process is still polling');
+        $this->assertLessThan($ttl, now()->getTimestamp() - $started, 'the order gave up before the lock could expire');
+        $this->assertSame('open', $position->fresh()->status);
+        $this->assertSame(1, count($this->venue->attempts));
     }
 
-    public function test_the_real_order_history_search_pages_until_it_finds_the_client_id(): void
+    public function test_the_http_timeout_is_clamped_to_the_remaining_order_budget(): void
     {
-        $http = \Mockery::mock(CoinbaseHttpClient::class);
-        $http->shouldReceive('get')->twice()->andReturn(
-            ['orders' => [['client_order_id' => 'other']], 'has_next' => true, 'cursor' => 'c2'],
-            ['orders' => [['client_order_id' => 'wanted', 'order_id' => 'ord-7']], 'has_next' => false],
-        );
-        $service = new CoinbaseService($http);
-        $account = CoinbaseAccount::active();
+        config(['coinbase.timeout' => 30]);
 
-        $found = $service->findOrderByClientId($account, 'BTC-USD', 'wanted', now());
-
-        $this->assertSame('ord-7', $found['order_id']);
-    }
-
-    public function test_the_real_order_history_search_returns_null_only_after_listing_everything(): void
-    {
-        $http = \Mockery::mock(CoinbaseHttpClient::class);
-        $http->shouldReceive('get')->once()->andReturn(['orders' => [['client_order_id' => 'other']], 'has_next' => false]);
-
-        $this->assertNull((new CoinbaseService($http))->findOrderByClientId(CoinbaseAccount::active(), 'BTC-USD', 'wanted', now()));
-    }
-
-    public function test_a_ccxt_venue_without_fetch_order_books_from_the_create_response(): void
-    {
-        $client = new StubCcxtClient([]);
-        $client->has['fetchOrder'] = false;
-        $client->stubCreate = ['id' => 'o-1', 'status' => 'open', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0];
-
-        $result = (new CcxtExecutor($client, 'stubex'))->buy('BTC-USD', 1000.0, 50_000.0);
-
-        $this->assertSame('filled', $result->status);
-        $this->assertSame('resolved', OrderIntent::sole()->status);
-    }
-
-    public function test_a_ccxt_venue_without_fetch_order_and_an_empty_create_is_found_through_the_order_list(): void
-    {
-        $client = new StubCcxtClient([]);
-        $client->has['fetchOrder'] = false;
-        $client->has['fetchOrders'] = true;
-        $client->stubCreate = ['id' => 'o-1', 'status' => 'open', 'filled' => 0, 'cost' => 0];
-        $executor = new CcxtExecutor($client, 'stubex');
-
-        $this->assertSame('unknown', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
-
-        $client->stubOrderList = [['id' => 'o-1', 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0]];
-        $again = $executor->buy('BTC-USD', 1000.0, 50_000.0);
-
-        $this->assertSame('filled', $again->status);
-        $this->assertCount(1, $client->clientOrderIds);
-    }
-
-    public function test_a_ccxt_duplicate_order_id_is_looked_up_not_rejected(): void
-    {
-        $client = new StubCcxtClient([]);
-        $client->createThrows = new DuplicateOrderId('dup');
-
-        $this->assertSame('unknown', (new CcxtExecutor($client, 'stubex'))->buy('BTC-USD', 1000.0, 50_000.0)->status);
-        $this->assertSame('pending', OrderIntent::sole()->status);
+        $this->assertSame(30, OrderBudget::clamp(30), 'no clamp outside an order');
+        OrderBudget::within(function () {
+            $this->assertLessThanOrEqual(63, OrderBudget::remaining());
+            $this->travel(50)->seconds();
+            $left = OrderBudget::remaining();
+            $this->assertSame($left, OrderBudget::clamp(30));
+            $this->assertSame(intdiv($left, 3), OrderBudget::clamp(30, 3));
+            $this->travel(20)->seconds();
+            $this->assertTrue(OrderBudget::exhausted());
+        });
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Exchange;
 
+use App\Desk\Execution\OrderBudget;
 use App\Exchange\Coinbase\Api\CoinbaseApiException;
 use App\Exchange\Coinbase\Api\CoinbaseService;
 use App\Models\CoinbaseAccount;
@@ -38,6 +39,9 @@ class FakeCoinbaseVenue extends CoinbaseService
     /** Simulated wall-clock spent inside the create call (the HTTP timeout burning) before it returns or throws. */
     public int $createTakesSeconds = 0;
 
+    /** Simulated seconds each readback burns before failing, clamped to the order budget like the real HTTP client. */
+    public int $readbackTakesSeconds = 0;
+
     /** Runs once, the next time the venue is asked about an order: lets a test interleave a second process. */
     public ?\Closure $onLookup = null;
 
@@ -65,6 +69,11 @@ class FakeCoinbaseVenue extends CoinbaseService
     public function getOrder(CoinbaseAccount $account, string $orderId): array
     {
         $this->fireLookupHook();
+        if ($this->readbackTakesSeconds > 0) {
+            $left = OrderBudget::remaining();
+            Carbon::setTestNow(now()->addSeconds($left === null ? $this->readbackTakesSeconds : min($this->readbackTakesSeconds, max(0, $left))));
+            throw new ConnectionException('readback timed out');
+        }
         if ($this->readbackFails) {
             throw new ConnectionException('readback timed out');
         }

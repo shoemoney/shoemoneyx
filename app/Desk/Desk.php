@@ -14,6 +14,7 @@ use App\Desk\Execution\ExecutionModeMismatchException;
 use App\Desk\Execution\Executor;
 use App\Desk\Execution\MarginBook;
 use App\Desk\Execution\MarginWindow;
+use App\Desk\Execution\OrderBudget;
 use App\Desk\Execution\OrderResult;
 use App\Desk\Execution\PaperExecutor;
 use App\Desk\Execution\Perps;
@@ -362,13 +363,7 @@ class Desk
      */
     private function mutateLockSeconds(): int
     {
-        // Held across a whole live order: the create call plus every status poll (perps poll 8x), each of
-        // which can burn the HTTP timeout on every retry. A TTL shorter than that would let a second
-        // process replay/book the order while the first is still polling it.
-        $perCall = (int) config('coinbase.timeout', 30) * max(1, (int) config('coinbase.retry_attempts', 3));
-        $calls = 1 + 8;
-
-        return max(90, (int) ceil($perCall * $calls * 1.2));
+        return OrderBudget::lockSeconds();
     }
 
     /**

@@ -450,16 +450,13 @@ class DeskExecutionBoundaryTest extends TestCase
         $desk = app(Desk::class);
 
         config(['coinbase.timeout' => 30]);
-        $this->assertSame(972, $seconds->invoke($desk), 'ceil(30s x 3 retries x (1 create + 8 polls) x 1.2 margin)');
+        $this->assertSame(90, $seconds->invoke($desk), 'max(90, 30*3) = 90');
 
         config(['coinbase.timeout' => 60]);
-        $this->assertSame(1944, $seconds->invoke($desk), 'the formula must scale with a larger configured timeout');
+        $this->assertSame(180, $seconds->invoke($desk), 'max(90, 60*3) = 180 — the formula must scale with a larger configured timeout');
 
         config(['coinbase.timeout' => 5]);
-        $this->assertSame(162, $seconds->invoke($desk), 'scales down with a small timeout');
-
-        config(['coinbase.timeout' => 1, 'coinbase.retry_attempts' => 1]);
-        $this->assertSame(90, $seconds->invoke($desk), 'the 90s floor holds even for a tiny configured timeout');
+        $this->assertSame(90, $seconds->invoke($desk), 'max(90, 5*3) = 90 — the 90s floor holds even for a tiny configured timeout');
     }
 
     public function test_a_second_lock_acquirer_cannot_enter_while_the_first_is_mid_call(): void

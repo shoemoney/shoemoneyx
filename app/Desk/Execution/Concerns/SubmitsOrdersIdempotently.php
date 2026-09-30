@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Desk\Execution\Concerns;
 
+use App\Desk\Execution\OrderBudget;
 use App\Desk\Execution\OrderResult;
 use App\Models\OrderIntent;
 use Illuminate\Support\Facades\Log;
@@ -70,6 +71,12 @@ trait SubmitsOrdersIdempotently
      */
     protected function submitOrder(string $method, string $deskPid, string $venuePid, string $side, float $requestedUsd, float $decisionPrice, array $context, \Closure $send): OrderResult
     {
+        // Bounded to a share of the product lock's TTL: past it the order is reported unknown and reconcile settles it.
+        return OrderBudget::within(fn () => $this->submitWithinBudget($method, $deskPid, $venuePid, $side, $requestedUsd, $decisionPrice, $context, $send));
+    }
+
+    private function submitWithinBudget(string $method, string $deskPid, string $venuePid, string $side, float $requestedUsd, float $decisionPrice, array $context, \Closure $send): OrderResult
+    {
         $intent = OrderIntent::pending()->mode($this->mode())->venue($this->orderVenue())->where('desk_product_id', $deskPid)->orderBy('id')->first();
 
         if ($intent !== null) {
@@ -132,7 +139,7 @@ trait SubmitsOrdersIdempotently
 
         $order = $this->recordFromCreate($create);
         $sleepUs = max(0, (int) config('desk.live_orders.poll_sleep_ms', 400)) * 1000;
-        for ($i = 0; $i < $this->pollAttempts(); $i++) {
+        for ($i = 0; $i < $this->pollAttempts() && ! OrderBudget::exhausted(); $i++) {
             if ($sleepUs > 0) {
                 usleep($sleepUs);
             }
