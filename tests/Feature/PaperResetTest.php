@@ -80,6 +80,11 @@ class PaperResetTest extends TestCase
     public function test_a_large_book_is_reset_with_a_subquery_not_thousands_of_bindings(): void
     {
         $this->seedBook();
+        // Enough paper positions that binding their ids one by one would blow past the ceiling below.
+        foreach (range(1, 25) as $i) {
+            Position::create(['mode' => 'paper', 'strategy' => 'mr', 'product_id' => "P{$i}-USD", 'status' => 'closed', 'side' => 'long',
+                'quantity' => 1, 'entry_price' => 100, 'entry_usd' => 100, 'opened_at' => now()]);
+        }
         $max = 0;
         DB::listen(function ($query) use (&$max) {
             $max = max($max, count($query->bindings));
