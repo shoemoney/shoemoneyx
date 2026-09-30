@@ -43,11 +43,24 @@ class Settings
         return false;
     }
 
+    /**
+     * Rows overrides() may merge. Before v0.2.2 the settings API took any key, so a desk can hold
+     * master_password.x (Arr::set turns the password into an array) or a case/space alias of a
+     * real key; those are skipped here and purged by a migration.
+     */
+    public static function isStorableKey(string $key): bool
+    {
+        return self::isCanonicalKey($key) && ($key === 'master_password' || ! self::isSecret($key));
+    }
+
     public function overrides(): array
     {
         return Cache::remember(self::CACHE_KEY, 30, function () {
             $out = [];
             foreach (Setting::all() as $row) {
+                if (! self::isStorableKey($row->key)) {
+                    continue;
+                }
                 Arr::set($out, $row->key, $row->value);
             }
 
@@ -103,7 +116,9 @@ class Settings
     public function masterPassword(): string
     {
         try {
-            return (string) $this->get('master_password', '');
+            $password = $this->get('master_password', '');
+
+            return is_array($password) ? (string) config('desk.master_password', '') : (string) $password;
         } catch (\Throwable) {
             return (string) config('desk.master_password', '');
         }

@@ -6,7 +6,9 @@ namespace Tests\Feature;
 
 use App\Desk\Onboarding\OnboardingWizard;
 use App\Desk\Settings;
+use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 class MasterPasswordTest extends TestCase
@@ -127,6 +129,31 @@ class MasterPasswordTest extends TestCase
 
         $this->assertSame('secret', app(Settings::class)->masterPassword());
         $this->getJson('/api/status')->assertUnauthorized();
+    }
+
+    public function test_a_legacy_nested_password_row_cannot_turn_the_password_into_array(): void
+    {
+        config(['desk.master_password' => 'secret']);
+        Setting::create(['key' => 'master_password.shadow', 'value' => 'x']);
+        Cache::forget('desk:settings');
+
+        $this->assertSame('secret', app(Settings::class)->masterPassword());
+        $this->getJson('/api/status', ['X-Desk-Token' => 'Array'])->assertUnauthorized();
+        $this->getJson('/api/status', ['X-Desk-Token' => 'secret'])->assertOk();
+    }
+
+    public function test_migration_purges_legacy_unsafe_setting_rows(): void
+    {
+        foreach (['master_password.shadow', 'MASTER_PASSWORD', 'size.kelly_cap_pct'] as $key) {
+            Setting::create(['key' => $key, 'value' => 'x']);
+        }
+
+        (require database_path('migrations/2026_09_30_000001_purge_unsafe_setting_keys.php'))->up();
+
+        $keys = Setting::query()->pluck('key')->all();
+        $this->assertContains('size.kelly_cap_pct', $keys);
+        $this->assertNotContains('master_password.shadow', $keys);
+        $this->assertNotContains('MASTER_PASSWORD', $keys);
     }
 
     public function test_changing_the_password_ends_existing_browser_sessions(): void
