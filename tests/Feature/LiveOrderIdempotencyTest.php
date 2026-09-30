@@ -633,4 +633,44 @@ class LiveOrderIdempotencyTest extends TestCase
             $this->assertTrue(OrderBudget::exhausted());
         });
     }
+
+    public function test_a_lookup_that_overruns_the_order_budget_never_counts_as_absent(): void
+    {
+        $desk = app(Desk::class);
+        $executor = $this->spot();
+        $this->venue->timeoutBeforePlacing = true;
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->timeoutBeforePlacing = false;
+        $this->travel(3)->minutes();
+
+        // The lookup says "not there", but only after the product lock could have expired.
+        $this->venue->lookupTakesSeconds = 70;
+        $desk->reconcileLiveOrders(new FixedTicketStrategy(100.0), $executor);
+        $this->assertSame(1, OrderIntent::pending()->count());
+
+        [$done] = $desk->resolveIntent($executor, OrderIntent::sole(), 'abandoned');
+        $this->assertFalse($done);
+
+        $this->venue->lookupTakesSeconds = 0;
+        $desk->reconcileLiveOrders(new FixedTicketStrategy(100.0), $executor);
+        $this->assertSame('abandoned', OrderIntent::sole()->outcome);
+    }
+
+    public function test_a_ccxt_venue_that_only_lists_open_orders_cannot_prove_a_filled_order_absent(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->has['fetchOrder'] = false;
+        $client->has['fetchOpenOrders'] = true;
+        $client->stubCreate = ['id' => 'o-1', 'status' => 'open', 'filled' => 0, 'cost' => 0];
+        $executor = new CcxtExecutor($client, 'stubex');
+
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $this->travel(10)->minutes();   // the order filled meanwhile, so it is not in the open list
+        $client->stubOpenOrders = [];
+
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $this->assertCount(1, $client->clientOrderIds, 'no second buy');
+        $this->assertSame(1, OrderIntent::pending()->count());
+        $this->assertFalse($executor->confirmedAbsent(OrderIntent::sole()));
+    }
 }

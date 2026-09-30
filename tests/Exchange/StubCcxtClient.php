@@ -133,6 +133,16 @@ class StubCcxtClient extends Exchange
         return $this->stubOrders[$nth - 1] ?? end($this->stubOrders) ?: [];
     }
 
+    /** @var array<int, array<string, mixed>> */
+    public array $stubOpenOrders = [];
+
+    public function fetch_open_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = [])
+    {
+        $this->calls[] = ['fetch_open_orders', $symbol];
+
+        return $this->stubOpenOrders;
+    }
+
     public function fetch_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = [])
     {
         $this->calls[] = ['fetch_orders', $symbol];

@@ -149,13 +149,20 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         if ($lists === []) {
             throw new \RuntimeException("{$this->ccxtId} cannot list orders, so an order without a venue id cannot be looked up by clientOrderId");
         }
+        $coversClosed = false;
         foreach ($lists as $method) {
+            $coversClosed = $coversClosed || $method !== 'fetch_open_orders';
             foreach ($this->client->{$method}($symbol, $since) as $order) {
                 if (($order['clientOrderId'] ?? null) === $intent->client_order_id
                     || ($intent->venue_order_id && (string) ($order['id'] ?? '') === $intent->venue_order_id)) {
                     return $order;
                 }
             }
+        }
+
+        // A filled order is not open, so an open-orders list that lacks it proves nothing.
+        if (! $coversClosed) {
+            throw new \RuntimeException("{$this->ccxtId} can only list open orders, so a missing order cannot be proven absent");
         }
 
         return null;

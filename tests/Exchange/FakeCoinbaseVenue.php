@@ -42,6 +42,9 @@ class FakeCoinbaseVenue extends CoinbaseService
     /** Simulated seconds each readback burns before failing, clamped to the order budget like the real HTTP client. */
     public int $readbackTakesSeconds = 0;
 
+    /** Simulated seconds an order-history lookup takes (unclamped: a lookup that overruns the budget must be distrusted). */
+    public int $lookupTakesSeconds = 0;
+
     /** Runs once, the next time the venue is asked about an order: lets a test interleave a second process. */
     public ?\Closure $onLookup = null;
 
@@ -89,6 +92,9 @@ class FakeCoinbaseVenue extends CoinbaseService
     public function findOrderByClientId(CoinbaseAccount $account, string $productId, string $clientOrderId, \DateTimeInterface $since): ?array
     {
         $this->fireLookupHook();
+        if ($this->lookupTakesSeconds > 0) {
+            Carbon::setTestNow(now()->addSeconds($this->lookupTakesSeconds));
+        }
         if ($this->listFails) {
             throw new ConnectionException('order history timed out');
         }

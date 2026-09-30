@@ -197,28 +197,40 @@ trait SubmitsOrdersIdempotently
         return null;
     }
 
-    /** Pure venue lookup for the desk's reconcile pass; see ReconcilesOrders. Never writes. */
+    /**
+     * Pure venue lookup for the desk's reconcile pass; see ReconcilesOrders. Never writes. Runs inside the
+     * order budget, and an answer that arrives after it is discarded: the product lock it ran under may
+     * already have expired, so the answer could be stale.
+     */
     public function reconcile(OrderIntent $intent): ?OrderResult
     {
-        try {
-            $order = $this->lookupOrder($intent);
-        } catch (\Throwable $e) {
-            Log::warning('cannot reconcile live order yet', ['client_order_id' => $intent->client_order_id, 'error' => $e->getMessage()]);
+        return OrderBudget::within(function () use ($intent) {
+            try {
+                $order = $this->lookupOrder($intent);
+            } catch (\Throwable $e) {
+                Log::warning('cannot reconcile live order yet', ['client_order_id' => $intent->client_order_id, 'error' => $e->getMessage()]);
 
-            return null;
-        }
+                return null;
+            }
 
-        return $order !== null && $this->orderTerminal($order) ? $this->resultFromOrder($intent, [], $order) : null;
+            return ! OrderBudget::exhausted() && $order !== null && $this->orderTerminal($order) ? $this->resultFromOrder($intent, [], $order) : null;
+        });
     }
 
+    /** "Provably absent": the lookup succeeded, in time, and found nothing after the grace window. Anything else is unknown. */
     public function confirmedAbsent(OrderIntent $intent): bool
     {
-        try {
-            return $this->lookupOrder($intent) === null
+        return OrderBudget::within(function () use ($intent) {
+            try {
+                $order = $this->lookupOrder($intent);
+            } catch (\Throwable) {
+                return false;
+            }
+
+            return $order === null
+                && ! OrderBudget::exhausted()
                 && $intent->secondsSinceSent() >= (int) config('desk.live_orders.not_found_grace_seconds', 120);
-        } catch (\Throwable) {
-            return false;
-        }
+        });
     }
 
     private function unknownFor(OrderIntent $intent, float $requestedUsd, float $decisionPrice, string $note, ?string $venueOrderId = null, array $raw = []): OrderResult
