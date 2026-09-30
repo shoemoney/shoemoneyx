@@ -31,6 +31,9 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: true
+    # Never pause. The merge rule is "wait for CodeRabbit", and a paused review still reports a
+    # passing check, so a fix-heavy security PR could merge with its last commits unreviewed (#19).
+    auto_pause_after_reviewed_commits: 0
     drafts: false
     base_branches:
       - main
