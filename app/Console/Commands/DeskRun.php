@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Desk\Arena\ArenaRunner;
 use App\Desk\Chief;
 use App\Desk\Desk;
+use App\Desk\Exceptions\CycleInProgressException;
 use App\Desk\Execution\PostOnlyShadows;
 use App\Desk\Reporter;
 use App\Desk\Settings;
@@ -15,6 +16,7 @@ use App\Models\Product;
 use App\Services\Market\CandleStore;
 use App\Services\Market\ProductSync;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 
 /**
  * The long-running desk process: product sync hourly, candles every minute,
@@ -76,8 +78,13 @@ class DeskRun extends Command
                     $lastRisk = time();
                 }
                 if ($now - $lastCycle >= (int) $settings->get('scan.poll_seconds', 300) && ! $chief->halted()) {
-                    $run = $desk->cycle();
-                    $this->line(sprintf('[%s] cycle #%d %s scanned=%d cand=%d pass=%d rej=%d fill=%d', now()->format('H:i:s'), $run->id, $run->status, $run->products_scanned, $run->candidates, $run->passed, $run->rejected, $run->filled));
+                    try {
+                        $run = $desk->cycle();
+                        $this->line(sprintf('[%s] cycle #%d %s scanned=%d cand=%d pass=%d rej=%d fill=%d', now()->format('H:i:s'), $run->id, $run->status, $run->products_scanned, $run->candidates, $run->passed, $run->rejected, $run->filled));
+                    } catch (CycleInProgressException $e) {
+                        $this->line(sprintf('[%s] cycle skipped: another %s cycle is already running', now()->format('H:i:s'), $e->mode));
+                        Log::info('desk:run cycle skipped, another cycle is running', ['mode' => $e->mode]);
+                    }
                     $lastCycle = time();
                 }
                 if ($now - $lastArena >= (int) $settings->get('scan.poll_seconds', 300) && ! $chief->halted()) {

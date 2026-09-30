@@ -78,7 +78,7 @@ class PerpsHaltTest extends TestCase
         $executor = app(PaperExecutor::class);
         $enter = new \ReflectionMethod(Desk::class, 'enter');
         $enter->setAccessible(true);
-        $fill = $enter->invoke($desk, $executor, $size, $ctx, $run, $row);
+        $fill = $enter->invoke($desk, $executor, $size, $ctx, $run, $row, microtime(true) + 60);
 
         $this->assertNull($fill);
         $this->assertSame(1, Fill::where('status', 'halt')->count());

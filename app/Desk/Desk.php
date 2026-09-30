@@ -10,6 +10,7 @@ use App\Desk\Data\Candidate as CandidateRow;
 use App\Desk\Data\ProductStats;
 use App\Desk\Data\RiskDecision;
 use App\Desk\Data\SizeDecision;
+use App\Desk\Exceptions\CycleInProgressException;
 use App\Desk\Execution\ExecutionModeMismatchException;
 use App\Desk\Execution\Executor;
 use App\Desk\Execution\MarginBook;
@@ -156,9 +157,53 @@ class Desk
     // SCAN -> VET -> SIZE -> FILLS
     // ------------------------------------------------------------------
 
+    /**
+     * One cycle per mode at a time. A cycle started while another (desk:run, the scheduler, the API)
+     * is mid-flight would re-read the same open position and book a second full-size add, so entry
+     * is guarded by a non-blocking lock; the loser gets CycleInProgressException and decides whether
+     * to skip quietly (console) or report 409 (API). Released in finally, so a cycle that throws
+     * never leaves the mode wedged; the TTL only matters if the process is killed mid-cycle.
+     *
+     * @throws CycleInProgressException
+     */
     public function cycle(): DeskRun
     {
-        return $this->runCycle($this->strategy(), $this->executor(), null);
+        $mode = $this->mode();
+        $lock = Cache::lock("desk:cycle:{$mode}", $this->cycleLockSeconds());
+        if (! $lock->get()) {
+            throw new CycleInProgressException($mode);
+        }
+
+        try {
+            // Executor comes from the mode the lock was taken for; re-reading the global mode here could pair
+            // this lock with an executor for a mode changed mid-request.
+            return $this->runCycle($this->strategy(), $this->executorForMode($mode), null);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Lease far longer than the cycle budget (config desk.cycle_budget_seconds), which stops new entries
+     * well before this expires; the slack covers the one in-flight entry (mutate lock TTL) at the deadline.
+     */
+    private function cycleLockSeconds(): int
+    {
+        return max(3600, $this->cycleBudgetSeconds() * 3);
+    }
+
+    private const DEFAULT_CYCLE_BUDGET_SECONDS = 1200;
+
+    private function cycleBudgetSeconds(): int
+    {
+        $raw = config('desk.cycle_budget_seconds', self::DEFAULT_CYCLE_BUDGET_SECONDS);
+
+        return $this->validCycleBudget($raw) ? (int) $raw : self::DEFAULT_CYCLE_BUDGET_SECONDS;
+    }
+
+    private function validCycleBudget(mixed $raw): bool
+    {
+        return (is_int($raw) && $raw >= 0) || (is_string($raw) && ctype_digit($raw));
     }
 
     /**
@@ -180,6 +225,10 @@ class Desk
             'started_at' => now(),
         ]);
         $this->reporter->runId = $run->id;
+        $cycleDeadline = microtime(true) + $this->cycleBudgetSeconds();
+        if (! $this->validCycleBudget(config('desk.cycle_budget_seconds', self::DEFAULT_CYCLE_BUDGET_SECONDS))) {
+            $this->reporter->warn('CHIEF', sprintf('DESK_CYCLE_BUDGET_SECONDS is not a non-negative integer — using %ds', self::DEFAULT_CYCLE_BUDGET_SECONDS));
+        }
 
         try {
             if ($this->chief->halted()) {
@@ -251,6 +300,11 @@ class Desk
             // ---- VET -> SIZE -> FILLS, one candidate at a time --------
             // Context is rebuilt per candidate so capacity and free cash reflect fills made this cycle.
             foreach ($candidates as $c) {
+                if (microtime(true) >= $cycleDeadline) {
+                    $this->reporter->warn('CHIEF', sprintf('cycle budget (%ds) spent — no further candidates this cycle', $this->cycleBudgetSeconds()));
+
+                    break;
+                }
                 $this->chief->heartbeat('VET');
                 $ctx = $this->context($strategy, $health['degraded'], $executor->mode());
                 $bank = $this->bank($executor);
@@ -294,7 +348,7 @@ class Desk
                     break;
                 }
                 try {
-                    $fill = $this->enter($executor, $size, $ctx, $run, $rows[$c->productId()]);
+                    $fill = $this->enter($executor, $size, $ctx, $run, $rows[$c->productId()], $cycleDeadline);
                 } catch (LockTimeoutException $e) {
                     // Someone else is still mid-mutation on this product (a concurrent close/trim, or a
                     // slow exchange call from another cycle) — skip this candidate this cycle rather than
@@ -377,7 +431,7 @@ class Desk
         return Cache::lock("desk:mutate:{$mode}:{$pid}", $this->mutateLockSeconds());
     }
 
-    private function enter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row): ?Fill
+    private function enter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row, float $cycleDeadline): ?Fill
     {
         $c = $size->verdict->candidate;
         $pid = $c->productId();
@@ -386,12 +440,12 @@ class Desk
         // Serialize every mutation of this product's position/cash under one lock, and re-read the
         // position fresh under it — the copy on $ctx was snapshotted before this candidate's turn and
         // can be stale if another caller (API close/trim, a parallel cycle) touched it meanwhile.
-        return $this->mutateLock($mode, $pid)->block(5, function () use ($executor, $size, $ctx, $run, $row, $c, $pid, $mode) {
-            return $this->doEnter($executor, $size, $ctx, $run, $row, $c, $pid, $mode);
+        return $this->mutateLock($mode, $pid)->block(5, function () use ($executor, $size, $ctx, $run, $row, $c, $pid, $mode, $cycleDeadline) {
+            return $this->doEnter($executor, $size, $ctx, $run, $row, $c, $pid, $mode, $cycleDeadline);
         });
     }
 
-    private function doEnter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row, CandidateRow $c, string $pid, string $mode): ?Fill
+    private function doEnter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row, CandidateRow $c, string $pid, string $mode, float $cycleDeadline): ?Fill
     {
         if ($this->entriesHaltedByStuckOrder($executor, $pid)) {
             $this->reporter->warn('FILLS', "{$pid}: entry skipped, a live order on it has been unresolved too long (desk:intents:resolve)");
@@ -432,6 +486,12 @@ class Desk
 
                 return null;
             }
+        }
+
+        if (microtime(true) >= $cycleDeadline) {
+            $this->reporter->warn('FILLS', "{$pid}: cycle budget spent — entry skipped");
+
+            return null;
         }
 
         // The exchange call stays outside the transaction — a DB rollback cannot un-send an order.
