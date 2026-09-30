@@ -48,7 +48,28 @@ class PrivateOptimizerChannelTest extends TestCase
     {
         config(['desk.master_password' => 'hunter2']);
 
-        $this->withSession(['desk_authed' => true])->auth()->assertOk()->assertJsonStructure(['auth']);
+        $this->post('/login', ['password' => 'hunter2'])->assertRedirect('/');
+
+        $this->auth()->assertOk()->assertJsonStructure(['auth']);
+    }
+
+    public function test_logged_in_post_with_the_session_csrf_token_is_signed(): void
+    {
+        config(['desk.master_password' => 'hunter2']);
+        $this->post('/login', ['password' => 'hunter2']);
+
+        $this->withHeader('X-CSRF-TOKEN', session()->token())
+            ->post('/broadcasting/auth', ['channel_name' => 'private-optimizer', 'socket_id' => '1234.5678'])
+            ->assertOk()->assertJsonStructure(['auth']);
+    }
+
+    public function test_a_stale_login_after_a_password_change_is_refused(): void
+    {
+        config(['desk.master_password' => 'hunter2']);
+        $this->post('/login', ['password' => 'hunter2']);
+        config(['desk.master_password' => 'changed']);
+
+        $this->auth()->assertForbidden();
     }
 
     public function test_no_password_means_a_trusted_desk_and_auth_succeeds(): void
