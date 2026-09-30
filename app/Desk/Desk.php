@@ -10,8 +10,9 @@ use App\Desk\Data\Candidate as CandidateRow;
 use App\Desk\Data\ProductStats;
 use App\Desk\Data\RiskDecision;
 use App\Desk\Data\SizeDecision;
-use App\Desk\Execution\Executor;
+use App\Desk\Exceptions\CycleInProgressException;
 use App\Desk\Execution\ExecutionModeMismatchException;
+use App\Desk\Execution\Executor;
 use App\Desk\Execution\MarginBook;
 use App\Desk\Execution\MarginWindow;
 use App\Desk\Execution\OrderResult;
@@ -153,9 +154,34 @@ class Desk
     // SCAN -> VET -> SIZE -> FILLS
     // ------------------------------------------------------------------
 
+    /**
+     * One cycle per mode at a time. A cycle started while another (desk:run, the scheduler, the API)
+     * is mid-flight would re-read the same open position and book a second full-size add, so entry
+     * is guarded by a non-blocking lock; the loser gets CycleInProgressException and decides whether
+     * to skip quietly (console) or report 409 (API). Released in finally, so a cycle that throws
+     * never leaves the mode wedged; the TTL only matters if the process is killed mid-cycle.
+     *
+     * @throws CycleInProgressException
+     */
     public function cycle(): DeskRun
     {
-        return $this->runCycle($this->strategy(), $this->executor(), null);
+        $mode = $this->mode();
+        $lock = Cache::lock("desk:cycle:{$mode}", $this->cycleLockSeconds());
+        if (! $lock->get()) {
+            throw new CycleInProgressException($mode);
+        }
+
+        try {
+            return $this->runCycle($this->strategy(), $this->executor(), null);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /** Comfortably above the worst-case cycle: several per-product mutate locks' worth of exchange round trips. */
+    private function cycleLockSeconds(): int
+    {
+        return max(600, $this->mutateLockSeconds() * 5);
     }
 
     /**
@@ -929,14 +955,14 @@ class Desk
      *
      * @param  array<int, array{position:string, action:string, rule:?string}>  $out
      * @return array{decision:RiskDecision, terminal:bool}|null
-     *         null when $out already got its 'stale' backoff entry for this sweep and the caller
-     *         must `continue` without resolving a price or writing a RiskCheck row.
-     *         Non-null otherwise: terminal=false means actually attempt the CLOSE decision;
-     *         terminal=true means the position has given up for good (decision is an inert HOLD)
-     *         — the caller must still resolve a price and write a RiskCheck row (round-9 review,
-     *         MINOR: a terminal position used to vanish from the dashboard entirely), but must
-     *         never attempt close/trim/add and must report the 'force_close_terminal' action, not
-     *         the HOLD placeholder's own action.
+     *                                                          null when $out already got its 'stale' backoff entry for this sweep and the caller
+     *                                                          must `continue` without resolving a price or writing a RiskCheck row.
+     *                                                          Non-null otherwise: terminal=false means actually attempt the CLOSE decision;
+     *                                                          terminal=true means the position has given up for good (decision is an inert HOLD)
+     *                                                          — the caller must still resolve a price and write a RiskCheck row (round-9 review,
+     *                                                          MINOR: a terminal position used to vanish from the dashboard entirely), but must
+     *                                                          never attempt close/trim/add and must report the 'force_close_terminal' action, not
+     *                                                          the HOLD placeholder's own action.
      */
     private function forceCloseDecision(Position $p, DeskContext $ctx, string $reason, array &$out): ?array
     {
