@@ -187,6 +187,7 @@ return [
         'kelly_fraction' => 0.5,          // half-Kelly on the strategy's edge estimate
         'min_ticket_usd' => 10.0,
         'max_open_positions' => 7,
+        'max_leverage' => 3.0,            // ceiling on total exposure / equity for plugin strategies; a plugin's risk.leverage_cap can only tighten it
         'max_slippage_bps' => 50,
         'allow_one_add_after_pct' => 50.0, // one add allowed on retest after +50%
     ],

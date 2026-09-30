@@ -70,6 +70,7 @@ class DeskController extends Controller
         abort_unless(Settings::isCanonicalKey($data['key']), 422, 'invalid setting key');
         abort_if(Settings::isSecret($data['key']), 422, 'change the master password from onboarding');
         $v = ParamNormalizer::normalize($data['key'], $data['value']);
+        $this->assertSaneRiskValue($data['key'], $v);
         if ($data['key'] === 'mode' && ! in_array($v, ['paper', 'live'], true)) {
             abort(422, 'mode must be paper or live');
         }
@@ -79,6 +80,55 @@ class DeskController extends Controller
         $settings->set($data['key'], $v);
 
         return response()->json(['ok' => true, 'key' => $data['key'], 'value' => $v]);
+    }
+
+    /** Risk-critical numeric knobs and the range each must stay inside: [min, max, minExclusive]. */
+    private const RISK_RANGES = [
+        'size.kelly_cap_pct' => [0.0, 1.0, true],
+        'size.max_open_positions' => [1, 1000, false],
+        'size.max_leverage' => [1.0, 20.0, false],
+        'size.min_ticket_usd' => [0.0, 1_000_000.0, false],
+    ];
+
+    /**
+     * Walks the value recursively so a parent-map write (key "size", value {kelly_cap_pct: 5}) is
+     * checked leaf by leaf under its full key. Any path that equals or descends from a risk key must
+     * end in a scalar in range exactly AT that key; containers there (even empty ones) or anything
+     * nested below it would hydrate the setting as an array, so they are refused.
+     */
+    private function assertSaneRiskValue(string $key, mixed $value): void
+    {
+        abort_unless(Settings::isCanonicalKey($key), 422, "invalid setting key path {$key}");
+
+        $bare = preg_replace('/^per_product\.[^.]+\./i', '', $key);
+        // MariaDB's utf8mb4_unicode_ci matches keys case-insensitively, so "size.KELLY_CAP_PCT" would
+        // overwrite the "size.kelly_cap_pct" row: match risk paths on the lowercased path and demand the canonical spelling.
+        $lower = strtolower($bare);
+
+        foreach (self::RISK_RANGES as $riskKey => [$min, $max, $minExclusive]) {
+            if (($lower === $riskKey || str_starts_with($lower, $riskKey.'.')) && $bare !== $lower) {
+                abort(422, "{$key}: use the canonical key {$riskKey}");
+            }
+            if (str_starts_with($lower, $riskKey.'.')) {
+                abort(422, "{$key}: {$riskKey} must be a plain number, nothing may be nested under it");
+            }
+            if ($lower === $riskKey) {
+                $ok = is_numeric($value) && is_finite((float) $value)
+                    && ($minExclusive ? $value > $min : $value >= $min) && $value <= $max
+                    && ($riskKey !== 'size.max_open_positions' || floor((float) $value) === (float) $value);
+                abort_unless($ok, 422, sprintf('%s must be a %s number %s %s and <= %s', $key, $riskKey === 'size.max_open_positions' ? 'whole' : 'plain', $minExclusive ? '>' : '>=', $min, $max));
+
+                return;
+            }
+            // An ancestor of a risk key (e.g. "size") may only be written as a map.
+            abort_if(str_starts_with($riskKey, $lower.'.') && ! is_array($value), 422, "{$key} must be an object");
+        }
+
+        if (is_array($value)) {
+            foreach ($value as $child => $childValue) {
+                $this->assertSaneRiskValue($key.'.'.$child, $childValue);
+            }
+        }
     }
 
     public function deleteSetting(string $key, Settings $settings): JsonResponse
