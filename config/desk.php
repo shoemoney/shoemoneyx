@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 use App\Desk\Strategies\CustomStrategy;
+use App\Desk\Strategies\JsonPluginStrategy;
 use App\Desk\Strategies\MeanReversionStrategy;
 
 /*
@@ -26,7 +27,7 @@ return [
     'strategies' => [
         'mr' => MeanReversionStrategy::class,
         'custom' => CustomStrategy::class,
-        'json' => \App\Desk\Strategies\JsonPluginStrategy::class,
+        'json' => JsonPluginStrategy::class,
     ],
 
     // Which Coinbase products form the tradeable universe.
@@ -96,6 +97,14 @@ return [
         'starting_cash' => (float) env('DESK_PAPER_CASH', 1000),
         // Simulated market-order slippage in bps applied against best ask/bid.
         'slippage_bps' => (float) env('DESK_PAPER_SLIPPAGE_BPS', 1),   // on top of the real bid/ask; Coinbase majors quote 0.2–3 bps wide
+    ],
+
+    // Live order idempotency (App\Desk\Execution\Concerns\SubmitsOrdersIdempotently).
+    'live_orders' => [
+        // An order the venue cannot show us is only treated as "never arrived" after this long, so a
+        // slow-to-index order is never re-sent under a fresh identity.
+        'not_found_grace_seconds' => (int) env('DESK_LIVE_ORDER_GRACE_SECONDS', 120),
+        'poll_sleep_ms' => (int) env('DESK_LIVE_ORDER_POLL_SLEEP_MS', 400),
     ],
 
     // Post-only shadow A/B (paper only): what a resting maker limit would have done instead of the

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Exchange\Coinbase\Api;
 
 use App\Models\CoinbaseAccount;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
 
 /** Authenticated Advanced Trade facade: accounts, orders, fills, fees. */
@@ -88,11 +89,11 @@ class CoinbaseService
     public function marketContracts(CoinbaseAccount $account, string $productId, string $side, int $contracts, ?string $clientOrderId = null): array
     {
         return $this->createOrder($account, [
-            "client_order_id" => $clientOrderId ?? (string) Str::uuid(),
-            "product_id" => $productId,
-            "side" => $side,
-            "order_configuration" => [
-                "market_market_ioc" => ["base_size" => (string) $contracts],
+            'client_order_id' => $clientOrderId ?? (string) Str::uuid(),
+            'product_id' => $productId,
+            'side' => $side,
+            'order_configuration' => [
+                'market_market_ioc' => ['base_size' => (string) $contracts],
             ],
         ]);
     }
@@ -100,13 +101,13 @@ class CoinbaseService
     /** Coinbase Financial Markets (US futures) balance summary. docs: rest-api/futures/get-futures-balance-summary */
     public function futuresBalance(CoinbaseAccount $account): array
     {
-        return $this->client->get($account, "/cfm/balance_summary")["balance_summary"] ?? [];
+        return $this->client->get($account, '/cfm/balance_summary')['balance_summary'] ?? [];
     }
 
     /** Open futures positions. docs: rest-api/futures/list-futures-positions */
     public function futuresPositions(CoinbaseAccount $account): array
     {
-        return $this->client->get($account, "/cfm/positions")["positions"] ?? [];
+        return $this->client->get($account, '/cfm/positions')['positions'] ?? [];
     }
 
     /** Current intraday/overnight/weekend/transition margin window. docs: rest-api/cfm/get-current-margin-window */
@@ -135,6 +136,35 @@ class CoinbaseService
     public function getOrder(CoinbaseAccount $account, string $orderId): array
     {
         return $this->client->get($account, "/orders/historical/{$orderId}");
+    }
+
+    /**
+     * The order this client_order_id created, or null when the venue's history for the product has none.
+     * Throws (never returns null) when the listing itself fails, so "not there" always means "looked and
+     * it is not there". $since bounds the scan; Coinbase indexes by product, not by client id.
+     */
+    public function findOrderByClientId(CoinbaseAccount $account, string $productId, string $clientOrderId, \DateTimeInterface $since): ?array
+    {
+        $cursor = null;
+        for ($page = 0; $page < 10; $page++) {
+            $resp = $this->listOrders($account, array_filter([
+                'product_ids' => $productId,
+                'start_date' => CarbonImmutable::instance($since)->subMinutes(5)->utc()->format('Y-m-d\TH:i:s\Z'),
+                'limit' => 100,
+                'cursor' => $cursor,
+            ]));
+            foreach ($resp['orders'] ?? [] as $order) {
+                if (($order['client_order_id'] ?? null) === $clientOrderId) {
+                    return $order;
+                }
+            }
+            $cursor = ($resp['has_next'] ?? false) ? ($resp['cursor'] ?? null) : null;
+            if (! $cursor) {
+                return null;
+            }
+        }
+
+        throw new CoinbaseApiException("order history for {$productId} is too deep to search for {$clientOrderId}");
     }
 
     public function listOrders(CoinbaseAccount $account, array $filters = []): array

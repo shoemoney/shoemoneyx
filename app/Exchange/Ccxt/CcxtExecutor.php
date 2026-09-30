@@ -4,19 +4,31 @@ declare(strict_types=1);
 
 namespace App\Exchange\Ccxt;
 
+use App\Desk\Execution\Concerns\SubmitsOrdersIdempotently;
 use App\Desk\Execution\Executor;
 use App\Desk\Execution\OrderResult;
+use App\Desk\Execution\ReconcilesOrders;
+use App\Models\OrderIntent;
+use ccxt\ArgumentsRequired;
+use ccxt\AuthenticationError;
+use ccxt\BadRequest;
+use ccxt\Exchange;
+use ccxt\InsufficientFunds;
+use ccxt\InvalidOrder;
+use ccxt\NotSupported;
 
 /**
  * LIVE market execution through ccxt. Spot only: what gets stored is the order
  * read back from the venue after the fill, never the create response.
  */
-class CcxtExecutor implements Executor
+class CcxtExecutor implements Executor, ReconcilesOrders
 {
+    use SubmitsOrdersIdempotently;
+
     /** ccxt statuses that mean the venue is done with the order. */
     private const TERMINAL = ['closed', 'canceled', 'expired', 'rejected'];
 
-    public function __construct(private \ccxt\Exchange $client, private string $ccxtId) {}
+    public function __construct(private Exchange $client, private string $ccxtId) {}
 
     public function mode(): string
     {
@@ -43,28 +55,18 @@ class CcxtExecutor implements Executor
             return OrderResult::rejected('error', $usd, $decisionPrice, "{$this->ccxtId} sizes market buys in base units and no decision price was given");
         }
 
-        try {
-            $create = $byCost
-                ? $this->client->create_market_buy_order_with_cost($symbol, $usd)
-                : $this->client->create_order($symbol, 'market', 'buy', $usd / $decisionPrice);
-        } catch (\Throwable $e) {
-            return OrderResult::rejected('error', $usd, $decisionPrice, $this->ccxtId.': '.$e->getMessage());
-        }
-
-        return $this->settle($create, $symbol, 'BUY', $usd, $decisionPrice, $usd);
+        return $this->submitOrder('buy', $productId, $productId, 'BUY', $usd, $decisionPrice, ['requested' => $usd],
+            fn (string $clientOrderId) => $byCost
+                ? $this->client->create_market_buy_order_with_cost($symbol, $usd, ['clientOrderId' => $clientOrderId])
+                : $this->client->create_order($symbol, 'market', 'buy', $usd / $decisionPrice, null, ['clientOrderId' => $clientOrderId]));
     }
 
     public function sell(string $productId, float $qty, float $decisionPrice, float $entryUsdShare = 0.0, bool $maker = false): OrderResult
     {
         $symbol = Symbols::toCcxt($productId);
 
-        try {
-            $create = $this->client->create_order($symbol, 'market', 'sell', $qty);
-        } catch (\Throwable $e) {
-            return OrderResult::rejected('error', $qty * $decisionPrice, $decisionPrice, $this->ccxtId.': '.$e->getMessage());
-        }
-
-        return $this->settle($create, $symbol, 'SELL', $qty * $decisionPrice, $decisionPrice, $qty);
+        return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['requested' => $qty],
+            fn (string $clientOrderId) => $this->client->create_order($symbol, 'market', 'sell', $qty, null, ['clientOrderId' => $clientOrderId]));
     }
 
     public function openShort(string $productId, float $usd, float $decisionPrice): OrderResult
@@ -77,32 +79,89 @@ class CcxtExecutor implements Executor
         return OrderResult::rejected('rejected', $qty * $decisionPrice, $decisionPrice, 'ccxt spot adapter cannot short — perps not supported in v1');
     }
 
-    /**
-     * Market orders settle immediately; poll the order record a few times so the fill we
-     * report is the venue's own, then derive everything from that readback.
-     *
-     * @param  float  $requested  requested USD for a buy, requested base qty for a sell
-     */
-    private function settle(array $create, string $symbol, string $side, float $requestedUsd, float $decisionPrice, float $requested): OrderResult
+    /** Only definitive venue refusals are safe to call "not placed"; a timeout or a 5xx may hide a live order. */
+    protected function ambiguousFailure(\Throwable $e): bool
     {
-        $orderId = isset($create['id']) ? (string) $create['id'] : null;
+        return ! ($e instanceof InvalidOrder || $e instanceof InsufficientFunds || $e instanceof BadRequest
+            || $e instanceof AuthenticationError || $e instanceof NotSupported || $e instanceof ArgumentsRequired);
+    }
 
-        // The create response is only the fallback: what gets reported is the order the venue
-        // hands back afterwards. Venues without fetchOrder leave us nothing better than create.
-        $order = $create;
-        $canReadBack = $orderId !== null && ($this->client->has['fetchOrder'] ?? false);
+    protected function failureNote(\Throwable $e): string
+    {
+        return $this->ccxtId.': '.$e->getMessage();
+    }
 
-        for ($i = 0; $canReadBack && $i < 6; $i++) {
-            usleep(400_000);
-            try {
-                $order = $this->client->fetch_order($orderId, $symbol);
-            } catch (\Throwable) {
-                continue;   // Keep the last good record and try again.
-            }
-            if (in_array((string) ($order['status'] ?? ''), self::TERMINAL, true)) {
-                break;
+    protected function createRejection(array $create): ?string
+    {
+        return null;   // ccxt raises on refusals
+    }
+
+    protected function createdOrderId(array $create): ?string
+    {
+        return isset($create['id']) ? (string) $create['id'] : null;
+    }
+
+    /** Venues without fetchOrder leave nothing better than the create response. */
+    protected function recordFromCreate(array $create): ?array
+    {
+        return $create;
+    }
+
+    protected function pollAttempts(): int
+    {
+        return ($this->client->has['fetchOrder'] ?? false) ? 6 : 0;
+    }
+
+    protected function fetchOrderRecord(OrderIntent $intent): array
+    {
+        if (! ($this->client->has['fetchOrder'] ?? false)) {
+            throw new \RuntimeException("{$this->ccxtId} has no fetchOrder");
+        }
+
+        return $this->client->fetch_order((string) $intent->venue_order_id, Symbols::toCcxt($intent->desk_product_id));
+    }
+
+    /** By venue id when we have one; otherwise by scanning the venue's order lists for our clientOrderId. */
+    protected function lookupOrder(OrderIntent $intent): ?array
+    {
+        if ($intent->venue_order_id) {
+            return $this->fetchOrderRecord($intent);
+        }
+
+        $symbol = Symbols::toCcxt($intent->desk_product_id);
+        $since = $intent->created_at->getTimestamp() * 1000 - 300_000;
+        $lists = array_values(array_filter(
+            ['fetchOrders' => 'fetch_orders', 'fetchOpenOrders' => 'fetch_open_orders', 'fetchClosedOrders' => 'fetch_closed_orders'],
+            fn ($method, $capability) => (bool) ($this->client->has[$capability] ?? false),
+            ARRAY_FILTER_USE_BOTH,
+        ));
+        if ($lists === []) {
+            throw new \RuntimeException("{$this->ccxtId} cannot list orders, so an order without a venue id cannot be looked up by clientOrderId");
+        }
+        foreach ($lists as $method) {
+            foreach ($this->client->{$method}($symbol, $since) as $order) {
+                if (($order['clientOrderId'] ?? null) === $intent->client_order_id) {
+                    return $order;
+                }
             }
         }
+
+        return null;
+    }
+
+    protected function orderTerminal(array $order): bool
+    {
+        return in_array((string) ($order['status'] ?? ''), self::TERMINAL, true);
+    }
+
+    /** The venue's own order record, turned into what the desk books. Called only for a terminal order. */
+    protected function resultFromOrder(OrderIntent $intent, array $create, array $order): OrderResult
+    {
+        $side = $intent->side;
+        $requestedUsd = (float) $intent->requested_usd;
+        $decisionPrice = (float) $intent->decision_price;
+        $requested = (float) ($intent->context['requested'] ?? $requestedUsd);
+        $orderId = $intent->venue_order_id ?? (isset($order['id']) ? (string) $order['id'] : null);
 
         $filledQty = (float) ($order['filled'] ?? 0);
         $cost = (float) ($order['cost'] ?? 0);
@@ -130,7 +189,7 @@ class CcxtExecutor implements Executor
             feeUsd: $fee,
             partial: $partial,
             venueOrderId: $orderId,
-            raw: ['create' => $create, 'order' => $order],
+            raw: ['create' => $create, 'order' => $order, 'client_order_id' => $intent->client_order_id],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
             basisRecovered: $basisRecovered,
         );

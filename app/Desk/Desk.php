@@ -10,8 +10,8 @@ use App\Desk\Data\Candidate as CandidateRow;
 use App\Desk\Data\ProductStats;
 use App\Desk\Data\RiskDecision;
 use App\Desk\Data\SizeDecision;
-use App\Desk\Execution\Executor;
 use App\Desk\Execution\ExecutionModeMismatchException;
+use App\Desk\Execution\Executor;
 use App\Desk\Execution\MarginBook;
 use App\Desk\Execution\MarginWindow;
 use App\Desk\Execution\OrderResult;
@@ -21,11 +21,13 @@ use App\Desk\Execution\PerpsCalendar;
 use App\Desk\Execution\PerpsGate;
 use App\Desk\Execution\PerpsSession;
 use App\Desk\Execution\PostOnlyShadows;
+use App\Desk\Execution\ReconcilesOrders;
 use App\Exchange\Coinbase\CoinbasePerpsExecutor;
 use App\Exchange\Contracts\Exchange;
 use App\Models\Candidate;
 use App\Models\DeskRun;
 use App\Models\Fill;
+use App\Models\OrderIntent;
 use App\Models\PaperLedger;
 use App\Models\Position;
 use App\Models\Product;
@@ -188,6 +190,8 @@ class Desk
 
                 return $run;
             }
+
+            $this->reconcileLiveOrders($strategy, $executor);
 
             $ctx = $this->context($strategy, $health['degraded'], $executor->mode());
             $bank = $this->bank($executor, true);
@@ -650,6 +654,104 @@ class Desk
     }
 
     // ------------------------------------------------------------------
+    // Live order reconciliation
+    // ------------------------------------------------------------------
+
+    /**
+     * A live order whose outcome was ambiguous (timeout on create, readback that never answered) stays a
+     * pending OrderIntent and blocks new orders on its product. Here the desk asks the venue what became
+     * of each one and books the answer exactly once, so a live fill nobody saw is never left unrecorded
+     * and an order that never landed frees the product again. Never sends an order itself.
+     */
+    public function reconcileLiveOrders(Strategy $strategy, Executor $executor): void
+    {
+        if (! $executor instanceof ReconcilesOrders) {
+            return;
+        }
+
+        foreach (OrderIntent::pending()->mode($executor->mode())->orderBy('id')->get() as $intent) {
+            try {
+                $result = $executor->reconcile($intent);
+                if ($result === null) {
+                    if ($intent->refresh()->status === 'pending') {
+                        $this->reporter->error('FILLS', "LIVE ORDER UNRESOLVED {$intent->method} {$intent->desk_product_id} ({$intent->client_order_id}): the venue has not confirmed it; new orders on this product are held");
+                    }
+
+                    continue;
+                }
+                $this->bookReconciled($strategy, $executor, $intent, $result);
+            } catch (LockTimeoutException) {
+                $this->reporter->warn('FILLS', "{$intent->desk_product_id}: mutate lock timed out reconciling {$intent->client_order_id}, will retry next sweep");
+            } catch (\Throwable $e) {
+                $this->reporter->warn('FILLS', "{$intent->desk_product_id}: reconcile of {$intent->client_order_id} failed: ".$e->getMessage());
+            }
+        }
+    }
+
+    private function bookReconciled(Strategy $strategy, Executor $executor, OrderIntent $intent, OrderResult $result): void
+    {
+        $mode = $executor->mode();
+        $pid = $intent->desk_product_id;
+        $exit = in_array($intent->method, ['sell', 'cover_short'], true);
+
+        if ($exit) {
+            $p = Position::open()->mode($mode)->seat($this->arenaSeatId)->where('product_id', $pid)->first();
+            if ($p !== null && $result->ok()) {
+                // The executor's own same-method replay hands this very order back and resolves the intent,
+                // and close() books it (a partial fill keeps the remainder open) under the product lock.
+                $this->close($p, 'reconcile', (float) ($p->last_price ?? $p->entry_price), $executor);
+
+                return;
+            }
+        }
+
+        $this->mutateLock($mode, $pid)->block(5, function () use ($strategy, $intent, $result, $mode, $pid, $exit) {
+            if ($intent->refresh()->status !== 'pending') {
+                return;   // a same-method call replayed and booked it while we waited for the lock
+            }
+            $existing = Position::open()->mode($mode)->seat($this->arenaSeatId)->where('product_id', $pid)->first();
+            $short = $intent->method === 'open_short';
+            $kind = $exit ? 'exit' : ($existing ? 'add' : 'entry');
+
+            DB::transaction(function () use ($strategy, $intent, $result, $mode, $pid, $exit, $existing, $short, $kind) {
+                $fill = Fill::create($this->fillAttrs(null, $existing, $pid, $intent->side, $kind, $result, $mode));
+
+                if ($result->ok() && ! $exit) {
+                    if ($existing === null) {
+                        $position = Position::create([
+                            'arena_seat_id' => $this->arenaSeatId, 'mode' => $mode, 'strategy' => $strategy->key(),
+                            'product_id' => $pid, 'side' => $short ? 'short' : 'long',
+                            'quantity' => $result->filledQty, 'entry_price' => $result->fillPrice, 'entry_usd' => $result->filledUsd,
+                            'fees_usd' => $result->feeUsd, 'peak_price' => $result->fillPrice, 'last_price' => $result->fillPrice,
+                            'opened_at' => now(),
+                            'meta' => [
+                                'decision_price' => $result->decisionPrice, 'entry_fees_usd' => $result->feeUsd,
+                                'initial_cost_usd' => $result->filledUsd, 'last_action_ts' => now()->getTimestamp(),
+                                'reconciled_from_intent' => $intent->client_order_id,
+                            ],
+                        ]);
+                        $fill->update(['position_id' => $position->id]);
+                    } elseif ($existing->isShort() === $short) {
+                        $this->bookAdd($existing, $result, null, null);
+                        $fill->update(['position_id' => $existing->id]);
+                    }
+                }
+
+                $intent->resolve($result->ok() ? 'filled' : 'rejected', 'booked by reconcile');
+            });
+
+            if ($result->ok()) {
+                $this->reporter->trade('FILLS', sprintf('RECONCILED %s %s $%.2f @ %.6f (%s)', strtoupper($intent->method), $pid, $result->filledUsd, $result->fillPrice, $intent->client_order_id));
+            } else {
+                $this->reporter->warn('FILLS', "{$pid} reconciled {$intent->method} did not fill: ".($result->note ?? $result->status));
+            }
+            if ($result->ok() && ($exit || ($existing !== null && $existing->isShort() !== $short))) {
+                $this->reporter->error('FILLS', "ORPHAN LIVE FILL {$intent->method} {$pid} ({$intent->client_order_id}): filled at the venue but there is no matching open position to book it against");
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------
     // RISK — own timer, final authority
     // ------------------------------------------------------------------
 
@@ -664,6 +766,8 @@ class Desk
     {
         $this->chief->heartbeat('RISK');
         $out = [];
+
+        $this->reconcileLiveOrders($strategy, $executor);
 
         if ($executor instanceof CoinbasePerpsExecutor) {
             try {
@@ -929,14 +1033,14 @@ class Desk
      *
      * @param  array<int, array{position:string, action:string, rule:?string}>  $out
      * @return array{decision:RiskDecision, terminal:bool}|null
-     *         null when $out already got its 'stale' backoff entry for this sweep and the caller
-     *         must `continue` without resolving a price or writing a RiskCheck row.
-     *         Non-null otherwise: terminal=false means actually attempt the CLOSE decision;
-     *         terminal=true means the position has given up for good (decision is an inert HOLD)
-     *         — the caller must still resolve a price and write a RiskCheck row (round-9 review,
-     *         MINOR: a terminal position used to vanish from the dashboard entirely), but must
-     *         never attempt close/trim/add and must report the 'force_close_terminal' action, not
-     *         the HOLD placeholder's own action.
+     *                                                          null when $out already got its 'stale' backoff entry for this sweep and the caller
+     *                                                          must `continue` without resolving a price or writing a RiskCheck row.
+     *                                                          Non-null otherwise: terminal=false means actually attempt the CLOSE decision;
+     *                                                          terminal=true means the position has given up for good (decision is an inert HOLD)
+     *                                                          — the caller must still resolve a price and write a RiskCheck row (round-9 review,
+     *                                                          MINOR: a terminal position used to vanish from the dashboard entirely), but must
+     *                                                          never attempt close/trim/add and must report the 'force_close_terminal' action, not
+     *                                                          the HOLD placeholder's own action.
      */
     private function forceCloseDecision(Position $p, DeskContext $ctx, string $reason, array &$out): ?array
     {

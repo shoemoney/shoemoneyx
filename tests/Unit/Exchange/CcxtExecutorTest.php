@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace Tests\Unit\Exchange;
 
 use App\Exchange\Ccxt\CcxtExecutor;
+use ccxt\InsufficientFunds;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Exchange\StubCcxtClient;
 use Tests\TestCase;
 
 class CcxtExecutorTest extends TestCase
 {
+    use RefreshDatabase;
+
     private StubCcxtClient $client;
 
     private CcxtExecutor $executor;
@@ -101,7 +105,7 @@ class CcxtExecutorTest extends TestCase
 
     public function test_a_create_failure_becomes_a_rejection_carrying_the_venue_message(): void
     {
-        $this->client->createThrows = new \ccxt\InsufficientFunds('not enough USD');
+        $this->client->createThrows = new InsufficientFunds('not enough USD');
 
         $result = $this->executor->buy('BTC-USD', 1000.0, 99_000.0);
 
