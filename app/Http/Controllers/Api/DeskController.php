@@ -20,7 +20,6 @@ use App\Support\ParamNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Arr;
 
 class DeskController extends Controller
 {
@@ -85,8 +84,9 @@ class DeskController extends Controller
     private function assertSaneRiskValue(string $key, mixed $value): void
     {
         if (is_array($value)) {
-            foreach (Arr::dot($value) as $leaf => $leafValue) {
-                $this->assertSaneRiskValue($key.'.'.$leaf, $leafValue);
+            abort_if(isset(self::RISK_RANGES[preg_replace('/^per_product\.[^.]+\./', '', $key)]), 422, 'risk settings must be plain numbers');
+            foreach ($value as $child => $childValue) {
+                $this->assertSaneRiskValue($key.'.'.$child, $childValue);
             }
 
             return;
@@ -94,6 +94,11 @@ class DeskController extends Controller
 
         $bare = preg_replace('/^per_product\.[^.]+\./', '', $key);
         if (! isset(self::RISK_RANGES[$bare])) {
+            // A list/object at or under a numeric risk key ("kelly_cap_pct.0") is never a valid value.
+            foreach (array_keys(self::RISK_RANGES) as $riskKey) {
+                abort_if(str_starts_with($bare, $riskKey.'.'), 422, "{$riskKey} must be a plain number");
+            }
+
             return;
         }
         [$min, $max, $minExclusive] = self::RISK_RANGES[$bare];

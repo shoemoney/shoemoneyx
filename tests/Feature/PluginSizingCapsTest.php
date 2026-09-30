@@ -126,4 +126,14 @@ class PluginSizingCapsTest extends TestCase
         $this->putJson('/api/settings', ['key' => 'per_product', 'value' => ['BTC-USD' => ['size' => ['max_leverage' => 0]]]])->assertStatus(422);
         $this->putJson('/api/settings', ['key' => 'size', 'value' => ['kelly_cap_pct' => 0.05]])->assertOk();
     }
+
+    public function test_array_or_object_values_under_a_risk_key_are_rejected(): void
+    {
+        config(['cache.default' => 'array']);
+        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['kelly_cap_pct' => [5]]])->assertStatus(422);
+        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['max_leverage' => ['x' => 0]]])->assertStatus(422);
+        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['kelly_cap_pct' => []]])->assertStatus(422);
+        $this->putJson('/api/settings', ['key' => 'size.kelly_cap_pct', 'value' => [5]])->assertStatus(422);
+        $this->putJson('/api/settings', ['key' => 'per_product.BTC-USD.size', 'value' => ['kelly_cap_pct' => [5]]])->assertStatus(422);
+    }
 }
