@@ -103,7 +103,11 @@ return [
     'live_orders' => [
         // An order the venue cannot show us is only treated as "never arrived" after this long, so a
         // slow-to-index order is never re-sent under a fresh identity.
-        'not_found_grace_seconds' => (int) env('DESK_LIVE_ORDER_GRACE_SECONDS', 120),
+        'not_found_grace_seconds' => (static function (): int {
+            $seconds = filter_var(env('DESK_LIVE_ORDER_GRACE_SECONDS', 120), FILTER_VALIDATE_INT);
+
+            return $seconds === false ? 120 : max(60, $seconds);
+        })(),
         // A pending order older than this halts new entries on its product and is reported as STUCK.
         'stuck_minutes' => (int) env('DESK_LIVE_ORDER_STUCK_MINUTES', 30),
         'poll_sleep_ms' => (int) env('DESK_LIVE_ORDER_POLL_SLEEP_MS', 400),
