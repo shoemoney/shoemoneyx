@@ -26,7 +26,7 @@ Route::get('/ai/openrouter/callback', [AiConnectController::class, 'callback'])-
 
 // First-run wizard: unfinished onboarding takes over the root before the SPA shell does.
 // The public demo never touches the database (see PublicDemo middleware); a DB failure here
-// fails open to the app shell rather than 500ing, same as Settings::masterPassword().
+// fails open to the app shell rather than 500ing (the MasterPassword gate in front of it fails closed).
 Route::get('/', function () {
     try {
         $complete = config('site.demo') || app(OnboardingWizard::class)->isComplete();

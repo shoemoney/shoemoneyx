@@ -25,7 +25,7 @@ model-written replies and the agent conversation persists server-side, and that 
 renders at a real height. Also exercises the marketplace-AMI path (login-before-wizard) when
 `E2E_BOOTSTRAP_PASSWORD` is set.
 
-Checks: `AMI desk gates on /login before the wizard` · `login page shows the instance-ID hint` ·
+Checks: `AMI desk gates on /login before the wizard` · `login page shows the instance-ID guide` ·
 `root redirects to onboarding on a fresh desk` · `master-password step advanced to openrouter
 step` · `openrouter step accepted the key (server validated it against OpenRouter)` · `wizard
 reports completed=true via /api/onboarding` · `master_password step recorded as done` · `fresh

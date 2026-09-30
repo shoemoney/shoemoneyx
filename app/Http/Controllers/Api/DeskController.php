@@ -6,14 +6,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Desk\Chief;
 use App\Desk\Desk;
+use App\Desk\DeskAuthThrottle;
 use App\Desk\EndOfDayReport;
 use App\Desk\Exceptions\CycleInProgressException;
+use App\Desk\PaperBook;
 use App\Desk\Settings;
 use App\Desk\StrategyRegistry;
 use App\Exchange\Contracts\MarketData;
 use App\Http\Controllers\Controller;
-use App\Models\PaperLedger;
-use App\Models\Position;
 use App\Models\Product;
 use App\Models\Setting;
 use App\Services\Market\LiveFeed;
@@ -21,6 +21,7 @@ use App\Support\ParamNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class DeskController extends Controller
 {
@@ -33,10 +34,7 @@ class DeskController extends Controller
             'resume' => tap(response()->json(['ok' => true]), fn () => $chief->resume()),
             'start' => tap(response()->json(['ok' => true]), fn () => $chief->setRunning(true)),
             'stop' => tap(response()->json(['ok' => true]), fn () => $chief->setRunning(false)),
-            'paper-reset' => tap(response()->json(['ok' => true]), function () {
-                Position::mode('paper')->delete();
-                PaperLedger::truncate();
-            }),
+            'paper-reset' => tap(response()->json(['ok' => true]), fn () => PaperBook::reset()),
             default => abort(404, 'unknown action'),
         };
     }
@@ -69,6 +67,8 @@ class DeskController extends Controller
         $data = $request->validate(['key' => 'required|string|max:120', 'value' => 'present']);
         abort_unless(Settings::isCanonicalKey($data['key']), 422, 'invalid setting key');
         abort_if(Settings::isSecret($data['key']), 422, 'change the master password from onboarding');
+        abort_if(Settings::isUnderScalarKey($data['key']), 422, "{$data['key']}: nothing may be nested under a single-value setting");
+        abort_if(Settings::isScalarKey($data['key']) && is_array($data['value']), 422, "{$data['key']} must be a single value");
         $v = ParamNormalizer::normalize($data['key'], $data['value']);
         $this->assertSaneRiskValue($data['key'], $v);
         if ($data['key'] === 'mode' && ! in_array($v, ['paper', 'live'], true)) {
@@ -76,6 +76,9 @@ class DeskController extends Controller
         }
         if ($data['key'] === 'strategy' && ! isset(config('desk.strategies')[$v])) {
             abort(422, 'unknown strategy');
+        }
+        if ($data['key'] === 'mode' && $v === 'live') {
+            $this->requireLivePassword($request, $settings);
         }
         $settings->set($data['key'], $v);
 
@@ -131,10 +134,35 @@ class DeskController extends Controller
         }
     }
 
-    public function deleteSetting(string $key, Settings $settings): JsonResponse
+    /**
+     * Going live needs the master password typed again, even from a logged-in browser (logins last
+     * about a year) and even with a valid X-Desk-Token: the header alone is not enough.
+     */
+    private function requireLivePassword(Request $request, Settings $settings): void
+    {
+        if (DeskAuthThrottle::tooManyFailures($request)) {
+            DeskAuthThrottle::lockout($request);
+        }
+
+        $password = $request->input('password');
+        if (! is_string($password) || $password === '') {
+            throw ValidationException::withMessages(['password' => 'password required to go live']);
+        }
+        if (! $settings->verifyMasterPassword($password)) {
+            DeskAuthThrottle::recordFailure($request);
+
+            throw ValidationException::withMessages(['password' => 'wrong password']);
+        }
+    }
+
+    public function deleteSetting(string $key, Request $request, Settings $settings): JsonResponse
     {
         abort_unless(Settings::isCanonicalKey($key), 422, 'invalid setting key');
         abort_if(Settings::isSecret($key), 422, 'change the master password from onboarding');
+        // Dropping the override hands the mode back to DESK_MODE, which may be live.
+        if ($key === 'mode' && config('desk.mode') === 'live') {
+            $this->requireLivePassword($request, $settings);
+        }
         $settings->forget($key);
 
         return response()->json(['ok' => true]);

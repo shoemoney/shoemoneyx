@@ -227,16 +227,26 @@ return [
         'base_url' => env('WORLDMONITOR_URL', ''),
     ],
 
-    // One master password gating every page and the API. Browsers use the login session;
-    // scripts send it as the X-Desk-Token header. Empty = gate off, private network only.
+    // One-time bootstrap key for the first login (the EC2 instance ID on AMIs, the generated value
+    // from docker/up.sh). Signing in with it only opens the set-password screen; the owner then
+    // chooses their own password, stored hashed in the settings table. Leave it empty on a manual
+    // install only if nothing can reach the box before you visit it: with no key at all the first
+    // visitor sets the password. Browsers use the login session; scripts send the X-Desk-Token header.
     'master_password' => env('MASTER_PASSWORD'),
 
-    // Shown on the login page while the master password is still the bootstrap value (no
-    // onboarding override yet) — e.g. a marketplace AMI sets this to point at the EC2 instance ID.
+    // Shown on the login page while the owner has not chosen a password yet — e.g. a marketplace
+    // AMI sets this to point at the EC2 instance ID.
     'master_password_hint' => env('MASTER_PASSWORD_HINT'),
 
-    // True on internet-exposed images: onboarding refuses to leave the desk password-less.
-    'require_master_password' => (bool) env('DESK_REQUIRE_MASTER_PASSWORD', false),
+    // Set by the AMI's first boot (from IMDS): the region of the buyer's console link on the login page.
+    // Set by the Dockerfile. Keyless first-password setup is refused inside a container, where the
+    // client address cannot be trusted. Null falls back to looking for /.dockerenv.
+    'in_container' => env('DESK_IN_CONTAINER') === null ? null : filter_var(env('DESK_IN_CONTAINER'), FILTER_VALIDATE_BOOLEAN),
+
+    'aws_region' => env('DESK_AWS_REGION'),
+
+    // 'aws' turns on the numbered first-login guide on the login page (AMI first boot sets it).
+    'first_login_guide' => env('DESK_FIRST_LOGIN_GUIDE'),
 
     // Wall-clock budget for one cycle's candidate loop. Once spent, no new candidate is vetted or entered
     // (logged). Must stay far below the cycle lock lease (Desk::cycleLockSeconds) so the lease cannot lapse

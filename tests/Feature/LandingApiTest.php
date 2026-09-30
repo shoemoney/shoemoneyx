@@ -91,7 +91,7 @@ class LandingApiTest extends TestCase
         $position = $this->position();
 
         $this->getJson('/api/landing')->assertOk()->assertJsonPath('metrics.pnl', 20);
-        $this->withHeader('X-Desk-Token', 'outdated-token')->getJson('/api/landing')
+        $this->withHeader('X-Desk-Token', self::DESK_PASSWORD)->getJson('/api/landing')
             ->assertOk()->assertJsonPath('metrics.open', 1);
         $this->getJson('/api/settings')->assertOk();
         $this->postJson('/api/landing')->assertMethodNotAllowed();

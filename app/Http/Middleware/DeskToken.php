@@ -9,65 +9,114 @@ use App\Desk\DeskLogin;
 use App\Desk\Settings;
 use Closure;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\IpUtils;
 
 /**
- * API gate for the master password. Leave MASTER_PASSWORD empty and the private network stays the
- * desk's only access boundary (see openGate for what still applies). Once set, a request passes with either:
+ * API gate for the master password. A request passes with either:
  *  - the browser's login session (httpOnly cookie; writes also need the X-CSRF-TOKEN header), or
  *  - an X-Desk-Token header carrying the password, for scripts and operators.
  * The password is never handed to the browser, and never accepted from the query string, where
  * it would land in access logs and history. Wrong X-Desk-Token guesses are throttled per IP.
+ *
+ * The .env MASTER_PASSWORD is a one-time bootstrap key: until the owner sets their own password,
+ * a session or header carrying it may only read onboarding state and set the password
+ * (403 set_password_required everywhere else). With no credential at all the gate fails closed
+ * the same way, so the first visitor sets the password.
  */
 class DeskToken
 {
     public function handle(Request $request, Closure $next)
     {
-        $master = app(Settings::class)->masterPassword();
-        if ($master === '') {
-            return $this->openGate($request, $next);
+        $settings = app(Settings::class);
+        if (! $settings->hasMasterPassword()) {
+            return $this->setupOnly($request, $next);
         }
 
+        $authed = false;
         $presented = (string) $request->header('X-Desk-Token');
         if ($presented !== '') {
             if (DeskAuthThrottle::tooManyFailures($request)) {
                 DeskAuthThrottle::lockout($request);
             }
 
-            if (hash_equals($master, $presented)) {
-                return $next($request);
+            if ($settings->verifyToken($presented)) {
+                $authed = true;
+            } else {
+                DeskAuthThrottle::recordFailure($request);
             }
-
-            DeskAuthThrottle::recordFailure($request);
         }
 
-        if ($request->hasSession() && DeskLogin::check($request->session())) {
+        if (! $authed && $request->hasSession() && DeskLogin::check($request->session())) {
             if (! $request->isMethodSafe() && ! hash_equals((string) $request->session()->token(), (string) $request->header('X-CSRF-TOKEN'))) {
                 abort(419, 'CSRF token mismatch');
             }
-
-            return $next($request);
+            $authed = true;
         }
 
-        abort(401, 'bad desk token');
+        if (! $authed) {
+            abort(401, 'bad desk token');
+        }
+
+        if ($settings->needsPasswordSetup() && ! $this->isPasswordSetup($request)) {
+            return $this->setPasswordRequired();
+        }
+
+        return $next($request);
     }
 
     /**
-     * No password set. The private network is the boundary, but any website open in the operator's
-     * browser can still post a form to the desk, so unsafe cross-site requests are refused. With
-     * DESK_REQUIRE_MASTER_PASSWORD the gate fails closed instead: only the two calls that set the
-     * first password get through.
+     * No credential exists. Any website open in the operator's browser could post a form to the
+     * desk, so unsafe cross-site requests are refused; only the two calls that set the first
+     * password get through.
      */
-    private function openGate(Request $request, Closure $next)
+    private function setupOnly(Request $request, Closure $next)
     {
         if (! $request->isMethodSafe() && $this->isCrossSite($request)) {
             abort(403, 'cross-site request refused');
         }
 
-        if (config('desk.require_master_password') && ! $this->isPasswordSetup($request)) {
-            abort(403, 'set a master password in onboarding first');
+        if (! $this->isPasswordSetup($request)) {
+            return $this->setPasswordRequired();
+        }
+
+        if ($request->isMethod('POST') && ! $this->isDirectLocalClient($request)) {
+            abort(403, 'Set MASTER_PASSWORD in .env to claim this desk from outside its own network.');
         }
 
         return $next($request);
+    }
+
+    private const FORWARDING_HEADERS = ['Forwarded', 'X-Forwarded-For', 'X-Real-IP', 'X-Forwarded-Host', 'CF-Connecting-IP'];
+
+    /**
+     * With no key to prove ownership, the first caller claims the desk, so the client address has to be
+     * trustworthy: a direct loopback or private-network connection. Behind a reverse proxy or inside a
+     * container (Docker's userland proxy re-originates connections from a private address) a public
+     * visitor would look private, so keyless setup is refused there; those installs always have a key.
+     */
+    private function isDirectLocalClient(Request $request): bool
+    {
+        foreach (self::FORWARDING_HEADERS as $header) {
+            if ($request->headers->has($header)) {
+                return false;
+            }
+        }
+
+        return ! $this->inContainer() && IpUtils::checkIp((string) $request->ip(), self::PRIVATE_RANGES);
+    }
+
+    private function inContainer(): bool
+    {
+        $flag = config('desk.in_container');
+
+        return $flag !== null ? (bool) $flag : file_exists('/.dockerenv') || file_exists('/run/.containerenv');
+    }
+
+    private const PRIVATE_RANGES = ['127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'];
+
+    private function setPasswordRequired()
+    {
+        return response()->json(['error' => 'set_password_required'], 403);
     }
 
     private function isPasswordSetup(Request $request): bool

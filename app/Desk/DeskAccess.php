@@ -13,6 +13,8 @@ final class DeskAccess
 {
     public static function allows(Session $session): bool
     {
-        return app(Settings::class)->masterPassword() === '' || DeskLogin::check($session);
+        $settings = app(Settings::class);
+
+        return $settings->hasMasterPassword() && ! $settings->needsPasswordSetup() && DeskLogin::check($session);
     }
 }

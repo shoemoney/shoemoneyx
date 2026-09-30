@@ -105,14 +105,14 @@ class DeskApiTest extends TestCase
         $this->getJson('/api/events')->assertOk();
     }
 
-    public function test_settings_are_available_without_a_token_or_with_an_outdated_token(): void
+    public function test_settings_ignore_the_retired_api_token_setting(): void
     {
         config(['desk.api_token' => 'secret']);
         $this->getJson('/api/settings')->assertOk();
-        $this->withHeader('X-Desk-Token', 'outdated')->getJson('/api/settings')->assertOk();
+        $this->withHeader('X-Desk-Token', 'outdated')->getJson('/api/settings')->assertUnauthorized();
     }
 
-    public function test_dashboard_loads_real_data_without_a_token_or_with_an_outdated_token(): void
+    public function test_dashboard_loads_real_data_for_the_signed_in_owner(): void
     {
         config(['desk.api_token' => 'secret']);
         $position = Position::create(['mode' => 'paper', 'strategy' => 'mr', 'product_id' => 'BTC-USD',
@@ -123,7 +123,7 @@ class DeskApiTest extends TestCase
         $run = DeskRun::create(['mode' => 'paper', 'strategy' => 'mr', 'status' => 'done', 'started_at' => now()]);
         $event = DeskEvent::create(['desk_run_id' => $run->id, 'agent' => 'SCAN', 'message' => 'Account scan complete']);
 
-        foreach ([null, 'outdated-token'] as $token) {
+        foreach ([null, self::DESK_PASSWORD] as $token) {
             $headers = $token === null ? [] : ['X-Desk-Token' => $token];
             $this->getJson('/api/status', $headers)->assertOk()->assertJsonPath('health.mode', 'paper')->assertJsonPath('open_positions', 1);
             $this->getJson('/api/bank/history?hours=168', $headers)->assertOk()->assertJsonPath('0.equity', 1200);
@@ -148,6 +148,7 @@ class DeskApiTest extends TestCase
         $this->assertSame('open', $position->fresh()->status);
         $this->assertDatabaseCount('fills', 0);
         $this->assertDatabaseCount('desk_runs', 0);
-        $this->assertDatabaseCount('settings', 0);
+        // Only the owner's password row exists.
+        $this->assertDatabaseCount('settings', 1);
     }
 }

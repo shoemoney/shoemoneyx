@@ -23,6 +23,11 @@ async function request(method, url, body) {
     if (res.status === 401 && !publicDemo) {
         globalThis.location?.assign('/login');
     }
+    // Signed in with the one-time first-login key: only the set-password screen is open.
+    if (res.status === 403 && data?.error === 'set_password_required' && !publicDemo
+        && !globalThis.location?.pathname?.startsWith('/onboarding')) {
+        globalThis.location?.assign('/onboarding');
+    }
     // A login in another tab rotated the CSRF token this page rendered with.
     if (res.status === 419) {
         globalThis.location?.reload();

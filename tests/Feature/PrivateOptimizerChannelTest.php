@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Desk\Settings;
 use App\Events\BacktestScored;
 use App\Events\ChampionPromoted;
 use App\Events\OptimizerRoundScored;
+use App\Models\Setting;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Testing\TestResponse;
 use ReflectionClass;
 use Tests\TestCase;
@@ -39,24 +42,23 @@ class PrivateOptimizerChannelTest extends TestCase
 
     public function test_unauthenticated_browser_cannot_subscribe_when_a_password_is_set(): void
     {
-        config(['desk.master_password' => 'hunter2']);
+        $this->flushSession();
 
         $this->auth()->assertForbidden();
     }
 
     public function test_logged_in_browser_gets_a_signed_subscription(): void
     {
-        config(['desk.master_password' => 'hunter2']);
-
-        $this->post('/login', ['password' => 'hunter2'])->assertRedirect('/');
+        $this->flushSession();
+        $this->post('/login', ['password' => self::DESK_PASSWORD])->assertRedirect('/');
 
         $this->auth()->assertOk()->assertJsonStructure(['auth']);
     }
 
     public function test_logged_in_post_with_the_session_csrf_token_is_signed(): void
     {
-        config(['desk.master_password' => 'hunter2']);
-        $this->post('/login', ['password' => 'hunter2']);
+        $this->flushSession();
+        $this->post('/login', ['password' => self::DESK_PASSWORD]);
 
         $this->withHeader('X-CSRF-TOKEN', session()->token())
             ->post('/broadcasting/auth', ['channel_name' => 'private-optimizer', 'socket_id' => '1234.5678'])
@@ -65,18 +67,32 @@ class PrivateOptimizerChannelTest extends TestCase
 
     public function test_a_stale_login_after_a_password_change_is_refused(): void
     {
-        config(['desk.master_password' => 'hunter2']);
-        $this->post('/login', ['password' => 'hunter2']);
-        config(['desk.master_password' => 'changed']);
+        $this->auth()->assertOk();
+
+        app(Settings::class)->setMasterPassword('a-different-desk-password');
 
         $this->auth()->assertForbidden();
     }
 
-    public function test_no_password_means_a_trusted_desk_and_auth_succeeds(): void
+    public function test_a_session_that_only_holds_the_bootstrap_key_is_refused(): void
     {
-        config(['desk.master_password' => '']);
+        Setting::where('key', 'master_password')->delete();
+        Cache::forget('desk:settings');
+        config(['desk.master_password' => 'i-0123456789abcdef0']);
+        $this->flushSession();
+        $this->post('/login', ['password' => 'i-0123456789abcdef0'])->assertRedirect('/onboarding');
 
-        $this->auth()->assertOk()->assertJsonStructure(['auth']);
+        $this->auth()->assertForbidden();
+    }
+
+    public function test_a_desk_with_no_password_refuses_the_channel(): void
+    {
+        Setting::where('key', 'master_password')->delete();
+        Cache::forget('desk:settings');
+        config(['desk.master_password' => '']);
+        $this->flushSession();
+
+        $this->auth()->assertForbidden();
     }
 
     public function test_optimizer_events_broadcast_on_a_private_channel(): void

@@ -6,10 +6,19 @@ namespace Tests\Feature;
 
 use DOMDocument;
 use DOMXPath;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class SiteShellTest extends TestCase
 {
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->completeOnboarding();
+    }
+
     private function page(string $path): DOMXPath
     {
         $this->withoutVite();

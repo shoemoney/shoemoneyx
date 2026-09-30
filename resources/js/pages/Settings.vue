@@ -28,15 +28,40 @@ async function load() {
         loading.value = false;
     }
 }
-async function save(key, value) {
+// Going live needs the master password again, even in a long-lived browser login.
+const liveModal = ref(false);
+const livePassword = ref("");
+const liveError = ref("");
+const liveBusy = ref(false);
+function askLivePassword() {
+    livePassword.value = "";
+    liveError.value = "";
+    liveModal.value = true;
+}
+async function confirmLive() {
+    if (!livePassword.value) return;
+    liveBusy.value = true;
+    liveError.value = "";
+    try {
+        await save("mode", "live", { password: livePassword.value }, true);
+        liveModal.value = false;
+        livePassword.value = "";
+    } catch (e) {
+        liveError.value = e.message;
+    } finally {
+        liveBusy.value = false;
+    }
+}
+async function save(key, value, extra = {}, rethrow = false) {
     msg.value = "";
     error.value = "";
     try {
-        await api.put("/settings", { key, value });
+        await api.put("/settings", { key, value, ...extra });
         msg.value = `saved ${key}`;
         await load();
         await refreshStatus();
     } catch (e) {
+        if (rethrow) throw e;
         error.value = e.message;
     }
 }
@@ -210,13 +235,37 @@ onMounted(load);
                             class="btn rc-live-choice"
                             :class="s.mode === 'live' ? 'btn-danger' : ''"
                             :aria-pressed="s.mode === 'live'"
-                            :disabled="publicDemo" @click="save('mode', 'live')"
+                            :disabled="publicDemo" @click="askLivePassword"
                         >
                             <span class="rc-mode-dot"></span
                             ><strong>Live</strong
                             ><small>Real order execution</small>
                         </button>
                     </div>
+                    <form
+                        v-if="liveModal"
+                        class="rc-live-modal"
+                        role="dialog"
+                        aria-label="Confirm live mode"
+                        @submit.prevent="confirmLive"
+                    >
+                        <p class="rc-inline-danger">
+                            Live mode sends real orders. Enter the master password to continue.
+                        </p>
+                        <input
+                            v-model="livePassword"
+                            type="password"
+                            autocomplete="current-password"
+                            placeholder="master password"
+                            :disabled="liveBusy"
+                            autofocus
+                        />
+                        <p v-if="liveError" class="rc-inline-danger" role="alert">{{ liveError }}</p>
+                        <div class="flex gap-2">
+                            <button class="btn btn-danger" type="submit" :disabled="liveBusy || !livePassword">Go live</button>
+                            <button class="btn" type="button" :disabled="liveBusy" @click="liveModal = false">Cancel</button>
+                        </div>
+                    </form>
                     <p
                         v-if="s.mode === 'live' && !s.live_confirm"
                         class="rc-inline-danger"

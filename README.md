@@ -65,7 +65,7 @@ docker/up.sh                  # or: bin/desk compose
 open https://localhost
 ```
 
-First run generates `.env` and prints your `MASTER_PASSWORD` once — save it, it gates every page and the API. Rerunning `docker/up.sh` is a no-op except starting containers.
+First run generates `.env` and prints a one-time `MASTER_PASSWORD` — log in with it once and you'll be asked to choose your own password (12+ characters, typed twice); after that the printed key opens nothing, and your browser stays signed in for about a year. Scripts send your password as the `X-Desk-Token` header. Switching to live mode asks for the password again. On a manual install with no `MASTER_PASSWORD` in `.env`, the first visitor sets the password, so set one before exposing the box (keyless setup is refused from public IP addresses). Upgrading from an older install that chose "no password" drops that empty choice, so the desk asks for a password on the next visit from a local or private-network address; the migration logs a warning when it does. Rerunning `docker/up.sh` is a no-op except starting containers.
 
 Update to the latest image:
 
@@ -82,7 +82,7 @@ bin/desk dev                  # vite + artisan serve + queue worker + desk:run
 open http://localhost:8000
 ```
 
-First run lands you on `/onboarding` — set a master password (or skip it for a trusted local desk), connect an OpenRouter key, pick an exchange, optionally import a community strategy, and launch in paper mode, all in under five minutes.
+First run lands you on `/onboarding` — choose your own master password (required), connect an OpenRouter key, pick an exchange, optionally import a community strategy, and launch in paper mode, all in under five minutes.
 
 Charts run on TradingView's [lightweight-charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0), bundled via npm — no separate download or TradingView account needed.
 

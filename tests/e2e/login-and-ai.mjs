@@ -62,7 +62,7 @@ try {
   if (BOOTSTRAP) {
     check('AMI desk gates on /login before the wizard', page.url().endsWith('/login'), page.url());
     const hint = await page.locator('body').innerText();
-    check('login page shows the instance-ID hint', /instance ID/i.test(hint));
+    check('login page shows the instance-ID guide', /instance ID/i.test(hint));
     await page.locator('input[name="password"]').fill(BOOTSTRAP);
     await page.locator('button:has-text("Sign in")').click();
     await page.waitForLoadState('networkidle');
@@ -70,9 +70,10 @@ try {
   check('root redirects to onboarding on a fresh desk', page.url().endsWith('/onboarding'), page.url());
   await shot(page, '01-onboarding');
 
-  const pw = page.locator('input[placeholder*="master password"]');
+  const pw = page.locator('input[placeholder^="new password"]');
   await pw.waitFor({ timeout: 15000 });
   await pw.fill(PASSWORD);
+  await page.locator('input[placeholder^="confirm new password"]').fill(PASSWORD);
   await page.locator('button:has-text("Continue")').first().click();
   const keyInput = page.locator('input[placeholder="sk-or-v1-…"]');
   await keyInput.waitFor({ timeout: 15000 });

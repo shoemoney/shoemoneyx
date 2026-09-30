@@ -159,10 +159,11 @@ Requires the `smx` EC2 key pair's private half at `~/.ssh/smx.pem` (override wit
 
 ## Getting the credentials
 
-No SSH needed for a normal launch: the bootstrap `MASTER_PASSWORD` is the **EC2 instance ID**
-(`i-…`, shown in the AWS console). Open `https://<ip>/`, the login page says so, paste the ID, and
-onboarding makes you choose your own password before anything else. The desk refuses an empty
-password on this image because it is reachable from the internet.
+No SSH needed for a normal launch: the first-login key is the **EC2 instance ID**
+(`i-…`, shown in the AWS console). Open `https://<ip>/`, the login page says "First login uses your
+instance ID once; you'll be asked to choose your own password", paste the ID, and you land on the
+set-password screen (new password plus confirmation, 12+ characters). The ID opens nothing else,
+neither in the browser nor as an `X-Desk-Token`, and stops working the moment you set your password.
 
 For scripting (this is what `test-boot.sh` does):
 
@@ -170,8 +171,8 @@ For scripting (this is what `test-boot.sh` does):
 ssh -i ~/.ssh/smx.pem ubuntu@<ip> sudo cat /root/shoemoneyx-credentials.txt
 ```
 
-Prints the URL, the `MASTER_PASSWORD` (log in at `/login`, or send it as the `X-Desk-Token` header
-from scripts), and the local MariaDB password.
+Prints the URL, the one-time `MASTER_PASSWORD` (log in at `/login` once, then choose your own
+password; scripts send that password as the `X-Desk-Token` header), and the local MariaDB password.
 
 ## Firewall: why DOCKER-USER exists
 

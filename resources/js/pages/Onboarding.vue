@@ -45,15 +45,15 @@ async function call(method, url, body) {
     return data;
 }
 
-const requireMasterPassword = ref(false);
 const bootstrapPassword = ref(false);
+const currentPasswordRequired = ref(false);
 
 async function refresh() {
     const state = await call("GET", "/onboarding");
     steps.value = state.steps;
     currentStep.value = state.next_step;
-    requireMasterPassword.value = !!state.require_master_password;
     bootstrapPassword.value = !!state.bootstrap;
+    currentPasswordRequired.value = !!state.current_password_required;
     if (state.completed) router.replace("/dashboard");
     return state;
 }
@@ -74,13 +74,32 @@ const stepIndex = computed(() => steps.value.findIndex((s) => s.key === currentS
 
 // Step 1 — master password.
 const password = ref("");
+const passwordConfirmation = ref("");
+const currentPassword = ref("");
+const MIN_PASSWORD = 12;
+const passwordMismatch = computed(
+    () => passwordConfirmation.value !== "" && password.value !== passwordConfirmation.value,
+);
+const passwordTooShort = computed(() => password.value !== "" && password.value.length < MIN_PASSWORD);
+const canSubmitPassword = computed(
+    () =>
+        password.value.length >= MIN_PASSWORD &&
+        password.value === passwordConfirmation.value &&
+        (!currentPasswordRequired.value || currentPassword.value !== ""),
+);
 async function submitPassword() {
+    if (!canSubmitPassword.value) return;
     busy.value = true;
     error.value = "";
     try {
-        const res = await call("POST", "/onboarding/master-password", { password: password.value });
+        const body = { password: password.value, password_confirmation: passwordConfirmation.value };
+        if (currentPasswordRequired.value) body.current_password = currentPassword.value;
+        const res = await call("POST", "/onboarding/master-password", body);
         // Logging in rotates the session's CSRF token; later steps must send the new one.
         document.querySelector('meta[name="csrf-token"]')?.setAttribute("content", res.csrf_token);
+        password.value = "";
+        passwordConfirmation.value = "";
+        currentPassword.value = "";
         await refresh();
     } catch (e) {
         error.value = e.message;
@@ -247,23 +266,43 @@ onMounted(async () => {
                         <h2>Set a master password</h2>
                     </div>
                 </div>
-                <p v-if="requireMasterPassword" class="text-sm text-zinc-400">
-                    This desk is exposed to the internet, so a password is required.
-                </p>
-                <p v-else class="text-sm text-zinc-400">
-                    Protects the desk when it's reachable off your own network. Leave it blank to run as a
-                    trusted local desk with no password — you can set one later from Settings.
+                <p class="text-sm text-zinc-400">
+                    Choose the password that protects this desk. You'll type it once to sign in, and this
+                    browser stays signed in for about a year. At least {{ MIN_PASSWORD }} characters.
                 </p>
                 <p v-if="bootstrapPassword" class="text-sm text-zinc-400">
-                    You signed in with the bootstrap password; choose your own now.
+                    Your first-login key only works once: after you set a password it stops opening anything.
                 </p>
+                <input
+                    v-if="currentPasswordRequired"
+                    v-model="currentPassword"
+                    type="password"
+                    autocomplete="current-password"
+                    placeholder="current password"
+                    :disabled="busy"
+                />
                 <input
                     v-model="password"
                     type="password"
-                    :placeholder="requireMasterPassword ? 'master password (required, 12+ chars)' : 'master password (optional)'"
+                    autocomplete="new-password"
+                    :placeholder="`new password (${MIN_PASSWORD}+ characters)`"
                     :disabled="busy"
                 />
-                <button class="btn btn-primary" :disabled="busy" @click="submitPassword">Continue</button>
+                <p v-if="passwordTooShort" class="text-sm text-red-400" role="alert">
+                    Use at least {{ MIN_PASSWORD }} characters.
+                </p>
+                <input
+                    v-model="passwordConfirmation"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="confirm new password"
+                    :disabled="busy"
+                    @keyup.enter="submitPassword"
+                />
+                <p v-if="passwordMismatch" class="text-sm text-red-400" role="alert">
+                    The two passwords do not match.
+                </p>
+                <button class="btn btn-primary" :disabled="busy || !canSubmitPassword" @click="submitPassword">Continue</button>
             </div>
 
             <div v-else-if="currentStep === 'openrouter'" class="card space-y-3">

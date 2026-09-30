@@ -12,9 +12,10 @@ use App\Desk\Settings;
  * where it left off), each in one of three states — pending, done, skipped. A step only
  * accepts a submission once every step ahead of it in ORDER is done or skipped; that is
  * the whole "in order" contract, enforced once here instead of per-controller-action.
- * Only 'strategy-import' is skippable — the others must be explicitly settled (an explicit
- * empty master password still counts as "done", it just means "no password, trusted local
- * desk"), matching the product rule that only the community-import step may be bypassed.
+ * Only 'strategy-import' is skippable — the others must be explicitly settled, matching the
+ * product rule that only the community-import step may be bypassed. 'master-password' reads as
+ * pending for as long as the owner has no password of their own, so a desk still on its
+ * bootstrap key can never look finished.
  */
 final class OnboardingWizard
 {
@@ -26,13 +27,12 @@ final class OnboardingWizard
 
     public function __construct(private readonly Settings $settings) {}
 
-    /** @return array{completed: bool, next_step: ?string, steps: list<array{key: string, status: string, skippable: bool}>, require_master_password: bool, bootstrap: bool} */
+    /** @return array{completed: bool, next_step: ?string, steps: list<array{key: string, status: string, skippable: bool}>, bootstrap: bool, current_password_required: bool} */
     public function state(): array
     {
-        $stored = $this->stored();
         $steps = array_map(fn (string $key) => [
             'key' => $key,
-            'status' => $stored[$key]['status'] ?? 'pending',
+            'status' => $this->status($key),
             'skippable' => in_array($key, self::SKIPPABLE, true),
         ], self::ORDER);
 
@@ -43,13 +43,17 @@ final class OnboardingWizard
             'next_step' => $next['key'] ?? null,
             'steps' => $steps,
             // Lets the SPA's master-password step adapt without a separate round trip.
-            'require_master_password' => (bool) config('desk.require_master_password'),
             'bootstrap' => $this->settings->masterPasswordIsBootstrap(),
+            'current_password_required' => ! $this->settings->needsPasswordSetup(),
         ];
     }
 
     public function status(string $step): ?string
     {
+        if ($step === 'master-password' && $this->settings->needsPasswordSetup()) {
+            return 'pending';
+        }
+
         return $this->stored()[$step]['status'] ?? (in_array($step, self::ORDER, true) ? 'pending' : null);
     }
 

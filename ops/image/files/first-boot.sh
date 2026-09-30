@@ -44,14 +44,19 @@ APP_HOST="${DOMAIN:-$PUBLIC_IP}"
 log "app host: $APP_HOST (domain tag: ${DOMAIN:-none}), pinning SHOEMONEYX_VERSION=$VERSION"
 
 # The bootstrap password is the instance ID: the buyer reads it in the AWS console, so the
-# Marketplace one-click launch needs no SSH. The app shows the hint on /login while the password
-# is still this bootstrap value and makes onboarding refuse an empty password on this exposed box.
+# Marketplace one-click launch needs no SSH. It is a one-time key: the app shows the hint on /login,
+# and signing in with it only opens the set-password screen where the buyer chooses their own.
 INSTANCE_ID="$(imds instance-id)"
+# The region only builds the login page's "open my instances" console link; the instance ID itself
+# is never put in a URL or rendered anywhere but the buyer's own AWS console.
+AWS_REGION="$(imds placement/region)"
+[[ "$AWS_REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]+$ ]] || AWS_REGION=""
 log "handing off to docker/up.sh — generates .env, runs the migrate gate, brings up the stack, and blocks until /api/status answers"
 SHOEMONEYX_VERSION="$VERSION" \
 MASTER_PASSWORD="${INSTANCE_ID:-}" \
-MASTER_PASSWORD_HINT="First login: your EC2 instance ID (i-…), shown in the AWS console" \
-DESK_REQUIRE_MASTER_PASSWORD="true" \
+DESK_AWS_REGION="$AWS_REGION" \
+DESK_FIRST_LOGIN_GUIDE="aws" \
+MASTER_PASSWORD_HINT="First login uses your EC2 instance ID (i-…, shown in the AWS console) once; you will be asked to choose your own password" \
   ./docker/up.sh
 
 # Pin the version in .env too (up.sh only sees it on the process environment) so a later manual
@@ -97,8 +102,8 @@ URL:              https://$APP_HOST
 MASTER_PASSWORD=$MASTER_PASSWORD
 DB_PASSWORD=$DB_PASSWORD
 
-MASTER_PASSWORD is the bootstrap password (this instance's ID); onboarding makes you replace it.
-It gates every page and the API (log in at /login; scripts send the X-Desk-Token header).
+MASTER_PASSWORD is a one-time first-login key (this instance's ID): log in at /login with it once and you
+will be asked to choose your own password. After that it no longer opens anything.
 DB_PASSWORD is the local 'shoemoneyx' MariaDB user, reachable only from the compose network.
 EOF
 chmod 600 "$CREDS_FILE"

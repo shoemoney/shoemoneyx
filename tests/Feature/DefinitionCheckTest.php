@@ -6,8 +6,10 @@ namespace Tests\Feature;
 
 use App\Ai\Contracts\DecisionClient;
 use App\Ai\DecisionResponse;
+use App\Desk\Settings;
 use App\Desk\Strategies\DefinitionCheck;
 use App\Models\AiConnection;
+use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Tests\Feature\Fixtures\FakeDecisionClient;
@@ -210,10 +212,22 @@ class DefinitionCheckTest extends TestCase
     {
         $this->connect();
         $this->fake(new DecisionResponse(['intent_match' => 0.05], 'jev-1.13'));
+        // Cache is fully mocked below, so pin the owner's settings (and sign in by session, which
+        // needs no token-verification cache) instead of letting the auth gate read them through Cache.
+        $stored = ['master_password' => Setting::find('master_password')->value];
+        $this->app->instance(Settings::class, new class($stored) extends Settings
+        {
+            public function __construct(private array $stored) {}
+
+            public function overrides(): array
+            {
+                return $this->stored;
+            }
+        });
         Cache::shouldReceive('get')->once()->andReturn(null);
         Cache::shouldReceive('put')->once()->andThrow(new \RuntimeException('cache unavailable'));
 
-        $this->postJson('/api/strategy-plugins', ['definition' => $this->v2Definition(['key' => 'cache-write-failure'])])
+        $this->withoutHeader('X-Desk-Token')->withHeader('X-CSRF-TOKEN', session()->token())->postJson('/api/strategy-plugins', ['definition' => $this->v2Definition(['key' => 'cache-write-failure'])])
             ->assertCreated()
             ->assertJson(['valid' => true, 'warnings' => []]);
     }
