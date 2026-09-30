@@ -48,8 +48,8 @@ class StrategyPluginController extends Controller
 
     private function assertDefinitionSize(array $definition): void
     {
-        if (strlen((string) json_encode($definition)) > self::MAX_DEFINITION_BYTES) {
-            throw ValidationException::withMessages(['definition' => 'definition must be at most 64KB of JSON']);
+        if (($json = json_encode($definition)) === false || strlen($json) > self::MAX_DEFINITION_BYTES) {
+            throw ValidationException::withMessages(['definition' => 'definition must be valid UTF-8 JSON of at most 64KB']);
         }
     }
 

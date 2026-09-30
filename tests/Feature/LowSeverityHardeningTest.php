@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Desk\Chief;
 use App\Desk\Reporter;
+use App\Desk\Settings;
 use App\Desk\Strategies\Formula;
 use App\Desk\Strategies\FormulaParseError;
 use App\Models\CoinbaseApiLog;
@@ -58,12 +59,40 @@ class LowSeverityHardeningTest extends TestCase
         $this->postJson('/api/strategy-plugins', ['definition' => $def])->assertUnprocessable();
     }
 
+    public function test_definition_with_invalid_utf8_is_rejected(): void
+    {
+        $def = ['key' => 'bad', 'name' => "\xB1\x31", 'version' => 1];
+
+        $this->postJson('/api/strategy-plugins/validate', ['definition' => $def])->assertUnprocessable();
+    }
+
+    public function test_worldmonitor_health_check_does_not_follow_redirects(): void
+    {
+        app(Settings::class)->set('worldmonitor.base_url', 'http://127.0.0.1:3000');
+        $redirects = null;
+        Http::fake(function ($request, array $options) use (&$redirects) {
+            $redirects = $options['allow_redirects'] ?? true;
+
+            return Http::response('', 302, ['Location' => 'http://169.254.169.254/']);
+        });
+
+        app(Chief::class)->health();
+
+        $this->assertFalse($redirects, 'health probe must not follow redirects');
+    }
+
     public function test_worldmonitor_url_guard_blocks_metadata_but_allows_lan(): void
     {
         $this->assertFalse(Chief::safeWorldMonitorUrl('http://169.254.169.254/latest'));
         $this->assertFalse(Chief::safeWorldMonitorUrl('http://[fd00:ec2::254]/'));
         $this->assertFalse(Chief::safeWorldMonitorUrl('file:///etc/passwd'));
         $this->assertFalse(Chief::safeWorldMonitorUrl('gopher://127.0.0.1'));
+        $this->assertFalse(Chief::safeWorldMonitorUrl('http://[fd00:0ec2::254]/'));
+        $this->assertFalse(Chief::safeWorldMonitorUrl('http://[FD00:EC2:0:0::1]/'));
+        $this->assertFalse(Chief::safeWorldMonitorUrl('http://[fe80::1]/'));
+        $this->assertFalse(Chief::safeWorldMonitorUrl('http://[::ffff:169.254.169.254]/'));
+        $this->assertFalse(Chief::safeWorldMonitorUrl('http://no-such-host.invalid/'));
+        $this->assertTrue(Chief::safeWorldMonitorUrl('http://[fd12::1]/'));
         $this->assertTrue(Chief::safeWorldMonitorUrl('http://127.0.0.1:3000'));
         $this->assertTrue(Chief::safeWorldMonitorUrl('http://192.168.1.10:3000'));
         $this->assertTrue(Chief::safeWorldMonitorUrl('https://10.0.0.5'));
