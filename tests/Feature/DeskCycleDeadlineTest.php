@@ -10,6 +10,7 @@ use App\Exchange\Contracts\MarketData;
 use App\Models\DeskEvent;
 use App\Models\Position;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\Feature\Fixtures\TwoEntryHaltStrategy;
 use Tests\TestCase;
 
@@ -21,12 +22,18 @@ class DeskCycleDeadlineTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Http::preventStrayRequests();
         config(['cache.default' => 'array', 'desk.mode' => 'paper', 'desk.strategies.two_entry_halt_test' => TwoEntryHaltStrategy::class, 'desk.strategy' => 'two_entry_halt_test']);
         $this->app->bind(MarketData::class, fn () => new class extends CoinbaseMarketData
         {
             public function ticker(string $productId, int $limit = 100): array
             {
                 return ['best_bid' => 100.0, 'best_ask' => 100.0, 'trades' => []];
+            }
+
+            public function book(string $productId, int $depth = 50): array
+            {
+                return ['bids' => [[99.0, 1000.0]], 'asks' => [[101.0, 1000.0]], 'ts' => time()];
             }
 
             public function healthy(): bool
@@ -48,6 +55,16 @@ class DeskCycleDeadlineTest extends TestCase
         $this->assertSame(0, $run->filled);
         $this->assertSame(0, Position::count());
         $this->assertTrue(DeskEvent::where('level', 'warn')->where('message', 'like', 'cycle budget%')->exists());
+    }
+
+    public function test_invalid_budget_env_falls_back_to_the_default_and_warns(): void
+    {
+        config(['desk.cycle_budget_seconds' => '1200s']);
+
+        $run = app(Desk::class)->cycle();
+
+        $this->assertSame(2, $run->filled, 'a garbage budget must not skip every candidate');
+        $this->assertTrue(DeskEvent::where('level', 'warn')->where('message', 'like', 'DESK_CYCLE_BUDGET_SECONDS%')->exists());
     }
 
     public function test_default_budget_leaves_the_cycle_untouched(): void

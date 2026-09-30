@@ -189,9 +189,18 @@ class Desk
         return max(3600, $this->cycleBudgetSeconds() * 3);
     }
 
+    private const DEFAULT_CYCLE_BUDGET_SECONDS = 1200;
+
     private function cycleBudgetSeconds(): int
     {
-        return max(0, (int) config('desk.cycle_budget_seconds', 1200));
+        $raw = config('desk.cycle_budget_seconds', self::DEFAULT_CYCLE_BUDGET_SECONDS);
+
+        return $this->validCycleBudget($raw) ? (int) $raw : self::DEFAULT_CYCLE_BUDGET_SECONDS;
+    }
+
+    private function validCycleBudget(mixed $raw): bool
+    {
+        return (is_int($raw) && $raw >= 0) || (is_string($raw) && ctype_digit($raw));
     }
 
     /**
@@ -214,6 +223,9 @@ class Desk
         ]);
         $this->reporter->runId = $run->id;
         $cycleDeadline = microtime(true) + $this->cycleBudgetSeconds();
+        if (! $this->validCycleBudget(config('desk.cycle_budget_seconds', self::DEFAULT_CYCLE_BUDGET_SECONDS))) {
+            $this->reporter->warn('CHIEF', sprintf('DESK_CYCLE_BUDGET_SECONDS is not a non-negative integer — using %ds', self::DEFAULT_CYCLE_BUDGET_SECONDS));
+        }
 
         try {
             if ($this->chief->halted()) {

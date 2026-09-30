@@ -225,8 +225,8 @@ return [
 
     // Wall-clock budget for one cycle's candidate loop. Once spent, no new candidate is vetted or entered
     // (logged). Must stay far below the cycle lock lease (Desk::cycleLockSeconds) so the lease cannot lapse
-    // while orders are still being submitted.
-    'cycle_budget_seconds' => (int) env('DESK_CYCLE_BUDGET_SECONDS', 1200),
+    // while orders are still being submitted. Raw value: Desk validates it (non-negative integer, else 1200 + a warning).
+    'cycle_budget_seconds' => env('DESK_CYCLE_BUDGET_SECONDS', 1200),
 
     // Must be the literal string "yes" before the desk will send a real order.
     'live_confirm' => env('DESK_LIVE_CONFIRM', 'no'),
