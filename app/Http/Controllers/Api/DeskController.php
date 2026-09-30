@@ -9,11 +9,11 @@ use App\Desk\Desk;
 use App\Desk\EndOfDayReport;
 use App\Desk\Settings;
 use App\Desk\StrategyRegistry;
+use App\Exchange\Contracts\MarketData;
 use App\Http\Controllers\Controller;
 use App\Models\PaperLedger;
 use App\Models\Position;
 use App\Models\Product;
-use App\Exchange\Contracts\MarketData;
 use App\Models\Setting;
 use App\Services\Market\LiveFeed;
 use App\Support\ParamNormalizer;
@@ -58,6 +58,7 @@ class DeskController extends Controller
     {
         $data = $request->validate(['key' => 'required|string|max:120', 'value' => 'present']);
         $v = ParamNormalizer::normalize($data['key'], $data['value']);
+        $this->assertSaneRiskValue($data['key'], $v);
         if ($data['key'] === 'mode' && ! in_array($v, ['paper', 'live'], true)) {
             abort(422, 'mode must be paper or live');
         }
@@ -67,6 +68,26 @@ class DeskController extends Controller
         $settings->set($data['key'], $v);
 
         return response()->json(['ok' => true, 'key' => $data['key'], 'value' => $v]);
+    }
+
+    /** Risk-critical numeric knobs and the range each must stay inside: [min, max, minExclusive]. */
+    private const RISK_RANGES = [
+        'size.kelly_cap_pct' => [0.0, 1.0, true],
+        'size.max_open_positions' => [1, 1000, false],
+        'size.max_leverage' => [1.0, 20.0, false],
+        'size.min_ticket_usd' => [0.0, 1_000_000.0, false],
+    ];
+
+    private function assertSaneRiskValue(string $key, mixed $value): void
+    {
+        $bare = preg_replace('/^per_product\.[^.]+\./', '', $key);
+        if (! isset(self::RISK_RANGES[$bare])) {
+            return;
+        }
+        [$min, $max, $minExclusive] = self::RISK_RANGES[$bare];
+        if (! is_numeric($value) || ! is_finite((float) $value) || ($minExclusive ? $value <= $min : $value < $min) || $value > $max) {
+            abort(422, sprintf('%s must be a number %s %s and <= %s', $bare, $minExclusive ? '>' : '>=', $min, $max));
+        }
     }
 
     public function deleteSetting(string $key, Settings $settings): JsonResponse

@@ -61,6 +61,7 @@ abstract class BaseDeskStrategy implements Strategy
                 'payoff_ratio' => 1.5,
                 'min_ticket_usd' => 10.0,
                 'max_open_positions' => 7,
+                'max_leverage' => 3.0,
                 'max_slippage_bps' => 50,
                 'partial_multiplier' => 0.5,   // PASS_PARTIAL cuts the ticket
                 'allow_one_add_after_pct' => 50.0,
