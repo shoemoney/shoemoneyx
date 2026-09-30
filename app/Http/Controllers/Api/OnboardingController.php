@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Ai\CurrentUser;
 use App\Ai\OpenRouterOAuth;
 use App\Desk\Chief;
+use App\Desk\DeskLogin;
 use App\Desk\Onboarding\OnboardingWizard;
 use App\Desk\Settings;
 use App\Exchange\ExchangeRegistry;
@@ -58,11 +59,10 @@ class OnboardingController extends Controller
         $password = (string) ($data['password'] ?? '');
 
         app(Settings::class)->set('master_password', $password);
-        $request->session()->regenerate();
-        $request->session()->put('desk_authed', true);
+        DeskLogin::grant($request->session());
         $wizard->markDone('master-password', ['password_set' => $password !== '']);
 
-        return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => $password !== '']);
+        return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => $password !== '', 'csrf_token' => $request->session()->token()]);
     }
 
     private function openrouter(Request $request, OnboardingWizard $wizard): JsonResponse

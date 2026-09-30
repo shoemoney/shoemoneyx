@@ -2,6 +2,6 @@
 
 use Illuminate\Support\Facades\Broadcast;
 
-Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
-    return (int) $user->id === (int) $id;
-});
+// Optimizer/backtest firehose: reachable only through /broadcasting/auth, which AuthorizeDeskBroadcast has already
+// gated on the desk session (see bootstrap/app.php).
+Broadcast::channel('optimizer', fn ($user) => $user !== null);
