@@ -235,7 +235,8 @@ class JsonPluginStrategy extends BaseDeskStrategy
             $isAdd = $ctx->hasOpenPosition($v->candidate->productId());
 
             // The plugin can only tighten the desk's size.max_open_positions, never loosen it.
-            $maxPositions = (int) $ctx->param('size.max_open_positions', 7);
+            $deskMax = $ctx->param('size.max_open_positions', 7);
+            $maxPositions = is_numeric($deskMax) && $deskMax >= 1 ? (int) $deskMax : (int) config('desk.size.max_open_positions', 7);
             $pluginMax = $def['risk']['max_positions'] ?? null;
             if (is_int($pluginMax) && $pluginMax > 0) {
                 $maxPositions = min($maxPositions, $pluginMax);
@@ -264,7 +265,8 @@ class JsonPluginStrategy extends BaseDeskStrategy
 
         // The desk's size.max_leverage is the ceiling; a plugin may only tighten it, and one that
         // omits risk.leverage_cap gets the desk ceiling rather than no cap at all.
-        $levCap = (float) $ctx->param('size.max_leverage', 3.0);
+        $deskLev = $ctx->param('size.max_leverage', 3.0);
+        $levCap = is_numeric($deskLev) && $deskLev >= 1 ? (float) $deskLev : (float) config('desk.size.max_leverage', 3.0);
         $pluginLev = $def['risk']['leverage_cap'] ?? null;
         if (is_numeric($pluginLev) && $pluginLev > 0) {
             $levCap = min($levCap, (float) $pluginLev);
@@ -481,7 +483,9 @@ class JsonPluginStrategy extends BaseDeskStrategy
 
     private function kellyCeilingDollars(Bank $bank, DeskContext $ctx): float
     {
-        return $bank->equity() * (float) $ctx->param('size.kelly_cap_pct', 0.06);
+        $cap = $ctx->param('size.kelly_cap_pct', 0.06);
+
+        return $bank->equity() * (is_numeric($cap) && $cap > 0 ? (float) $cap : (float) config('desk.size.kelly_cap_pct', 0.06));
     }
 
     /**

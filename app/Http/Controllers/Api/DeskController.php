@@ -90,32 +90,37 @@ class DeskController extends Controller
         'size.min_ticket_usd' => [0.0, 1_000_000.0, false],
     ];
 
-    /** A parent-map write (key "size", value {kelly_cap_pct: 5}) is flattened so every leaf is checked under its full key. */
+    /**
+     * Walks the value recursively so a parent-map write (key "size", value {kelly_cap_pct: 5}) is
+     * checked leaf by leaf under its full key. Any path that equals or descends from a risk key must
+     * end in a scalar in range exactly AT that key; containers there (even empty ones) or anything
+     * nested below it would hydrate the setting as an array, so they are refused.
+     */
     private function assertSaneRiskValue(string $key, mixed $value): void
     {
+        $bare = preg_replace('/^per_product\.[^.]+\./', '', $key);
+
+        foreach (self::RISK_RANGES as $riskKey => [$min, $max, $minExclusive]) {
+            if (str_starts_with($bare, $riskKey.'.')) {
+                abort(422, "{$key}: {$riskKey} must be a plain number, nothing may be nested under it");
+            }
+            if ($bare === $riskKey) {
+                $ok = is_numeric($value) && is_finite((float) $value)
+                    && ($minExclusive ? $value > $min : $value >= $min) && $value <= $max
+                    && ($riskKey !== 'size.max_open_positions' || floor((float) $value) === (float) $value);
+                abort_unless($ok, 422, sprintf('%s must be a %s number %s %s and <= %s', $key, $riskKey === 'size.max_open_positions' ? 'whole' : 'plain', $minExclusive ? '>' : '>=', $min, $max));
+
+                return;
+            }
+            // An ancestor of a risk key (e.g. "size") may only be written as a map.
+            abort_if(str_starts_with($riskKey, $bare.'.') && ! is_array($value), 422, "{$key} must be an object");
+        }
+
         if (is_array($value)) {
-            abort_if(isset(self::RISK_RANGES[preg_replace('/^per_product\.[^.]+\./', '', $key)]), 422, 'risk settings must be plain numbers');
             foreach ($value as $child => $childValue) {
                 $this->assertSaneRiskValue($key.'.'.$child, $childValue);
             }
-
-            return;
         }
-
-        $bare = preg_replace('/^per_product\.[^.]+\./', '', $key);
-        if (! isset(self::RISK_RANGES[$bare])) {
-            // A list/object at or under a numeric risk key ("kelly_cap_pct.0") is never a valid value.
-            foreach (array_keys(self::RISK_RANGES) as $riskKey) {
-                abort_if(str_starts_with($bare, $riskKey.'.'), 422, "{$riskKey} must be a plain number");
-            }
-
-            return;
-        }
-        [$min, $max, $minExclusive] = self::RISK_RANGES[$bare];
-        if (! is_numeric($value) || ! is_finite((float) $value) || ($minExclusive ? $value <= $min : $value < $min) || $value > $max) {
-            abort(422, sprintf('%s must be a number %s %s and <= %s', $bare, $minExclusive ? '>' : '>=', $min, $max));
-        }
-        abort_if($bare === 'size.max_open_positions' && floor((float) $value) !== (float) $value, 422, 'size.max_open_positions must be a whole number');
     }
 
     public function deleteSetting(string $key, Settings $settings): JsonResponse

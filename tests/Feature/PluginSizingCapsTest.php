@@ -10,8 +10,10 @@ use App\Desk\Data\ProductStats;
 use App\Desk\Data\SizeDecision;
 use App\Desk\Data\Verdict;
 use App\Desk\DeskContext;
+use App\Desk\Settings;
 use App\Desk\Strategies\JsonPluginStrategy;
 use App\Models\Position;
+use App\Models\Setting;
 use App\Models\StrategyPlugin;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -106,43 +108,70 @@ class PluginSizingCapsTest extends TestCase
         $this->assertTrue($d->zero());
     }
 
-    public function test_kelly_cap_out_of_range_via_api_is_422(): void
+    /** A rejected write must 422, name the offending key, and leave the settings table untouched. */
+    private function assertRejected(string $key, mixed $value, ?string $named = null): void
+    {
+        $before = Setting::query()->orderBy('key')->pluck('value', 'key')->all();
+        $this->putJson('/api/settings', ['key' => $key, 'value' => $value])
+            ->assertStatus(422)
+            ->assertSee($named ?? $key, false);
+        $this->assertSame($before, Setting::query()->orderBy('key')->pluck('value', 'key')->all(), "rejected write to {$key} must not persist");
+    }
+
+    public function test_out_of_range_risk_values_are_rejected_and_not_persisted(): void
     {
         config(['cache.default' => 'array']);
-        $this->putJson('/api/settings', ['key' => 'size.kelly_cap_pct', 'value' => 5])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size.kelly_cap_pct', 'value' => '0'])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size.max_open_positions', 'value' => 0])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size.max_leverage', 'value' => 500])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'per_product.BTC-USD.size.kelly_cap_pct', 'value' => 2])->assertStatus(422);
+        $this->assertRejected('size.kelly_cap_pct', 5);
+        $this->assertRejected('size.kelly_cap_pct', '0');
+        $this->assertRejected('size.max_open_positions', 0);
+        $this->assertRejected('size.max_open_positions', 2.5);
+        $this->assertRejected('size.max_leverage', 500);
+        $this->assertRejected('per_product.BTC-USD.size.kelly_cap_pct', 2);
+        $this->assertRejected('size', ['kelly_cap_pct' => 5], 'size.kelly_cap_pct');
+        $this->assertRejected('size', ['max_leverage' => 0], 'size.max_leverage');
+        $this->assertRejected('size', ['max_open_positions' => 2.5], 'size.max_open_positions');
+        $this->assertRejected('per_product.BTC-USD.size', ['kelly_cap_pct' => 5], 'kelly_cap_pct');
+        $this->assertRejected('per_product', ['BTC-USD' => ['size' => ['max_leverage' => 0]]], 'max_leverage');
+    }
+
+    public function test_containers_at_or_below_a_risk_key_are_rejected_for_every_key_form(): void
+    {
+        config(['cache.default' => 'array']);
+        foreach (['size.kelly_cap_pct', 'size.max_open_positions', 'size.max_leverage', 'size.min_ticket_usd'] as $risk) {
+            $leaf = substr($risk, 5);
+            // exact-key writes: array at, empty array at, and empty/scalar below the risk key
+            $this->assertRejected($risk, [5], $risk);
+            $this->assertRejected($risk, [], $risk);
+            $this->assertRejected($risk.'.foo', [], $risk);
+            $this->assertRejected($risk.'.foo', 1, $risk);
+            $this->assertRejected("per_product.BTC-USD.{$risk}.foo", [], $risk);
+            // parent-map writes
+            $this->assertRejected('size', [$leaf => [5]], $risk);
+            $this->assertRejected('size', [$leaf => []], $risk);
+            $this->assertRejected('size', [$leaf => ['foo' => []]], $risk);
+            $this->assertRejected('per_product.BTC-USD.size', [$leaf => ['foo' => []]], $risk);
+            $this->assertRejected('per_product', ['BTC-USD' => ['size' => [$leaf => ['foo' => []]]]], $risk);
+        }
+        $this->assertRejected('size', 5, 'size');
+    }
+
+    public function test_valid_risk_writes_persist(): void
+    {
+        config(['cache.default' => 'array']);
         $this->putJson('/api/settings', ['key' => 'size.kelly_cap_pct', 'value' => '0.04'])->assertOk();
-    }
-
-    public function test_parent_map_writes_cannot_bypass_risk_ranges(): void
-    {
-        config(['cache.default' => 'array']);
-        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['kelly_cap_pct' => 5]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['max_leverage' => 0]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'per_product.BTC-USD.size', 'value' => ['kelly_cap_pct' => 5]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'per_product', 'value' => ['BTC-USD' => ['size' => ['max_leverage' => 0]]]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['kelly_cap_pct' => 0.05]])->assertOk();
-    }
-
-    public function test_array_or_object_values_under_a_risk_key_are_rejected(): void
-    {
-        config(['cache.default' => 'array']);
-        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['kelly_cap_pct' => [5]]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['max_leverage' => ['x' => 0]]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['kelly_cap_pct' => []]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size.kelly_cap_pct', 'value' => [5]])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'per_product.BTC-USD.size', 'value' => ['kelly_cap_pct' => [5]]])->assertStatus(422);
-    }
-
-    public function test_max_open_positions_must_be_integral(): void
-    {
-        config(['cache.default' => 'array']);
-        $this->putJson('/api/settings', ['key' => 'size.max_open_positions', 'value' => 2.5])->assertStatus(422);
-        $this->putJson('/api/settings', ['key' => 'size', 'value' => ['max_open_positions' => 2.5]])->assertStatus(422);
+        $this->assertSame(0.04, app(Settings::class)->get('size.kelly_cap_pct'));
         $this->putJson('/api/settings', ['key' => 'size', 'value' => ['max_open_positions' => '2']])->assertOk();
+        $this->assertEquals(2, app(Settings::class)->get('size.max_open_positions'));
         $this->putJson('/api/settings', ['key' => 'size.max_open_positions', 'value' => '3'])->assertOk();
+        $this->assertEquals(3, app(Settings::class)->get('size.max_open_positions'));
+    }
+
+    public function test_a_non_numeric_kelly_cap_falls_back_to_the_config_default(): void
+    {
+        $this->plugin('cap-bad', ['mode' => 'usd', 'value' => 1e9]);
+
+        $d = $this->sizeFor('cap-bad', new Bank(50_000, 0, 0.0, 0, 0), ['size' => ['kelly_cap_pct' => ['foo' => 1]]]);
+
+        $this->assertEqualsWithDelta(3000.0, $d->dollars, 0.01);
     }
 }
