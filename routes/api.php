@@ -123,9 +123,12 @@ Route::middleware(DeskToken::class)->group(function () {
 
     Route::get('/hub/strategies/search', [HubArchiveController::class, 'search']);
     Route::get('/hub/strategies/typeahead', [HubArchiveController::class, 'typeahead']);
-    Route::get('/hub/strategies/{slug}/versions/{version}', [HubArchiveController::class, 'version']);
-    Route::get('/hub/strategies/{slug}/comments', [HubArchiveController::class, 'comments']);
-    Route::get('/hub/strategies/{slug}', [HubArchiveController::class, 'show']);
+    Route::get('/hub/strategies/{slug}/versions/{version}', [HubArchiveController::class, 'version'])
+        ->where(['slug' => HubArchiveController::SLUG_PATTERN, 'version' => HubArchiveController::VERSION_PATTERN]);
+    Route::get('/hub/strategies/{slug}/comments', [HubArchiveController::class, 'comments'])
+        ->where('slug', HubArchiveController::SLUG_PATTERN);
+    Route::get('/hub/strategies/{slug}', [HubArchiveController::class, 'show'])
+        ->where('slug', HubArchiveController::SLUG_PATTERN);
     Route::post('/hub/import', [HubArchiveController::class, 'import']);
 
     Route::get('/hub/contests', [HubContestController::class, 'index']);

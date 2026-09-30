@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Ai\AgentContext;
-use App\Hub\HubException;
-use App\Hub\Publisher;
 use App\Models\StrategyPlugin;
 
 final class PublishStrategyTool implements Tool
@@ -18,7 +16,7 @@ final class PublishStrategyTool implements Tool
 
     public function description(): string
     {
-        return 'Push a saved plugin version to the community hub archive.';
+        return 'Request publishing a saved plugin version to the community hub archive. Never publishes by itself: returns needs_confirmation and the user must confirm in the UI.';
     }
 
     public function parameters(): array
@@ -46,18 +44,16 @@ final class PublishStrategyTool implements Tool
             return ['error' => 'no such plugin'];
         }
 
-        try {
-            $result = app(Publisher::class)->publish($plugin, $args['version'] ?? null, $args['changelog'] ?? null);
-        } catch (\InvalidArgumentException) {
-            return ['error' => 'no such version'];
-        } catch (HubException $e) {
-            return ['error' => $e->getMessage()];
-        }
+        $version = $args['version'] ?? $plugin->current_version;
 
+        // Publishing makes a private strategy public; only the user's own click may do that.
         return [
-            'slug' => $result['slug'],
-            'version' => $result['version'],
-            'hub_url' => $result['hub_url'],
+            'needs_confirmation' => true,
+            'action' => 'publish',
+            'plugin_id' => $plugin->id,
+            'version' => $version,
+            'endpoint' => "POST /api/strategy-plugins/{$plugin->id}/publish",
+            'message' => "Not published. Ask the user to press the Publish button (call suggest_share to show it) to publish v{$version}.",
         ];
     }
 }
