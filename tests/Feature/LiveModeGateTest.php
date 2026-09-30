@@ -8,6 +8,7 @@ use App\Desk\Settings;
 use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -167,6 +168,17 @@ class LiveModeGateTest extends TestCase
         (require database_path('migrations/2026_09_30_000004_purge_nested_scalar_setting_rows.php'))->up();
         $this->assertNull(Setting::find('mode.x'));
         $this->assertNull(Setting::find('strategy'));
+    }
+
+    public function test_the_cli_rejects_alias_and_protected_keys_before_any_write(): void
+    {
+        foreach (['MODE', 'mode ', 'mäde', 'Mode', 'mode.x', 'master_password', 'MASTER_PASSWORD', 'master_password.x'] as $key) {
+            $this->artisan('desk:ctl', ['action' => 'set', 'arg' => $key, 'value' => 'live'])->assertFailed();
+        }
+
+        $this->assertSame('paper', app(Settings::class)->mode());
+        $this->assertNull(Setting::find('mode'));
+        $this->assertTrue(Hash::check(self::DESK_PASSWORD, Setting::find('master_password')->value));
     }
 
     public function test_onboarding_only_ever_writes_paper_mode(): void

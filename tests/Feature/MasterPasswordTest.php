@@ -11,6 +11,7 @@ use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -220,6 +221,8 @@ class MasterPasswordTest extends TestCase
     {
         Setting::create(['key' => 'master_password', 'value' => '']);
 
+        Log::shouldReceive('warning')->once()->withArgs(fn ($m) => str_contains($m, 'MASTER_PASSWORD'));
+
         (require database_path('migrations/2026_09_30_000003_hash_stored_master_password.php'))->up();
 
         $this->assertNull(Setting::find('master_password'));
@@ -272,9 +275,46 @@ class MasterPasswordTest extends TestCase
         $this->assertTrue($settings->verifyToken('cached-token-value'));
         $this->assertTrue($settings->verifyToken('cached-token-value'));
 
-        $key = 'desk:token-ok:'.hash('sha256', "cached-token-value\0".Setting::find('master_password')->value);
+        $key = 'desk:token-ok:'.hash_hmac('sha256', "cached-token-value\0".Setting::find('master_password')->value, (string) config('app.key'));
         $this->assertTrue(Cache::get($key));
         $this->assertStringNotContainsString('cached-token-value', $key);
+    }
+
+    public function test_a_settings_read_failure_denies_instead_of_reading_as_no_password(): void
+    {
+        $this->bootstrapKey();
+        $this->app->instance(Settings::class, new class extends Settings
+        {
+            public function overrides(): array
+            {
+                throw new \RuntimeException('settings store down');
+            }
+        });
+
+        $this->getJson('/api/status', ['X-Desk-Token' => self::BOOTSTRAP])->assertStatus(503);
+        $this->getJson('/api/onboarding', ['X-Desk-Token' => self::BOOTSTRAP])->assertStatus(503);
+        $this->post('/login', ['password' => self::BOOTSTRAP])->assertStatus(503);
+        $this->get('/builder')->assertStatus(503);
+    }
+
+    public function test_the_bootstrap_key_no_longer_works_on_the_login_form_once_a_password_is_set(): void
+    {
+        $this->bootstrapKey();
+        $this->ownerPassword();
+
+        $this->post('/login', ['password' => self::BOOTSTRAP])->assertSessionHasErrors('password');
+        $this->get('/')->assertRedirect('/login');
+        $this->post('/login', ['password' => self::OWNER])->assertRedirect('/');
+    }
+
+    public function test_the_token_verification_cache_key_is_keyed_with_the_app_key(): void
+    {
+        $this->ownerPassword();
+        $hash = Setting::find('master_password')->value;
+        $this->assertTrue(app(Settings::class)->verifyToken(self::OWNER));
+
+        $this->assertTrue(Cache::get('desk:token-ok:'.hash_hmac('sha256', self::OWNER."\0".$hash, (string) config('app.key'))));
+        $this->assertNull(Cache::get('desk:token-ok:'.hash('sha256', self::OWNER."\0".$hash)));
     }
 
     public function test_script_clients_using_the_header_get_no_session_cookie(): void

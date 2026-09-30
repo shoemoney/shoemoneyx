@@ -9,6 +9,7 @@ use App\Models\Setting;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 /**
  * Layered configuration: config/desk.php <- strategy defaults <- settings table.
@@ -139,8 +140,11 @@ class Settings
             $stored = Arr::get($this->overrides(), 'master_password');
 
             return is_string($stored) && $stored !== '' ? $stored : null;
-        } catch (\Throwable) {
-            return null;
+        } catch (\Throwable $e) {
+            // A failed read is not "no password set": that would let the bootstrap key in again.
+            report($e);
+
+            throw new HttpException(503, 'settings unavailable, try again shortly');
         }
     }
 
@@ -201,7 +205,7 @@ class Settings
     /**
      * verifyMasterPassword for the X-Desk-Token header, which arrives on every script request. A
      * bcrypt check costs tens of milliseconds, so a success is remembered for a minute under a key
-     * derived from the token and the current credential (the token itself is never stored, and a
+     * keyed (HMAC with the app key, so a leaked cache cannot be used to test guesses offline) on the token and the current credential (the token itself is never stored, and a
      * password change makes the old key unreachable).
      */
     public function verifyToken(string $token): bool
@@ -210,7 +214,7 @@ class Settings
             return $this->verifyMasterPassword($token);
         }
 
-        $key = 'desk:token-ok:'.hash('sha256', $token."\0".$this->credentialFingerprintSource());
+        $key = 'desk:token-ok:'.hash_hmac('sha256', $token."\0".$this->credentialFingerprintSource(), (string) config('app.key'));
         if (Cache::get($key) === true) {
             return true;
         }

@@ -18,6 +18,8 @@ class PublicDemoTest extends TestCase
 {
     use RefreshDatabase;
 
+    private int $demoQueries = 0;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -25,7 +27,12 @@ class PublicDemoTest extends TestCase
         $this->withoutVite();
         Http::preventStrayRequests();
         Queue::fake();
-        DB::listen(fn () => throw new \RuntimeException('Public demo attempted database access'));
+        // Counted as well as thrown: a caller that swallows the exception must still fail the test.
+        DB::listen(function () {
+            $this->demoQueries++;
+
+            throw new \RuntimeException('Public demo attempted database access');
+        });
         foreach ([Chief::class, Desk::class] as $class) {
             $this->app->bind($class, fn () => throw new \RuntimeException('Demo resolved the trading desk'));
         }
@@ -39,6 +46,9 @@ class PublicDemoTest extends TestCase
         foreach (['status', 'report', 'products', 'positions', 'positions/1', 'runs', 'runs/latest', 'runs/42', 'events', 'candidates', 'fills', 'bank/history', 'settings', 'quote?product=BTC-USD', 'backtests', 'backtests/1', 'optimizer/champions', 'optimizer/rounds', 'optimizer/candidates?coin=BTC-USD', 'arena', 'farm', 'udf/config', 'udf/time', 'udf/search?query=BTC', 'udf/symbols?symbol=BTC-USD', 'udf/symbols?symbol=DEMO:BNB-USD', 'udf/marks', 'smx?product=BTC-USD&tf=15s'] as $path) {
             $this->getJson('/api/'.$path)->assertOk()->assertHeader('X-ShoeMoney-Data', 'simulated');
         }
+        $this->get('/login')->assertRedirect('/');
+        $this->post('/login', ['password' => 'anything'])->assertForbidden();
+        $this->assertSame(0, $this->demoQueries, 'demo pages must not query the database');
         Queue::assertNothingPushed();
     }
 

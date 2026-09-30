@@ -9,6 +9,7 @@ use App\Desk\DeskLogin;
 use App\Desk\Settings;
 use Closure;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\IpUtils;
 
 /**
  * API gate for the master password. A request passes with either:
@@ -78,8 +79,15 @@ class DeskToken
             return $this->setPasswordRequired();
         }
 
+        // With no key to prove ownership, the first caller claims the desk; only a local or private-network client may.
+        if ($request->isMethod('POST') && ! IpUtils::checkIp((string) $request->ip(), self::PRIVATE_RANGES)) {
+            abort(403, 'Set MASTER_PASSWORD in .env to claim this desk from outside its own network.');
+        }
+
         return $next($request);
     }
+
+    private const PRIVATE_RANGES = ['127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'];
 
     private function setPasswordRequired()
     {

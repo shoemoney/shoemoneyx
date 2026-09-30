@@ -65,7 +65,7 @@ docker/up.sh                  # or: bin/desk compose
 open https://localhost
 ```
 
-First run generates `.env` and prints a one-time `MASTER_PASSWORD` — log in with it once and you'll be asked to choose your own password (12+ characters, typed twice); after that the printed key opens nothing, and your browser stays signed in for about a year. Scripts send your password as the `X-Desk-Token` header. Switching to live mode asks for the password again. On a manual install with no `MASTER_PASSWORD` in `.env`, the first visitor sets the password, so set one before exposing the box. Rerunning `docker/up.sh` is a no-op except starting containers.
+First run generates `.env` and prints a one-time `MASTER_PASSWORD` — log in with it once and you'll be asked to choose your own password (12+ characters, typed twice); after that the printed key opens nothing, and your browser stays signed in for about a year. Scripts send your password as the `X-Desk-Token` header. Switching to live mode asks for the password again. On a manual install with no `MASTER_PASSWORD` in `.env`, the first visitor sets the password, so set one before exposing the box (keyless setup is refused from public IP addresses). Upgrading from an older install that chose "no password" drops that empty choice, so the desk asks for a password on the next visit from a local or private-network address; the migration logs a warning when it does. Rerunning `docker/up.sh` is a no-op except starting containers.
 
 Update to the latest image:
 

@@ -9,12 +9,11 @@ use App\Desk\Desk;
 use App\Desk\DeskAuthThrottle;
 use App\Desk\EndOfDayReport;
 use App\Desk\Exceptions\CycleInProgressException;
+use App\Desk\PaperBook;
 use App\Desk\Settings;
 use App\Desk\StrategyRegistry;
 use App\Exchange\Contracts\MarketData;
 use App\Http\Controllers\Controller;
-use App\Models\PaperLedger;
-use App\Models\Position;
 use App\Models\Product;
 use App\Models\Setting;
 use App\Services\Market\LiveFeed;
@@ -35,10 +34,7 @@ class DeskController extends Controller
             'resume' => tap(response()->json(['ok' => true]), fn () => $chief->resume()),
             'start' => tap(response()->json(['ok' => true]), fn () => $chief->setRunning(true)),
             'stop' => tap(response()->json(['ok' => true]), fn () => $chief->setRunning(false)),
-            'paper-reset' => tap(response()->json(['ok' => true]), function () {
-                Position::mode('paper')->delete();
-                PaperLedger::truncate();
-            }),
+            'paper-reset' => tap(response()->json(['ok' => true]), fn () => PaperBook::reset()),
             default => abort(404, 'unknown action'),
         };
     }

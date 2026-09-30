@@ -15,6 +15,11 @@ class DeskAuthController extends Controller
 {
     public function show(Request $request): View|RedirectResponse
     {
+        // The public demo has no login and must not touch the database.
+        if (config('site.demo')) {
+            return redirect('/');
+        }
+
         $settings = app(Settings::class);
         if (! $settings->hasMasterPassword()) {
             return redirect('/onboarding');
@@ -28,6 +33,10 @@ class DeskAuthController extends Controller
 
     public function store(Request $request): RedirectResponse
     {
+        if (config('site.demo')) {
+            return redirect('/');
+        }
+
         $request->validate(['password' => 'required|string|max:200']);
 
         if (DeskAuthThrottle::tooManyFailures($request)) {

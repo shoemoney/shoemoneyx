@@ -6,12 +6,11 @@ namespace App\Console\Commands;
 
 use App\Desk\Chief;
 use App\Desk\Desk;
+use App\Desk\PaperBook;
 use App\Desk\Settings;
 use App\Exchange\Contracts\MarketData;
-use App\Models\PaperLedger;
 use App\Models\Position;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 
 class DeskControl extends Command
 {
@@ -60,15 +59,18 @@ class DeskControl extends Command
                 }
                 break;
             case 'paper-reset':
-                // Children first: MariaDB refuses the parent delete when a cascading child row is locked by another session.
-                $ids = Position::mode('paper')->pluck('id');
-                DB::table('risk_checks')->whereIn('position_id', $ids)->delete();
-                DB::table('fills')->whereIn('position_id', $ids)->update(['position_id' => null]);
-                Position::mode('paper')->delete();
-                PaperLedger::truncate();
+                PaperBook::reset();
                 $this->info('paper book reset; starting cash will be re-deposited on next use');
                 break;
             case 'set':
+                $key = (string) $this->argument('arg');
+                // MariaDB compares keys case- and accent-insensitively, so only the canonical spelling of a
+                // storable key may reach the live-mode check below; secrets are never written from here.
+                if (! Settings::isCanonicalKey($key) || Settings::isSecret($key) || ! Settings::isStorableKey($key)) {
+                    $this->error('invalid or protected setting key');
+
+                    return self::FAILURE;
+                }
                 $v = $this->argument('value');
                 $v = is_numeric($v) ? $v + 0 : (in_array($v, ['true', 'false'], true) ? $v === 'true' : $v);
                 if ($this->argument('arg') === 'mode' && strtolower(trim((string) $v)) === 'live') {

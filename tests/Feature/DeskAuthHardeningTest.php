@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Desk\Settings;
+use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 class DeskAuthHardeningTest extends TestCase
@@ -84,6 +86,38 @@ class DeskAuthHardeningTest extends TestCase
         $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
 
         $this->postJson('/api/onboarding/master-password', $body, ['Sec-Fetch-Site' => 'same-origin'])->assertOk();
+    }
+
+    public function test_keyless_setup_is_refused_from_public_addresses(): void
+    {
+        config(['desk.master_password' => '']);
+        $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
+
+        foreach (['8.8.8.8', '172.32.0.1', '2606:4700::1111'] as $ip) {
+            $this->withServerVariables(['REMOTE_ADDR' => $ip])->postJson('/api/onboarding/master-password', $body)
+                ->assertForbidden()->assertJsonPath('message', 'Set MASTER_PASSWORD in .env to claim this desk from outside its own network.');
+        }
+        $this->assertFalse(app(Settings::class)->hasMasterPassword());
+    }
+
+    public function test_keyless_setup_is_allowed_from_loopback_and_private_addresses(): void
+    {
+        config(['desk.master_password' => '']);
+        $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
+
+        foreach (['127.0.0.1', '::1', '10.1.2.3', '172.16.5.5', '192.168.1.20', 'fd12:3456::1'] as $ip) {
+            Setting::where('key', 'master_password')->delete();
+            Cache::forget('desk:settings');
+            $this->withServerVariables(['REMOTE_ADDR' => $ip])->postJson('/api/onboarding/master-password', $body)->assertOk();
+        }
+    }
+
+    public function test_a_public_address_with_the_key_in_env_is_unaffected(): void
+    {
+        config(['desk.master_password' => 'i-0123456789abcdef0']);
+        $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
+
+        $this->withServerVariables(['REMOTE_ADDR' => '8.8.8.8'])->postJson('/api/onboarding/master-password', $body, ['X-Desk-Token' => 'i-0123456789abcdef0'])->assertOk();
     }
 
     public function test_cors_gives_no_cross_origin_access_to_the_api(): void
