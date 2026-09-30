@@ -174,7 +174,7 @@ export function useLiveDesk(
             connection.value = s;
             if (s === "connected") refresh();
         });
-        channel = echo.channel("optimizer");
+        channel = echo.private("optimizer");
         const scored = (e) =>
             absorb([
                 {
