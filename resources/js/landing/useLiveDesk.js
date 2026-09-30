@@ -129,7 +129,6 @@ export function useLiveDesk(
             const response = await fetch("/api/landing", {
                 headers: deskHeaders({ Accept: "application/json" }),
                 signal: requestController.signal,
-                headers: { Accept: "application/json" },
             });
             if (!response.ok) {
                 throw new Error(

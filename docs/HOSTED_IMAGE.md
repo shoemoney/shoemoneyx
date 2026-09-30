@@ -170,8 +170,8 @@ For scripting (this is what `test-boot.sh` does):
 ssh -i ~/.ssh/smx.pem ubuntu@<ip> sudo cat /root/shoemoneyx-credentials.txt
 ```
 
-Prints the URL, the `MASTER_PASSWORD` (send this as the `X-Desk-Token` header or `?token=` query
-param, or log in at `/login`), and the local MariaDB password.
+Prints the URL, the `MASTER_PASSWORD` (log in at `/login`, or send it as the `X-Desk-Token` header
+from scripts), and the local MariaDB password.
 
 ## Firewall: why DOCKER-USER exists
 
