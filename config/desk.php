@@ -239,6 +239,10 @@ return [
     'master_password_hint' => env('MASTER_PASSWORD_HINT'),
 
     // Set by the AMI's first boot (from IMDS): the region of the buyer's console link on the login page.
+    // Set by the Dockerfile. Keyless first-password setup is refused inside a container, where the
+    // client address cannot be trusted. Null falls back to looking for /.dockerenv.
+    'in_container' => env('DESK_IN_CONTAINER') === null ? null : filter_var(env('DESK_IN_CONTAINER'), FILTER_VALIDATE_BOOLEAN),
+
     'aws_region' => env('DESK_AWS_REGION'),
 
     // 'aws' turns on the numbered first-login guide on the login page (AMI first boot sets it).

@@ -49,7 +49,7 @@ COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=feeder-deps /feeder/node_modules ./node_modules
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p storage/logs storage/framework/{cache,sessions,views} bootstrap/cache && chmod -R 777 storage bootstrap/cache
-ENV ROLE=worker WORKERS=0 REDIS_CLIENT=phpredis
+ENV ROLE=worker WORKERS=0 REDIS_CLIENT=phpredis DESK_IN_CONTAINER=1
 ENTRYPOINT ["/entrypoint.sh"]
 
 FROM nginx:1.27-alpine AS nginx

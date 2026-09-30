@@ -112,6 +112,24 @@ class DeskAuthHardeningTest extends TestCase
         }
     }
 
+    public function test_keyless_setup_is_refused_behind_a_proxy_or_inside_a_container(): void
+    {
+        config(['desk.master_password' => '']);
+        $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
+        $message = 'Set MASTER_PASSWORD in .env to claim this desk from outside its own network.';
+
+        foreach (['Forwarded' => 'for=8.8.8.8', 'X-Forwarded-For' => '8.8.8.8', 'X-Real-IP' => '8.8.8.8', 'X-Forwarded-Host' => 'desk.example', 'CF-Connecting-IP' => '8.8.8.8'] as $header => $value) {
+            $this->withServerVariables(['REMOTE_ADDR' => '10.0.0.5'])->postJson('/api/onboarding/master-password', $body, [$header => $value])
+                ->assertForbidden()->assertJsonPath('message', $message);
+        }
+
+        config(['desk.in_container' => true]);
+        $this->withServerVariables(['REMOTE_ADDR' => '172.18.0.1'])->postJson('/api/onboarding/master-password', $body)
+            ->assertForbidden()->assertJsonPath('message', $message);
+
+        $this->assertFalse(app(Settings::class)->hasMasterPassword());
+    }
+
     public function test_a_public_address_with_the_key_in_env_is_unaffected(): void
     {
         config(['desk.master_password' => 'i-0123456789abcdef0']);

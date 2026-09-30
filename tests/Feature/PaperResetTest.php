@@ -62,7 +62,7 @@ class PaperResetTest extends TestCase
 
     public function test_a_failure_part_way_rolls_the_whole_reset_back(): void
     {
-        [$paper] = $this->seedBook();
+        [$paper, , $fill] = $this->seedBook();
         DB::listen(fn ($query) => str_contains($query->sql, 'delete from "paper_ledger"') ? throw new \RuntimeException('boom') : null);
 
         try {
@@ -74,5 +74,19 @@ class PaperResetTest extends TestCase
         $this->assertSame(1, RiskCheck::count());
         $this->assertSame(1, PaperLedger::count());
         $this->assertNotNull(Position::find($paper->id));
+        $this->assertSame($paper->id, $fill->fresh()->position_id);
+    }
+
+    public function test_a_large_book_is_reset_with_a_subquery_not_thousands_of_bindings(): void
+    {
+        $this->seedBook();
+        $max = 0;
+        DB::listen(function ($query) use (&$max) {
+            $max = max($max, count($query->bindings));
+        });
+
+        PaperBook::reset();
+
+        $this->assertLessThan(10, $max, 'child statements must select ids in SQL, not bind them');
     }
 }

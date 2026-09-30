@@ -15,7 +15,8 @@ final class PaperBook
     {
         DB::transaction(function () {
             // Children first: MariaDB refuses the parent delete when a cascading child row is locked by another session.
-            $ids = Position::mode('paper')->pluck('id');
+            // A subquery, not a plucked id list: thousands of bound ids would exceed MariaDB's placeholder limit.
+            $ids = Position::mode('paper')->select('id');
             DB::table('risk_checks')->whereIn('position_id', $ids)->delete();
             DB::table('fills')->whereIn('position_id', $ids)->update(['position_id' => null]);
             Position::mode('paper')->delete();

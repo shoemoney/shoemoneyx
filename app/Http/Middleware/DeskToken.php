@@ -79,12 +79,37 @@ class DeskToken
             return $this->setPasswordRequired();
         }
 
-        // With no key to prove ownership, the first caller claims the desk; only a local or private-network client may.
-        if ($request->isMethod('POST') && ! IpUtils::checkIp((string) $request->ip(), self::PRIVATE_RANGES)) {
+        if ($request->isMethod('POST') && ! $this->isDirectLocalClient($request)) {
             abort(403, 'Set MASTER_PASSWORD in .env to claim this desk from outside its own network.');
         }
 
         return $next($request);
+    }
+
+    private const FORWARDING_HEADERS = ['Forwarded', 'X-Forwarded-For', 'X-Real-IP', 'X-Forwarded-Host', 'CF-Connecting-IP'];
+
+    /**
+     * With no key to prove ownership, the first caller claims the desk, so the client address has to be
+     * trustworthy: a direct loopback or private-network connection. Behind a reverse proxy or inside a
+     * container (Docker's userland proxy re-originates connections from a private address) a public
+     * visitor would look private, so keyless setup is refused there; those installs always have a key.
+     */
+    private function isDirectLocalClient(Request $request): bool
+    {
+        foreach (self::FORWARDING_HEADERS as $header) {
+            if ($request->headers->has($header)) {
+                return false;
+            }
+        }
+
+        return ! $this->inContainer() && IpUtils::checkIp((string) $request->ip(), self::PRIVATE_RANGES);
+    }
+
+    private function inContainer(): bool
+    {
+        $flag = config('desk.in_container');
+
+        return $flag !== null ? (bool) $flag : file_exists('/.dockerenv') || file_exists('/run/.containerenv');
     }
 
     private const PRIVATE_RANGES = ['127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'];

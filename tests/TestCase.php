@@ -34,6 +34,9 @@ abstract class TestCase extends BaseTestCase
         // and no test asserts on the built asset tags, so render every view without the manifest.
         $this->withoutVite();
 
+        // Tests may themselves run in a container; keyless-setup tests opt back in explicitly.
+        config(['desk.in_container' => false]);
+
         if ($this->deskPasswordSet && in_array(RefreshDatabase::class, class_uses_recursive($this), true)) {
             $this->signInAsOwner();
         }
