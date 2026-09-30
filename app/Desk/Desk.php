@@ -343,7 +343,7 @@ class Desk
                     break;
                 }
                 try {
-                    $fill = $this->enter($executor, $size, $ctx, $run, $rows[$c->productId()]);
+                    $fill = $this->enter($executor, $size, $ctx, $run, $rows[$c->productId()], $cycleDeadline);
                 } catch (LockTimeoutException $e) {
                     // Someone else is still mid-mutation on this product (a concurrent close/trim, or a
                     // slow exchange call from another cycle) — skip this candidate this cycle rather than
@@ -426,7 +426,7 @@ class Desk
         return Cache::lock("desk:mutate:{$mode}:{$pid}", $this->mutateLockSeconds());
     }
 
-    private function enter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row): ?Fill
+    private function enter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row, float $cycleDeadline): ?Fill
     {
         $c = $size->verdict->candidate;
         $pid = $c->productId();
@@ -435,12 +435,12 @@ class Desk
         // Serialize every mutation of this product's position/cash under one lock, and re-read the
         // position fresh under it — the copy on $ctx was snapshotted before this candidate's turn and
         // can be stale if another caller (API close/trim, a parallel cycle) touched it meanwhile.
-        return $this->mutateLock($mode, $pid)->block(5, function () use ($executor, $size, $ctx, $run, $row, $c, $pid, $mode) {
-            return $this->doEnter($executor, $size, $ctx, $run, $row, $c, $pid, $mode);
+        return $this->mutateLock($mode, $pid)->block(5, function () use ($executor, $size, $ctx, $run, $row, $c, $pid, $mode, $cycleDeadline) {
+            return $this->doEnter($executor, $size, $ctx, $run, $row, $c, $pid, $mode, $cycleDeadline);
         });
     }
 
-    private function doEnter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row, CandidateRow $c, string $pid, string $mode): ?Fill
+    private function doEnter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row, CandidateRow $c, string $pid, string $mode, float $cycleDeadline): ?Fill
     {
         $existing = Position::open()->mode($mode)->seat($this->arenaSeatId)->where('product_id', $pid)->first();
         $kind = $existing ? 'add' : 'entry';
@@ -475,6 +475,12 @@ class Desk
 
                 return null;
             }
+        }
+
+        if (microtime(true) >= $cycleDeadline) {
+            $this->reporter->warn('FILLS', "{$pid}: cycle budget spent — entry skipped");
+
+            return null;
         }
 
         // The exchange call stays outside the transaction — a DB rollback cannot un-send an order.

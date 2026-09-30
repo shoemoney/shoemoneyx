@@ -175,7 +175,7 @@ class DeskFillBasisRecoveredReportingTest extends TestCase
         $desk = app(Desk::class);
         $enter = new \ReflectionMethod(Desk::class, 'enter');
         $enter->setAccessible(true);
-        $enter->invoke($desk, $this->buyExecutor($measured), $size, $ctx, $run, $row);
+        $enter->invoke($desk, $this->buyExecutor($measured), $size, $ctx, $run, $row, microtime(true) + 60);
 
         $this->assertDatabaseHas('desk_events', ['level' => 'error', 'agent' => 'FILLS']);
         $event = DeskEvent::where('agent', 'FILLS')->where('level', 'error')->latest('id')->first();

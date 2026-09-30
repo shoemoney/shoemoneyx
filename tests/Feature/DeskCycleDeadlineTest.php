@@ -74,4 +74,20 @@ class DeskCycleDeadlineTest extends TestCase
         $this->assertSame(2, $run->filled);
         $this->assertFalse(DeskEvent::where('message', 'like', 'cycle budget%')->exists());
     }
+
+    public function test_budget_expiring_during_vet_prevents_the_second_order(): void
+    {
+        config(['desk.cycle_budget_seconds' => 1]);
+        $this->app->instance(TwoEntryHaltStrategy::class, new TwoEntryHaltStrategy(
+            usd: 100.0,
+            productIds: ['BTC-USD', 'ETH-USD'],
+            onSecondVet: static fn () => usleep(1_100_000),
+        ));
+
+        $run = app(Desk::class)->cycle();
+
+        $this->assertSame('done', $run->status);
+        $this->assertSame(1, $run->filled);
+        $this->assertSame(1, Position::count());
+    }
 }
