@@ -130,9 +130,11 @@ reviews:
 
     - path: "**/*.php"
       instructions: >-
-        Production MariaDB compares strings under utf8mb4_unicode_ci: MASTER_PASSWORD, 'key ' and
-        'kéy' all equal 'key' in WHERE clauses and unique/primary keys. Flag security or identity
-        checks done in PHP with === on a value that is then used in a database lookup.
+        Production MariaDB compares strings under utf8mb4_unicode_ci (unless a column sets its own
+        collation): 'MASTER_PASSWORD', 'master_password ' and 'mäster_password' all equal
+        'master_password' in WHERE clauses and unique/primary keys. Flag a PHP === / in_array check
+        only when a concrete case, accent or trailing-space alias would pass it and then select or
+        overwrite a different (protected) row.
         Laravel 13 conventions. Prefer framework idioms over hand-rolled equivalents. Watch for
         N+1 queries, unbounded SELECTs on tables that grow without limit such as failed_jobs and
         job_batches, and missing casts on model attributes.
