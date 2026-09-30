@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   # php artisan test — sqlite :memory: per phpunit.xml; Tests\TestCase calls withoutVite()
   # so no npm build is needed. Redis is a real dependency (CandleStore keeps its

@@ -117,6 +117,7 @@ services:
     build: { context: ., target: nginx }
     restart: unless-stopped
     ports: ["443:443"]
+    volumes: [tls-data:/etc/ssl/shoemoneyx]
     depends_on:
       web: { condition: service_healthy }
 
@@ -163,3 +164,4 @@ services:
 volumes:
   mariadb-data:
   redis-data:
+  tls-data:
