@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Middleware;
 
+use App\Desk\DeskLogin;
 use App\Desk\Settings;
 use Closure;
 use Illuminate\Http\Request;
@@ -17,7 +18,7 @@ class MasterPassword
     public function handle(Request $request, Closure $next)
     {
         // Public demo pages must render without touching the database — same rule PublicDemo enforces.
-        if (! config('site.demo') && app(Settings::class)->masterPassword() !== '' && ! $request->session()->get('desk_authed', false)) {
+        if (! config('site.demo') && app(Settings::class)->masterPassword() !== '' && ! DeskLogin::check($request->session())) {
             return redirect('/login');
         }
 

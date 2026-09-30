@@ -89,4 +89,4 @@ MASTER_PASSWORD="$(grep '^MASTER_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 echo
 echo "shoemoneyx desk is up: https://localhost"
 echo "MASTER_PASSWORD=$MASTER_PASSWORD"
-echo "(X-Desk-Token header, or ?token= query param, on every API call)"
+echo "(log in with it in the browser; scripts send it as the X-Desk-Token header)"

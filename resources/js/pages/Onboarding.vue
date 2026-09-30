@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import PageHeading from "../components/PageHeading.vue";
+import { deskHeaders } from "../api.js";
 
 const router = useRouter();
 
@@ -19,14 +20,10 @@ const steps = ref([]);
 const currentStep = ref(null);
 const busy = ref(false);
 
-// DeskToken gates every /api/* call once a master password exists — the shared `api`
-// helper (resources/js/api.js) never sends that header, so this page carries its own
-// desk token and attaches it itself, the same way StrategyBuilder.vue already does.
-const deskToken = ref(localStorage.getItem("desk_token") || "");
-
+// Its own fetch wrapper (not the shared `api` helper) because failures carry step data
+// in the JSON body. Setting the master password marks this browser's session as logged in.
 async function call(method, url, body) {
-    const headers = { Accept: "application/json" };
-    if (deskToken.value) headers["X-Desk-Token"] = deskToken.value;
+    const headers = deskHeaders({ Accept: "application/json" });
     if (body !== undefined) headers["Content-Type"] = "application/json";
     const res = await fetch("/api" + url, {
         method,
@@ -82,9 +79,8 @@ async function submitPassword() {
     error.value = "";
     try {
         const res = await call("POST", "/onboarding/master-password", { password: password.value });
-        deskToken.value = password.value;
-        localStorage.setItem("desk_token", password.value);
-        if (!res.master_password_set) localStorage.removeItem("desk_token");
+        // Logging in rotates the session's CSRF token; later steps must send the new one.
+        document.querySelector('meta[name="csrf-token"]')?.setAttribute("content", res.csrf_token);
         await refresh();
     } catch (e) {
         error.value = e.message;
