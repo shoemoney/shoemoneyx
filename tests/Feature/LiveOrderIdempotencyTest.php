@@ -10,6 +10,7 @@ use App\Exchange\Ccxt\CcxtExecutor;
 use App\Exchange\Coinbase\CoinbaseExecutor;
 use App\Exchange\Coinbase\CoinbasePerpsExecutor;
 use App\Models\CoinbaseAccount;
+use App\Models\DeskEvent;
 use App\Models\Fill;
 use App\Models\OrderIntent;
 use App\Models\Position;
@@ -159,13 +160,13 @@ class LiveOrderIdempotencyTest extends TestCase
     public function test_a_different_side_is_refused_while_an_order_on_the_product_is_unresolved(): void
     {
         $this->venue->timeoutAfterPlacing = true;
-        $this->spot()->buy('BTC-USD', 100.0, 100.0);
+        $this->spot()->sell('BTC-USD', 1.0, 100.0);
         $this->venue->timeoutAfterPlacing = false;
 
-        $sell = $this->spot()->sell('BTC-USD', 1.0, 100.0);
+        $buy = $this->spot()->buy('BTC-USD', 100.0, 100.0);
 
-        $this->assertSame('unknown', $sell->status);
-        $this->assertStringContainsString('not sending sell', (string) $sell->note);
+        $this->assertSame('unknown', $buy->status);
+        $this->assertStringContainsString('not sending buy', (string) $buy->note);
         $this->assertSame(1, count($this->venue->attempts));
     }
 
@@ -672,5 +673,96 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertCount(1, $client->clientOrderIds, 'no second buy');
         $this->assertSame(1, OrderIntent::pending()->count());
         $this->assertFalse($executor->confirmedAbsent(OrderIntent::sole()));
+    }
+
+    public function test_client_order_ids_are_32_lowercase_hex(): void
+    {
+        $this->spot()->buy('BTC-USD', 100.0, 100.0);
+
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', OrderIntent::sole()->client_order_id);
+    }
+
+    public function test_a_same_method_lookup_that_overruns_the_budget_is_not_proof_of_absence(): void
+    {
+        $executor = $this->spot();
+        $this->venue->timeoutBeforePlacing = true;
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->timeoutBeforePlacing = false;
+        $this->travel(3)->minutes();
+
+        $this->venue->lookupTakesSeconds = 70;
+        $result = $executor->buy('BTC-USD', 100.0, 100.0);
+
+        $this->assertSame('unknown', $result->status);
+        $this->assertSame(1, count($this->venue->attempts), 'no re-send on a stale "absent"');
+    }
+
+    public function test_a_zero_grace_setting_is_floored(): void
+    {
+        config(['desk.live_orders.not_found_grace_seconds' => 0]);
+        $this->venue->timeoutBeforePlacing = true;
+        $executor = $this->spot();
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->timeoutBeforePlacing = false;
+        $this->travel(20)->seconds();
+
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 100.0, 100.0)->status);
+        $this->assertSame(1, count($this->venue->attempts));
+    }
+
+    public function test_a_ccxt_resend_after_grace_reuses_the_client_id(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->has['fetchOrders'] = true;
+        $client->createThrows = new RequestTimeout('timed out');
+        $executor = new CcxtExecutor($client, 'stubex');
+        $executor->buy('BTC-USD', 1000.0, 50_000.0);
+
+        $client->createThrows = null;
+        $client->stubCreate = ['id' => 'o-2', 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0];
+        $client->stubOrders = [$client->stubCreate];
+        $this->travel(3)->minutes();
+        $result = $executor->buy('BTC-USD', 1000.0, 50_000.0);
+
+        $this->assertSame('filled', $result->status);
+        $this->assertCount(2, $client->clientOrderIds);
+        $this->assertSame($client->clientOrderIds[0], $client->clientOrderIds[1]);
+    }
+
+    public function test_a_spot_stop_loss_fires_while_an_entry_is_unresolved(): void
+    {
+        $desk = app(Desk::class);
+        $executor = $this->spot();
+        $position = $this->livePosition();
+
+        $this->venue->timeoutAfterPlacing = true;
+        $this->assertSame('unknown', $executor->buy('ETH-USD', 100.0, 100.0)->status);   // other product, control
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 100.0, 100.0)->status);   // pending add on the held product
+        $this->venue->timeoutAfterPlacing = false;
+
+        $fill = $desk->close($position, 'stop', 100.0, $executor);
+
+        $this->assertSame('filled', $fill->status);
+        $this->assertSame('closed', $position->fresh()->status);
+        $this->assertEqualsWithDelta(1.0, (float) $fill->filled_qty, 1e-9, 'only what was booked is sold');
+        $this->assertSame(1, OrderIntent::pending()->where('desk_product_id', 'BTC-USD')->where('method', 'buy')->count());
+    }
+
+    public function test_a_blocked_perps_exit_alerts_immediately(): void
+    {
+        config(['desk.perps.enabled' => true]);
+        $this->venue->price = 10_000.0;
+        $executor = $this->perps();
+        $position = $this->livePosition(['quantity' => 0.01, 'entry_price' => 10_000.0, 'entry_usd' => 100.0]);
+
+        $this->venue->timeoutAfterPlacing = true;
+        $executor->coverShort('BTC-USD', 0.01, 10_000.0, 100.0);   // an unresolved order on the same product
+        $this->venue->timeoutAfterPlacing = false;
+
+        $fill = app(Desk::class)->close($position, 'stop', 10_000.0, $executor);
+
+        $this->assertSame('unknown', $fill->status);
+        $this->assertSame('open', $position->fresh()->status);
+        $this->assertTrue(DeskEvent::where('level', 'error')->where('message', 'like', 'EXIT BLOCKED%')->exists());
     }
 }

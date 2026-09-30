@@ -24,6 +24,11 @@ class CoinbaseExecutor implements Executor, ReconcilesOrders
 
     public function __construct(private CoinbaseService $coinbase) {}
 
+    protected function exitsBypassPendingEntries(): bool
+    {
+        return true;
+    }
+
     public function orderVenue(): string
     {
         return 'coinbase_spot';

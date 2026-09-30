@@ -1373,7 +1373,9 @@ class Desk
                 $fill = Fill::create($this->fillAttrs(null, $p, $p->product_id, $p->isShort() ? 'BUY' : 'SELL', 'exit', $result, $executor->mode()));
 
                 if (! $result->ok()) {
-                    $this->reporter->error('RISK', "CLOSE FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
+                    $this->reporter->error('RISK', ($result->raw['blocked_by_intent'] ?? null) !== null
+                        ? "EXIT BLOCKED {$p->product_id} ({$rule}) by unresolved live order {$result->raw['blocked_by_intent']}: resolve it (desk:intents:resolve) — ".($result->note ?? '')
+                        : "CLOSE FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
 
                     return $fill;
                 }
@@ -1494,7 +1496,11 @@ class Desk
             return DB::transaction(function () use ($p, $rule, $result, $executor, $qtyBefore, $limitPrice) {
                 $fill = Fill::create($this->fillAttrs(null, $p, $p->product_id, $p->isShort() ? 'BUY' : 'SELL', 'trim', $result, $executor->mode()));
                 if (! $result->ok()) {
-                    $this->reporter->warn('RISK', "TRIM FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
+                    if (($result->raw['blocked_by_intent'] ?? null) !== null) {
+                        $this->reporter->error('RISK', "EXIT BLOCKED {$p->product_id} ({$rule}) by unresolved live order {$result->raw['blocked_by_intent']}: resolve it (desk:intents:resolve) — ".($result->note ?? ''));
+                    } else {
+                        $this->reporter->warn('RISK', "TRIM FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
+                    }
 
                     return $fill;
                 }

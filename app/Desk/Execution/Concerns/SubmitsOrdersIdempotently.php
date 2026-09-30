@@ -60,6 +60,18 @@ trait SubmitsOrdersIdempotently
         return $e->getMessage();
     }
 
+    /** Venue indexing lag is real: a misconfigured 0 must not turn "not visible yet" into "never arrived". */
+    protected function graceSeconds(): int
+    {
+        return max(60, (int) config('desk.live_orders.not_found_grace_seconds', 120));
+    }
+
+    /** Spot venues cannot flip short, so a sell may go out while an entry is unresolved; perps override nothing and stay blocked. */
+    protected function exitsBypassPendingEntries(): bool
+    {
+        return false;
+    }
+
     protected function pollAttempts(): int
     {
         return 6;
@@ -77,11 +89,13 @@ trait SubmitsOrdersIdempotently
 
     private function submitWithinBudget(string $method, string $deskPid, string $venuePid, string $side, float $requestedUsd, float $decisionPrice, array $context, \Closure $send): OrderResult
     {
-        $intent = OrderIntent::pending()->mode($this->mode())->venue($this->orderVenue())->where('desk_product_id', $deskPid)->orderBy('id')->first();
+        $intent = OrderIntent::pending()->mode($this->mode())->venue($this->orderVenue())->where('desk_product_id', $deskPid)
+            ->when($method === 'sell' && $this->exitsBypassPendingEntries(), fn ($q) => $q->where('method', '!=', 'buy'))
+            ->orderBy('id')->first();
 
         if ($intent !== null) {
             if ($intent->method !== $method) {
-                return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "unresolved {$intent->method} order {$intent->client_order_id} on {$deskPid}; not sending {$method} until it is reconciled");
+                return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "unresolved {$intent->method} order {$intent->client_order_id} on {$deskPid}; not sending {$method} until it is reconciled", null, ['blocked_by_intent' => $intent->client_order_id]);
             }
             $size = (float) ($context['size'] ?? 0);
             $pendingSize = (float) ($intent->context['size'] ?? 0);
@@ -97,7 +111,7 @@ trait SubmitsOrdersIdempotently
         } else {
             $intent = OrderIntent::create([
                 'mode' => $this->mode(), 'venue' => $this->orderVenue(), 'sent_at' => now(), 'desk_product_id' => $deskPid, 'venue_product_id' => $venuePid,
-                'method' => $method, 'side' => $side, 'client_order_id' => (string) Str::uuid(),
+                'method' => $method, 'side' => $side, 'client_order_id' => str_replace('-', '', (string) Str::uuid()),
                 'requested_usd' => $requestedUsd, 'decision_price' => $decisionPrice, 'context' => $context,
             ]);
         }
@@ -189,7 +203,12 @@ trait SubmitsOrdersIdempotently
             return $this->finish($intent, [], $order, $requestedUsd, $decisionPrice);
         }
 
-        $grace = (int) config('desk.live_orders.not_found_grace_seconds', 120);
+        // Absent only counts as absent when the lookup finished inside the order budget (the product lock
+        // may have expired under a slower one) and the venue's indexing lag has had time to pass.
+        $grace = $this->graceSeconds();
+        if (OrderBudget::exhausted()) {
+            return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "lookup of order {$intent->client_order_id} ran past the order budget; cannot call it absent");
+        }
         if ($intent->secondsSinceSent() < $grace) {
             return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "order {$intent->client_order_id} not visible at the venue yet ({$intent->secondsSinceSent()}s since sent); waiting out the {$grace}s grace window");
         }
@@ -229,7 +248,7 @@ trait SubmitsOrdersIdempotently
 
             return $order === null
                 && ! OrderBudget::exhausted()
-                && $intent->secondsSinceSent() >= (int) config('desk.live_orders.not_found_grace_seconds', 120);
+                && $intent->secondsSinceSent() >= $this->graceSeconds();
         });
     }
 

@@ -118,6 +118,11 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         return ($this->client->has['fetchOrder'] ?? false) ? 6 : 0;
     }
 
+    protected function exitsBypassPendingEntries(): bool
+    {
+        return true;
+    }
+
     public function orderVenue(): string
     {
         return 'ccxt:'.$this->ccxtId;
