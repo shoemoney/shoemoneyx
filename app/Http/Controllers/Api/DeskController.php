@@ -98,13 +98,19 @@ class DeskController extends Controller
      */
     private function assertSaneRiskValue(string $key, mixed $value): void
     {
-        $bare = preg_replace('/^per_product\.[^.]+\./', '', $key);
+        $bare = preg_replace('/^per_product\.[^.]+\./i', '', $key);
+        // MariaDB's utf8mb4_unicode_ci matches keys case-insensitively, so "size.KELLY_CAP_PCT" would
+        // overwrite the "size.kelly_cap_pct" row: match risk paths on the lowercased path and demand the canonical spelling.
+        $lower = strtolower($bare);
 
         foreach (self::RISK_RANGES as $riskKey => [$min, $max, $minExclusive]) {
-            if (str_starts_with($bare, $riskKey.'.')) {
+            if (($lower === $riskKey || str_starts_with($lower, $riskKey.'.')) && $bare !== $lower) {
+                abort(422, "{$key}: use the canonical key {$riskKey}");
+            }
+            if (str_starts_with($lower, $riskKey.'.')) {
                 abort(422, "{$key}: {$riskKey} must be a plain number, nothing may be nested under it");
             }
-            if ($bare === $riskKey) {
+            if ($lower === $riskKey) {
                 $ok = is_numeric($value) && is_finite((float) $value)
                     && ($minExclusive ? $value > $min : $value >= $min) && $value <= $max
                     && ($riskKey !== 'size.max_open_positions' || floor((float) $value) === (float) $value);
@@ -113,7 +119,7 @@ class DeskController extends Controller
                 return;
             }
             // An ancestor of a risk key (e.g. "size") may only be written as a map.
-            abort_if(str_starts_with($riskKey, $bare.'.') && ! is_array($value), 422, "{$key} must be an object");
+            abort_if(str_starts_with($riskKey, $lower.'.') && ! is_array($value), 422, "{$key} must be an object");
         }
 
         if (is_array($value)) {

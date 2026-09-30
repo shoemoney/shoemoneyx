@@ -155,6 +155,20 @@ class PluginSizingCapsTest extends TestCase
         $this->assertRejected('size', 5, 'size');
     }
 
+    public function test_case_aliases_of_risk_keys_are_rejected(): void
+    {
+        config(['cache.default' => 'array']);
+        $this->assertRejected('size.KELLY_CAP_PCT', 5, 'canonical');
+        $this->assertRejected('size.Kelly_Cap_Pct', 0.04, 'canonical');
+        $this->assertRejected('size.MAX_LEVERAGE', 0, 'canonical');
+        $this->assertRejected('size', ['KELLY_CAP_PCT' => 5], 'canonical');
+        $this->assertRejected('size', ['MAX_OPEN_POSITIONS' => 2], 'canonical');
+        $this->assertRejected('per_product.BTC-USD.size.KELLY_CAP_PCT', 5, 'canonical');
+        $this->assertRejected('per_product.BTC-USD.size', ['KELLY_CAP_PCT' => 5], 'canonical');
+        $this->assertRejected('per_product', ['BTC-USD' => ['size' => ['MAX_LEVERAGE' => 0]]], 'canonical');
+        $this->assertRejected('size.KELLY_CAP_PCT.foo', [], 'canonical');
+    }
+
     public function test_valid_risk_writes_persist(): void
     {
         config(['cache.default' => 'array']);
