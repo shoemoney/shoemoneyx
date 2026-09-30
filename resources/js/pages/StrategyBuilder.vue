@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue';
-import { api } from '../api';
+import { api, deskHeaders } from '../api';
 
 const DEFAULT_JSON = `{
   "key": "my-first-strategy",
@@ -228,9 +228,8 @@ async function ensureSaved() {
 
 async function exportFmt(fmt) {
     if (!await ensureSaved()) return;
-    const token = localStorage.getItem('desk_token') || '';
     const url = `/api/strategy-plugins/${currentId.value}/export/${fmt}`;
-    const res = await fetch(url, { headers: token ? { 'X-Desk-Token': token } : {} });
+    const res = await fetch(url, { headers: deskHeaders() });
     if (!res.ok) { errors.value = [`export failed: ${res.status}`]; return; }
     const blob = await res.blob();
     const a = document.createElement('a');

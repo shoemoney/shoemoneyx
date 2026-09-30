@@ -5,11 +5,8 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Ai\AgentContext;
-use App\Hub\HubClient;
-use App\Hub\HubConnection;
-use App\Hub\HubException;
 
-/** Registers a new hub account for this desk. Never echoes the password or the raw token back. */
+/** Never registers on its own: the user creates the hub account themselves in the UI. */
 final class HubRegisterTool implements Tool
 {
     public function name(): string
@@ -19,7 +16,7 @@ final class HubRegisterTool implements Tool
 
     public function description(): string
     {
-        return 'Register a new account on the community hub and connect this desk to it.';
+        return 'Request a community hub account. Never registers by itself: returns needs_confirmation and the user completes it in the UI.';
     }
 
     public function parameters(): array
@@ -37,23 +34,12 @@ final class HubRegisterTool implements Tool
 
     public function run(array $args, AgentContext $context): array
     {
-        $client = app(HubClient::class);
-
-        try {
-            $response = $client->register($args['email'], $args['handle'], $args['password'], gethostname() ?: 'desk');
-        } catch (HubException $e) {
-            return ['error' => $e->getMessage()];
-        }
-
-        $handle = $response['user']['handle'] ?? $args['handle'];
-
-        HubConnection::create([
-            'user_handle' => $handle,
-            'desk_id' => null,
-            'token' => $response['token'] ?? null,
-            'connected_at' => now(),
-        ]);
-
-        return ['connected' => true, 'handle' => $handle];
+        // Account creation takes credentials the model must never be trusted to supply.
+        return [
+            'needs_confirmation' => true,
+            'action' => 'hub_register',
+            'endpoint' => 'POST /api/hub/register',
+            'message' => 'Not registered. Ask the user to create their hub account themselves in the Hub connect panel.',
+        ];
     }
 }

@@ -51,13 +51,15 @@ class DeskController extends Controller
             'strategies' => collect($registry->all())->map(fn ($cls, $key) => ['key' => $key, 'name' => app($cls)->name()])->values(),
             'live_confirm' => config('desk.live_confirm') === 'yes',
             'params' => $settings->flattened($strategy),
-            'overrides' => Setting::all()->pluck('value', 'key'),
+            'overrides' => Setting::all()->pluck('value', 'key')->reject(fn ($value, string $key) => Settings::isSecret($key)),
         ]);
     }
 
     public function updateSetting(Request $request, Settings $settings): JsonResponse
     {
         $data = $request->validate(['key' => 'required|string|max:120', 'value' => 'present']);
+        abort_unless(Settings::isCanonicalKey($data['key']), 422, 'invalid setting key');
+        abort_if(Settings::isSecret($data['key']), 422, 'change the master password from onboarding');
         $v = ParamNormalizer::normalize($data['key'], $data['value']);
         $this->assertSaneRiskValue($data['key'], $v);
         if ($data['key'] === 'mode' && ! in_array($v, ['paper', 'live'], true)) {
@@ -102,6 +104,8 @@ class DeskController extends Controller
 
     public function deleteSetting(string $key, Settings $settings): JsonResponse
     {
+        abort_unless(Settings::isCanonicalKey($key), 422, 'invalid setting key');
+        abort_if(Settings::isSecret($key), 422, 'change the master password from onboarding');
         $settings->forget($key);
 
         return response()->json(['ok' => true]);

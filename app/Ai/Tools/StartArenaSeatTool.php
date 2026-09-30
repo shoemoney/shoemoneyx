@@ -8,6 +8,8 @@ use App\Ai\AgentContext;
 use App\Models\ArenaSeat;
 use App\Models\StrategyPlugin;
 use App\Models\StrategyPluginVersion;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 
 /** Starts a live arena seat: a saved strategy plugin version running in paper, on its own account, against the current champion. */
 final class StartArenaSeatTool implements Tool
@@ -37,6 +39,16 @@ final class StartArenaSeatTool implements Tool
 
     public function run(array $args, AgentContext $context): array
     {
+        // Same rules as ArenaSeatController::store.
+        $validator = Validator::make($args, [
+            'label' => 'nullable|string|max:64',
+            'cash' => 'nullable|numeric|min:1',
+            'version_id' => 'nullable|integer',
+        ]);
+        if ($validator->fails()) {
+            return ['error' => $validator->errors()->first()];
+        }
+
         $versionId = $args['version_id'] ?? null;
 
         if ($versionId === null) {
@@ -62,7 +74,7 @@ final class StartArenaSeatTool implements Tool
         }
 
         $seat = ArenaSeat::create([
-            'label' => $args['label'] ?? sprintf('%s v%s', $version->plugin?->key ?? 'json', $version->version),
+            'label' => ($args['label'] ?? '') !== '' ? $args['label'] : Str::limit(sprintf('%s v%s', $version->plugin?->key ?? 'json', $version->version), 64, ''),
             'strategy_plugin_version_id' => $version->id,
             'starting_cash' => $args['cash'] ?? 1000,
             'status' => 'active',

@@ -53,11 +53,10 @@ ENV ROLE=worker WORKERS=0 REDIS_CLIENT=phpredis
 ENTRYPOINT ["/entrypoint.sh"]
 
 FROM nginx:1.27-alpine AS nginx
-RUN apk add --no-cache openssl \
-    && mkdir -p /etc/ssl/shoemoneyx \
-    && openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-       -keyout /etc/ssl/shoemoneyx/selfsigned.key -out /etc/ssl/shoemoneyx/selfsigned.crt \
-       -subj "/CN=shoemoneyx-desk"
+# No TLS key at build time: a key baked into this public image would be shared by every install.
+# docker/nginx-tls-init.sh mints a per-install pair on first start into the tls-data volume.
+RUN apk add --no-cache openssl
+COPY docker/nginx-tls-init.sh /docker-entrypoint.d/40-shoemoneyx-tls.sh
 COPY --from=app /app/public /app/public
 COPY docker/nginx-shoemoneyx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 443
