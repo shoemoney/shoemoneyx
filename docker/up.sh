@@ -3,6 +3,7 @@
 # Idempotent — safe to run every time you want the desk (re)started.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+umask 077
 
 ENV_FILE=.env
 
@@ -30,6 +31,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
     [APP_KEY]="base64:$(openssl rand -base64 32)"
     [APP_ENV]="production"
     [APP_DEBUG]="false"
+    [SESSION_SECURE_COOKIE]="true"
     [APP_URL]="https://localhost"
     [DB_CONNECTION]="mysql"
     [DB_HOST]="mariadb"

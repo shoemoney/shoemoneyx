@@ -83,7 +83,7 @@ YAML
   fi
   ufw delete allow in 80/tcp
 else
-  log "no DOMAIN tag, staying on the image's build-time self-signed cert"
+  log "no DOMAIN tag, staying on the per-install self-signed cert nginx generates on first start"
 fi
 
 log "writing credentials to $CREDS_FILE"
