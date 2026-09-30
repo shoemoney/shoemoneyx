@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Exchange\Coinbase\Api;
 
+use App\Desk\Execution\OrderBudget;
 use App\Models\CoinbaseAccount;
 use App\Models\CoinbaseApiLog;
 use Illuminate\Http\Client\ConnectionException;
@@ -43,12 +44,17 @@ class CoinbaseHttpClient
         // JWT uri claim is the path WITHOUT the query string.
         $token = $this->jwt->generateToken($account, $method, '/api/v3/brokerage'.$endpoint);
 
+        if (OrderBudget::exhausted()) {
+            throw new ConnectionException('live order time budget exhausted before the request was sent');
+        }
+        $attempts = (int) config('coinbase.retry_attempts', 3);
+
         $request = Http::withToken($token)
             ->acceptJson()
-            ->timeout((int) config('coinbase.timeout', 30))
-            ->connectTimeout((int) config('coinbase.connect_timeout', 10))
+            ->timeout(OrderBudget::clamp((int) config('coinbase.timeout', 30), $attempts))
+            ->connectTimeout(OrderBudget::clamp((int) config('coinbase.connect_timeout', 10), $attempts))
             ->retry(
-                (int) config('coinbase.retry_attempts', 3),
+                $attempts,
                 (int) config('coinbase.retry_delay', 200),
                 fn ($e) => $e instanceof ConnectionException,
                 throw: false,

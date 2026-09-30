@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 final class OrderResult
 {
     public function __construct(
-        public readonly string $status,          // filled|rejected|fee_floor|error
+        public readonly string $status,          // filled|rejected|fee_floor|error|unknown
         public readonly float $requestedUsd,
         public readonly float $filledUsd,
         public readonly float $filledQty,
@@ -113,6 +113,16 @@ final class OrderResult
     public function feePct(): float
     {
         return $this->filledUsd > 0 ? round($this->feeUsd / $this->filledUsd, 5) : 0.0;
+    }
+
+    /**
+     * The venue may or may not have this order: a timed-out create, a readback that never came back, an
+     * order still working after polling. Not a rejection — the order may be live, so nothing may be
+     * re-sent until the intent behind it (raw['client_order_id']) is reconciled.
+     */
+    public static function unknown(float $requestedUsd, float $decisionPrice, string $note, ?string $venueOrderId = null, array $raw = []): self
+    {
+        return new self('unknown', $requestedUsd, 0, 0, $decisionPrice, null, 0, false, $venueOrderId, $raw, $note);
     }
 
     public static function rejected(string $status, float $requestedUsd, float $decisionPrice, string $note): self

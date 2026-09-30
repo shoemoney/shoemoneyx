@@ -17,6 +17,9 @@ abstract class TestCase extends BaseTestCase
         // and no test asserts on the built asset tags, so render every view without the manifest.
         $this->withoutVite();
 
+        // Live executors pause between order-status polls; no test wants to actually wait.
+        config(['desk.live_orders.poll_sleep_ms' => 0]);
+
         // CandleStore's in-process candle memo lives outside the container, so it survives the app
         // rebuild between test methods; without this, two tests proposing the same (product, timeframe,
         // window) -- easy to do with a shared fixture date -- can see each other's candles.

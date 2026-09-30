@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use Carbon\Carbon;
 use App\Desk\Data\ProductStats;
 use App\Desk\Desk;
 use App\Desk\Execution\ExecutionModeMismatchException;
@@ -21,6 +20,7 @@ use App\Models\Position;
 use App\Models\Product;
 use App\Services\Market\CandleStore;
 use App\Services\Market\ProductStatsBuilder;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;

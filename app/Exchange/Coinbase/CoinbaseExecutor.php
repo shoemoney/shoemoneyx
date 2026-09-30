@@ -6,9 +6,11 @@ namespace App\Exchange\Coinbase;
 
 use App\Desk\Execution\Executor;
 use App\Desk\Execution\OrderResult;
-use App\Exchange\Coinbase\Api\CoinbaseApiException;
+use App\Desk\Execution\ReconcilesOrders;
 use App\Exchange\Coinbase\Api\CoinbaseService;
+use App\Exchange\Coinbase\Concerns\SubmitsCoinbaseOrders;
 use App\Models\CoinbaseAccount;
+use App\Models\OrderIntent;
 use App\Models\Product;
 
 /**
@@ -16,9 +18,21 @@ use App\Models\Product;
  * Every order is an immediate-or-cancel market order; the fill is read back
  * from the order record so what we store is what actually happened.
  */
-class CoinbaseExecutor implements Executor
+class CoinbaseExecutor implements Executor, ReconcilesOrders
 {
+    use SubmitsCoinbaseOrders;
+
     public function __construct(private CoinbaseService $coinbase) {}
+
+    protected function exitsBypassPendingEntries(): bool
+    {
+        return true;
+    }
+
+    public function orderVenue(): string
+    {
+        return 'coinbase_spot';
+    }
 
     public function mode(): string
     {
@@ -43,26 +57,20 @@ class CoinbaseExecutor implements Executor
 
     public function buy(string $productId, float $usd, float $decisionPrice): OrderResult
     {
-        try {
-            $resp = $this->coinbase->marketBuy($this->account(), $productId, $usd);
-        } catch (CoinbaseApiException $e) {
-            return OrderResult::rejected('error', $usd, $decisionPrice, $e->getMessage());
-        }
+        $account = $this->account();
 
-        return $this->settle($resp, 'BUY', $usd, $decisionPrice);
+        return $this->submitOrder('buy', $productId, $productId, 'BUY', $usd, $decisionPrice, ['size' => $usd],
+            fn (string $clientOrderId) => $this->coinbase->marketBuy($account, $productId, $usd, $clientOrderId));
     }
 
     public function sell(string $productId, float $qty, float $decisionPrice, float $entryUsdShare = 0.0, bool $maker = false): OrderResult
     {
         $precision = $this->basePrecision($productId);
         $qty = floor($qty * 10 ** $precision) / 10 ** $precision;
-        try {
-            $resp = $this->coinbase->marketSell($this->account(), $productId, $qty, $precision);
-        } catch (CoinbaseApiException $e) {
-            return OrderResult::rejected('error', $qty * $decisionPrice, $decisionPrice, $e->getMessage());
-        }
+        $account = $this->account();
 
-        return $this->settle($resp, 'SELL', $qty * $decisionPrice, $decisionPrice);
+        return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['size' => $qty],
+            fn (string $clientOrderId) => $this->coinbase->marketSell($account, $productId, $qty, $precision, $clientOrderId));
     }
 
     public function openShort(string $productId, float $usd, float $decisionPrice): OrderResult
@@ -75,27 +83,13 @@ class CoinbaseExecutor implements Executor
         return OrderResult::rejected('rejected', $qty * $decisionPrice, $decisionPrice, 'spot has no short to cover');
     }
 
-    private function settle(array $resp, string $side, float $requestedUsd, float $decisionPrice): OrderResult
+    /** The venue's own order record, turned into what the desk books. Called only for a terminal order. */
+    protected function resultFromOrder(OrderIntent $intent, array $create, array $order): OrderResult
     {
-        if (! ($resp['success'] ?? false)) {
-            $err = $resp['error_response'] ?? [];
-
-            return OrderResult::rejected('rejected', $requestedUsd, $decisionPrice, ($err['error'] ?? 'REJECTED').': '.($err['message'] ?? $err['preview_failure_reason'] ?? ''));
-        }
-        $orderId = $resp['success_response']['order_id'] ?? null;
-        $order = [];
-        // IOC market orders settle immediately; poll a few times for the fill record.
-        for ($i = 0; $i < 6 && $orderId; $i++) {
-            usleep(400_000);
-            try {
-                $order = $this->coinbase->getOrder($this->account(), $orderId)['order'] ?? [];
-            } catch (CoinbaseApiException) {
-                $order = [];
-            }
-            if (in_array($order['status'] ?? '', ['FILLED', 'CANCELLED', 'EXPIRED', 'FAILED'], true)) {
-                break;
-            }
-        }
+        $side = $intent->side;
+        $requestedUsd = (float) $intent->requested_usd;
+        $decisionPrice = (float) $intent->decision_price;
+        $orderId = $intent->venue_order_id ?? ($order['order_id'] ?? null);
 
         $filledQty = (float) ($order['filled_size'] ?? 0);
         $filledValue = (float) ($order['filled_value'] ?? 0);
@@ -120,7 +114,7 @@ class CoinbaseExecutor implements Executor
             feeUsd: $fee,
             partial: $partial,
             venueOrderId: $orderId,
-            raw: ['create' => $resp, 'order' => $order],
+            raw: ['create' => $create, 'order' => $order, 'client_order_id' => $intent->client_order_id],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
             basisRecovered: $basisRecovered,
         );
