@@ -126,6 +126,8 @@ class PluginSizingCapsTest extends TestCase
         $this->assertRejected('size.max_open_positions', 0);
         $this->assertRejected('size.max_open_positions', 2.5);
         $this->assertRejected('size.max_leverage', 500);
+        $this->assertRejected('size.min_ticket_usd', 1000001);
+        $this->assertRejected('per_product.BTC-USD.size.min_ticket_usd', 1000001);
         $this->assertRejected('per_product.BTC-USD.size.kelly_cap_pct', 2);
         $this->assertRejected('size', ['kelly_cap_pct' => 5], 'size.kelly_cap_pct');
         $this->assertRejected('size', ['max_leverage' => 0], 'size.max_leverage');
