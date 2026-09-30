@@ -20,6 +20,17 @@ class Settings
     /** Keys the generic settings API never returns or edits. */
     public const SECRET_KEYS = ['master_password'];
 
+    /**
+     * Keys the settings API accepts. MariaDB compares settings.key under utf8mb4_unicode_ci, which
+     * ignores case, accents and trailing spaces, so MASTER_PASSWORD or "mäster_password " would
+     * land on the master_password row. A lowercase ASCII first segment closes that; later
+     * segments may carry product ids such as perps.map.BTC-USD.
+     */
+    public static function isCanonicalKey(string $key): bool
+    {
+        return preg_match('/\A[a-z0-9][a-z0-9_-]*(\.[A-Za-z0-9_-]+)*\z/', $key) === 1;
+    }
+
     /** True for a secret key or any dotted key beneath one (master_password.x would shadow it). */
     public static function isSecret(string $key): bool
     {

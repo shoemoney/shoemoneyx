@@ -119,6 +119,12 @@ class MasterPasswordTest extends TestCase
         $this->putJson('/api/settings', ['key' => 'master_password.shadow', 'value' => 'x'], $headers)->assertStatus(422);
         $this->deleteJson('/api/settings/master_password.shadow', [], $headers)->assertStatus(422);
 
+        // MariaDB's utf8mb4_unicode_ci would match every one of these to the master_password row.
+        foreach (['MASTER_PASSWORD', 'Master_Password.x', 'master_password ', ' master_password', 'mäster_password'] as $alias) {
+            $this->putJson('/api/settings', ['key' => $alias, 'value' => ''], $headers)->assertStatus(422);
+            $this->deleteJson('/api/settings/'.rawurlencode($alias), [], $headers)->assertStatus(422);
+        }
+
         $this->assertSame('secret', app(Settings::class)->masterPassword());
         $this->getJson('/api/status')->assertUnauthorized();
     }
