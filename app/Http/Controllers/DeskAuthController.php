@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Desk\DeskAuthThrottle;
 use App\Desk\DeskLogin;
 use App\Desk\Settings;
 use Illuminate\Http\RedirectResponse;
@@ -25,12 +26,18 @@ class DeskAuthController extends Controller
     {
         $request->validate(['password' => 'required|string|max:200']);
 
+        if (DeskAuthThrottle::tooManyFailures($request)) {
+            DeskAuthThrottle::lockout($request);
+        }
+
         $master = app(Settings::class)->masterPassword();
         if ($master !== '' && hash_equals($master, (string) $request->input('password'))) {
             DeskLogin::grant($request->session());
 
             return redirect('/');
         }
+
+        DeskAuthThrottle::recordFailure($request);
 
         return back()->withErrors(['password' => 'Wrong password.']);
     }

@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Desk\Chief;
 use App\Desk\Desk;
 use App\Desk\EndOfDayReport;
+use App\Desk\Exceptions\CycleInProgressException;
 use App\Desk\Settings;
 use App\Desk\StrategyRegistry;
 use App\Exchange\Contracts\MarketData;
@@ -26,7 +27,7 @@ class DeskController extends Controller
     public function action(string $action, Desk $desk, Chief $chief, Request $request): JsonResponse
     {
         return match ($action) {
-            'cycle' => response()->json(['run' => $desk->cycle()->load('candidates')]),
+            'cycle' => $this->cycle($desk),
             'risk' => response()->json(['results' => $desk->riskSweep()]),
             'halt' => tap(response()->json(['ok' => true]), fn () => $chief->halt((string) $request->input('reason', 'dashboard'))),
             'resume' => tap(response()->json(['ok' => true]), fn () => $chief->resume()),
@@ -38,6 +39,15 @@ class DeskController extends Controller
             }),
             default => abort(404, 'unknown action'),
         };
+    }
+
+    private function cycle(Desk $desk): JsonResponse
+    {
+        try {
+            return response()->json(['run' => $desk->cycle()->load('candidates')]);
+        } catch (CycleInProgressException) {
+            return response()->json(['ok' => false, 'error' => 'a cycle is already running'], 409);
+        }
     }
 
     public function settings(Settings $settings, StrategyRegistry $registry): JsonResponse

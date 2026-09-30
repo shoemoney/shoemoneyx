@@ -224,6 +224,11 @@ return [
     // True on internet-exposed images: onboarding refuses to leave the desk password-less.
     'require_master_password' => (bool) env('DESK_REQUIRE_MASTER_PASSWORD', false),
 
+    // Wall-clock budget for one cycle's candidate loop. Once spent, no new candidate is vetted or entered
+    // (logged). Must stay far below the cycle lock lease (Desk::cycleLockSeconds) so the lease cannot lapse
+    // while orders are still being submitted. Raw value: Desk validates it (non-negative integer, else 1200 + a warning).
+    'cycle_budget_seconds' => env('DESK_CYCLE_BUDGET_SECONDS', 1200),
+
     // Must be the literal string "yes" before the desk will send a real order.
     'live_confirm' => env('DESK_LIVE_CONFIRM', 'no'),
 
