@@ -73,7 +73,9 @@ class Reporter
                 'disable_web_page_preview' => true,
             ])->ok();
         } catch (\Throwable $e) {
-            Log::warning('telegram failed: '.$e->getMessage());
+            // Guzzle puts the request URI (with the bot token) in the message
+            $safe = preg_replace('/bot[0-9]+:[A-Za-z0-9_-]+/', 'bot<redacted>', $e->getMessage());
+            Log::warning('telegram failed: '.$e::class.': '.$safe);
 
             return false;
         }

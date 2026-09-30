@@ -113,7 +113,7 @@ class Chief
 
         $wm = (string) $this->settings->get('worldmonitor.base_url', '');
         if ($wm !== '') {
-            $checks['worldmonitor'] = $this->try(fn () => Http::timeout(5)->get(rtrim($wm, '/').'/api/market/v1/get-fear-greed-index')->ok());
+            $checks['worldmonitor'] = $this->try(fn () => self::safeWorldMonitorUrl($wm) && Http::timeout(5)->withoutRedirecting()->get(rtrim($wm, '/').'/api/market/v1/get-fear-greed-index')->ok());
         }
 
         $green = count(array_filter($checks));
@@ -133,6 +133,72 @@ class Chief
             'mode' => $this->settings->mode(),
             'strategy' => $this->settings->strategyKey(),
         ];
+    }
+
+    /**
+     * WorldMonitor is a local instance, so loopback/LAN stay allowed; only non-http schemes and
+     * link-local/cloud-metadata addresses (169.254.0.0/16, fd00:ec2::/32) are refused.
+     */
+    public static function safeWorldMonitorUrl(string $url): bool
+    {
+        $parts = parse_url($url);
+        if (! in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) || empty($parts['host'])) {
+            return false;
+        }
+        $host = trim($parts['host'], '[]');
+        $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : self::resolve($host);
+        if ($ips === []) {
+            return false;
+        }
+        foreach ($ips as $ip) {
+            if (self::isMetadataAddress($ip)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** @return string[] every A and AAAA address (plus the system resolver's view, for hosts-file names) */
+    private static function resolve(string $host): array
+    {
+        $ips = gethostbynamel($host) ?: [];
+        foreach (@dns_get_record($host, DNS_A | DNS_AAAA) ?: [] as $rec) {
+            $ips[] = $rec['ip'] ?? $rec['ipv6'] ?? null;
+        }
+
+        return array_values(array_unique(array_filter($ips)));
+    }
+
+    private static function isMetadataAddress(string $ip): bool
+    {
+        $bin = inet_pton($ip);
+        if ($bin === false) {
+            return true;
+        }
+        if (strlen($bin) === 16 && str_starts_with($bin, str_repeat("\0", 10)."\xff\xff")) {
+            $bin = substr($bin, 12);   // IPv4-mapped ::ffff:a.b.c.d
+        }
+        $inCidr = fn (string $net, int $bits) => self::cidrMatch($bin, (string) inet_pton($net), $bits);
+
+        return strlen($bin) === 4
+            ? $inCidr('169.254.0.0', 16)
+            : $inCidr('fe80::', 10) || $inCidr('fd00:ec2::', 32);
+    }
+
+    private static function cidrMatch(string $bin, string $net, int $bits): bool
+    {
+        $bytes = intdiv($bits, 8);
+        if (substr($bin, 0, $bytes) !== substr($net, 0, $bytes)) {
+            return false;
+        }
+        $rem = $bits % 8;
+        if ($rem === 0) {
+            return true;
+        }
+        $mask = (0xFF << (8 - $rem)) & 0xFF;
+
+        return (ord($bin[$bytes]) & $mask) === (ord($net[$bytes]) & $mask);
     }
 
     private function try(callable $fn): bool
