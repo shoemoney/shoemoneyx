@@ -494,10 +494,113 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertTrue($halted->invoke($desk, $executor, 'BTC-USD'));
 
         $cid = OrderIntent::sole()->client_order_id;
-        $this->artisan('desk:intents:resolve', ['client_order_id' => $cid, 'outcome' => 'abandoned'])->assertExitCode(0);
+        config(['desk.live_confirm' => 'yes']);
+        $this->app->instance(CoinbaseExecutor::class, $executor);
+
+        // The order really landed at the venue, so the command refuses to call it abandoned...
+        $this->artisan('desk:intents:resolve', ['client_order_id' => $cid, 'outcome' => 'abandoned'])->assertExitCode(1);
+        $this->assertSame('pending', OrderIntent::sole()->status);
+
+        // ...unless the operator forces it, knowing nothing will book the fill.
+        $this->artisan('desk:intents:resolve', ['client_order_id' => $cid, 'outcome' => 'abandoned', '--force' => true])->assertExitCode(0);
 
         $this->assertSame('abandoned', OrderIntent::sole()->outcome);
         $this->assertFalse($halted->invoke($desk, $executor, 'BTC-USD'));
+    }
+
+    public function test_the_stuck_clock_runs_from_the_last_send_not_from_creation(): void
+    {
+        $executor = $this->spot();
+        $this->venue->timeoutBeforePlacing = true;
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->travel(31)->minutes();
+        $executor->buy('BTC-USD', 100.0, 100.0);   // grace long gone: same-id resend, times out again
+
+        $halted = new \ReflectionMethod(Desk::class, 'entriesHaltedByStuckOrder');
+
+        $this->assertFalse($halted->invoke(app(Desk::class), $executor, 'BTC-USD'));
+    }
+
+    public function test_a_send_that_burns_the_grace_window_inside_the_call_is_not_abandoned_on_failure(): void
+    {
+        $this->venue->timeoutBeforePlacing = true;
+        $this->venue->createTakesSeconds = 130;   // the HTTP timeout ate longer than the 120s grace
+        $executor = $this->spot();
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 100.0, 100.0)->status);
+
+        $this->venue->timeoutBeforePlacing = false;
+        app(Desk::class)->reconcileLiveOrders(new FixedTicketStrategy(100.0), $executor);
+
+        $this->assertSame('pending', OrderIntent::sole()->status, 'the window restarts when the failed send returns');
+    }
+
+    public function test_resolving_as_filled_books_from_the_venue_record(): void
+    {
+        $this->venue->timeoutAfterPlacing = true;
+        $executor = $this->spot();
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->timeoutAfterPlacing = false;
+
+        [$done] = app(Desk::class)->resolveIntent($executor, OrderIntent::sole(), 'filled');
+
+        $this->assertTrue($done);
+        $this->assertSame(1, Position::count());
+        $this->assertSame('filled', OrderIntent::sole()->outcome);
+    }
+
+    public function test_resolving_as_filled_is_refused_when_the_venue_cannot_confirm_a_fill(): void
+    {
+        $this->venue->timeoutBeforePlacing = true;
+        $executor = $this->spot();
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->timeoutBeforePlacing = false;
+
+        [$done] = app(Desk::class)->resolveIntent($executor, OrderIntent::sole(), 'filled');
+
+        $this->assertFalse($done);
+        $this->assertSame('pending', OrderIntent::sole()->status);
+        $this->assertSame(0, Position::count());
+    }
+
+    public function test_abandoning_needs_the_venue_to_confirm_absence_after_the_grace_window(): void
+    {
+        $this->venue->timeoutBeforePlacing = true;
+        $executor = $this->spot();
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->timeoutBeforePlacing = false;
+        $desk = app(Desk::class);
+
+        [$done] = $desk->resolveIntent($executor, OrderIntent::sole(), 'abandoned');
+        $this->assertFalse($done, 'inside the grace window an absent order may just be slow to appear');
+
+        $this->travel(3)->minutes();
+        [$done] = $desk->resolveIntent($executor, OrderIntent::sole(), 'abandoned');
+        $this->assertTrue($done);
+        $this->assertSame('abandoned', OrderIntent::sole()->outcome);
+    }
+
+    public function test_abandoning_is_refused_when_the_lookup_itself_fails_and_force_overrides(): void
+    {
+        $this->venue->timeoutAfterPlacing = true;
+        $executor = $this->spot();
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->listFails = true;
+        $desk = app(Desk::class);
+
+        [$done] = $desk->resolveIntent($executor, OrderIntent::sole(), 'rejected');
+        $this->assertFalse($done);
+
+        [$done, $message] = $desk->resolveIntent($executor, OrderIntent::sole(), 'rejected', force: true);
+        $this->assertTrue($done);
+        $this->assertStringContainsString('FORCED', $message);
+    }
+
+    public function test_the_mutate_lock_outlives_a_worst_case_polling_order(): void
+    {
+        $ttl = (new \ReflectionMethod(Desk::class, 'mutateLockSeconds'))->invoke(app(Desk::class));
+
+        // 1 create + 8 polls, each up to timeout x retries.
+        $this->assertGreaterThanOrEqual(9 * 30 * 3, $ttl);
     }
 
     public function test_the_real_order_history_search_pages_until_it_finds_the_client_id(): void

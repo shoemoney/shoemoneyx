@@ -8,6 +8,7 @@ use App\Exchange\Coinbase\Api\CoinbaseApiException;
 use App\Exchange\Coinbase\Api\CoinbaseService;
 use App\Models\CoinbaseAccount;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Carbon;
 
 /**
  * A fake Coinbase venue behind the real CoinbaseService surface. Like the real venue it dedups on
@@ -33,6 +34,9 @@ class FakeCoinbaseVenue extends CoinbaseService
     public bool $listFails = false;
 
     public bool $respondDuplicate = false;
+
+    /** Simulated wall-clock spent inside the create call (the HTTP timeout burning) before it returns or throws. */
+    public int $createTakesSeconds = 0;
 
     /** Runs once, the next time the venue is asked about an order: lets a test interleave a second process. */
     public ?\Closure $onLookup = null;
@@ -101,6 +105,9 @@ class FakeCoinbaseVenue extends CoinbaseService
     {
         $this->attempts[] = ['client_order_id' => (string) $clientOrderId, 'side' => $side, 'product' => $productId];
 
+        if ($this->createTakesSeconds > 0) {
+            Carbon::setTestNow(now()->addSeconds($this->createTakesSeconds));
+        }
         if ($this->timeoutBeforePlacing) {
             throw new ConnectionException('connect timed out');
         }

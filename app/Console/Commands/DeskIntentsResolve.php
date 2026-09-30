@@ -4,19 +4,21 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Desk\Desk;
 use App\Models\OrderIntent;
 use Illuminate\Console\Command;
 
 /**
- * Operator escape hatch for a live order the desk cannot verify on its own (a venue with no order
- * listing, a lookup that never succeeds). Only closes the intent so the product stops being held; the
- * operator is asserting what happened at the venue and reconciling any position by hand.
+ * Operator escape hatch for a live order the desk cannot settle on its own. Goes through
+ * Desk::resolveIntent: a fill is booked from the venue's record, and an order is only released as
+ * abandoned/rejected once the venue confirms it is absent (or --force says the operator checked).
  */
 class DeskIntentsResolve extends Command
 {
     protected $signature = 'desk:intents:resolve
         {client_order_id? : the pending intent to resolve (omit to list pending intents)}
-        {outcome? : filled | rejected | abandoned}';
+        {outcome? : filled | rejected | abandoned}
+        {--force : resolve rejected/abandoned without the venue confirming the order is absent}';
 
     protected $description = 'List pending live order intents, or manually resolve one';
 
@@ -47,12 +49,22 @@ class DeskIntentsResolve extends Command
             return self::FAILURE;
         }
 
-        $intent->resolve($outcome, 'resolved manually by an operator');
-        $this->info("resolved {$id} ({$intent->method} {$intent->desk_product_id}) as {$outcome}");
-        if ($outcome === 'filled') {
-            $this->warn('nothing was booked: record the position/fill yourself.');
+        $force = (bool) $this->option('force');
+        if ($force) {
+            $this->warn('--force: the venue check is skipped. If the order actually filled, nothing books it and the next cycle can buy again.');
         }
 
-        return self::SUCCESS;
+        try {
+            $desk = app(Desk::class);
+            [$done, $message] = $desk->resolveIntent($desk->executorForMode('live'), $intent, $outcome, $force);
+        } catch (\Throwable $e) {
+            $this->error('could not resolve: '.$e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        $done ? $this->info("{$id}: {$message}") : $this->error("{$id}: {$message}");
+
+        return $done ? self::SUCCESS : self::FAILURE;
     }
 }
