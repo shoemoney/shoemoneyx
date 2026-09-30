@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Exchange;
 
+use ccxt\Exchange;
+
 /**
  * A real \ccxt\Exchange subclass whose fetch methods return canned rows, so the adapter's
  * mapping can be asserted without a network call or an API key. Rate limiting stays off,
  * so nothing here sleeps.
  */
-class StubCcxtClient extends \ccxt\Exchange
+class StubCcxtClient extends Exchange
 {
     /** @var array<string, array<string, mixed>> */
     public array $stubMarkets = [];
@@ -34,6 +36,12 @@ class StubCcxtClient extends \ccxt\Exchange
 
     /** @var array<string, mixed> */
     public array $stubBalance = [];
+
+    /** @var array<int, array<string, mixed>> what fetch_orders returns (venue order list, searched by clientOrderId) */
+    public array $stubOrderList = [];
+
+    /** @var array<int, ?string> the clientOrderId each create call carried */
+    public array $clientOrderIds = [];
 
     /** Thrown by the next create call, so rejection paths can be exercised. */
     public ?\Throwable $createThrows = null;
@@ -104,6 +112,7 @@ class StubCcxtClient extends \ccxt\Exchange
     public function create_order(string $symbol, string $type, string $side, float $amount, ?float $price = null, $params = [])
     {
         $this->calls[] = ['create_order', $symbol, $type, $side, $amount];
+        $this->clientOrderIds[] = $params['clientOrderId'] ?? null;
 
         return $this->created();
     }
@@ -111,6 +120,7 @@ class StubCcxtClient extends \ccxt\Exchange
     public function create_market_buy_order_with_cost(string $symbol, float $cost, $params = [])
     {
         $this->calls[] = ['create_market_buy_order_with_cost', $symbol, $cost];
+        $this->clientOrderIds[] = $params['clientOrderId'] ?? null;
 
         return $this->created();
     }
@@ -121,6 +131,23 @@ class StubCcxtClient extends \ccxt\Exchange
         $nth = count(array_filter($this->calls, fn ($c) => $c[0] === 'fetch_order'));
 
         return $this->stubOrders[$nth - 1] ?? end($this->stubOrders) ?: [];
+    }
+
+    /** @var array<int, array<string, mixed>> */
+    public array $stubOpenOrders = [];
+
+    public function fetch_open_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = [])
+    {
+        $this->calls[] = ['fetch_open_orders', $symbol];
+
+        return $this->stubOpenOrders;
+    }
+
+    public function fetch_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = [])
+    {
+        $this->calls[] = ['fetch_orders', $symbol];
+
+        return $this->stubOrderList;
     }
 
     private function created(): array

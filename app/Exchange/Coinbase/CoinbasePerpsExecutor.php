@@ -10,9 +10,12 @@ use App\Desk\Execution\OrderResult;
 use App\Desk\Execution\Perps;
 use App\Desk\Execution\PerpsGate;
 use App\Desk\Execution\PerpsSession;
+use App\Desk\Execution\ReconcilesOrders;
 use App\Exchange\Coinbase\Api\CoinbaseApiException;
 use App\Exchange\Coinbase\Api\CoinbaseService;
+use App\Exchange\Coinbase\Concerns\SubmitsCoinbaseOrders;
 use App\Models\CoinbaseAccount;
+use App\Models\OrderIntent;
 
 /**
  * LIVE execution on Coinbase US perpetual futures (Coinbase Financial Markets, venue "cde").
@@ -26,13 +29,20 @@ use App\Models\CoinbaseAccount;
  * docs/COINBASE_DOCS.md → orders/create-order (market_market_ioc.base_size = contracts),
  * futures/get-futures-balance-summary, futures/list-futures-positions.
  */
-class CoinbasePerpsExecutor implements Executor
+class CoinbasePerpsExecutor implements Executor, ReconcilesOrders
 {
+    use SubmitsCoinbaseOrders;
+
     private ?PerpsSession $cachedSession = null;
 
     private float $cachedSessionAt = 0.0;
 
     public function __construct(private CoinbaseService $coinbase) {}
+
+    public function orderVenue(): string
+    {
+        return 'coinbase_perps';
+    }
 
     public function mode(): string
     {
@@ -140,35 +150,34 @@ class CoinbasePerpsExecutor implements Executor
 
         $productId = $plan->perpProductId ?? throw new \LogicException('OrderPlan without a rejection must have a perp product id');
 
-        try {
-            $resp = $this->coinbase->marketContracts($this->account(), $productId, $side, $plan->contracts);
-        } catch (CoinbaseApiException $e) {
-            return OrderResult::rejected('error', $requested, $decisionPrice, $e->getMessage());
-        }
+        $account = $this->account();
+        $method = match (true) {
+            $short && $side === 'SELL' => 'open_short',
+            $short => 'cover_short',
+            $side === 'BUY' => 'buy',
+            default => 'sell',
+        };
 
-        return $this->settle($resp, $spotPid, $side, $short, $plan->contracts, $requested, $decisionPrice);
+        return $this->submitOrder($method, $spotPid, $productId, $side, $requested, $decisionPrice,
+            ['spot_pid' => $spotPid, 'short' => $short, 'contracts' => $plan->contracts, 'size' => $plan->contracts],
+            fn (string $clientOrderId) => $this->coinbase->marketContracts($account, $productId, $side, $plan->contracts, $clientOrderId));
     }
 
-    private function settle(array $resp, string $spotPid, string $side, bool $short, int $contracts, float $requestedUsd, float $decisionPrice): OrderResult
+    protected function pollAttempts(): int
     {
-        if (! ($resp['success'] ?? false)) {
-            $err = $resp['error_response'] ?? [];
+        return 8;
+    }
 
-            return OrderResult::rejected('rejected', $requestedUsd, $decisionPrice, ($err['error'] ?? 'REJECTED').': '.($err['message'] ?? $err['preview_failure_reason'] ?? ''));
-        }
-        $orderId = $resp['success_response']['order_id'] ?? null;
-        $order = [];
-        for ($i = 0; $i < 8 && $orderId; $i++) {
-            usleep(400_000);
-            try {
-                $order = $this->coinbase->getOrder($this->account(), $orderId)['order'] ?? [];
-            } catch (CoinbaseApiException) {
-                $order = [];
-            }
-            if (in_array($order['status'] ?? '', ['FILLED', 'CANCELLED', 'EXPIRED', 'FAILED'], true)) {
-                break;
-            }
-        }
+    /** The venue's own order record, turned into what the desk books. Called only for a terminal order. */
+    protected function resultFromOrder(OrderIntent $intent, array $create, array $order): OrderResult
+    {
+        $spotPid = $intent->desk_product_id;
+        $side = $intent->side;
+        $short = (bool) ($intent->context['short'] ?? false);
+        $contracts = (int) ($intent->context['contracts'] ?? 0);
+        $requestedUsd = (float) $intent->requested_usd;
+        $decisionPrice = (float) $intent->decision_price;
+        $orderId = $intent->venue_order_id ?? ($order['order_id'] ?? null);
 
         $filledContracts = (float) ($order['filled_size'] ?? 0);
         $filledQty = Perps::qtyFor($spotPid, (int) round($filledContracts));
@@ -204,7 +213,7 @@ class CoinbasePerpsExecutor implements Executor
             feeUsd: $fee,
             partial: $filledContracts > 0 && $filledContracts < $contracts,
             venueOrderId: $orderId,
-            raw: ['create' => $resp, 'order' => $order, 'contracts' => $contracts],
+            raw: ['create' => $create, 'order' => $order, 'contracts' => $contracts, 'client_order_id' => $intent->client_order_id],
             note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
             basisRecovered: $basisRecovered,
         );

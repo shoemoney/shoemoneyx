@@ -15,6 +15,7 @@ use App\Desk\Execution\ExecutionModeMismatchException;
 use App\Desk\Execution\Executor;
 use App\Desk\Execution\MarginBook;
 use App\Desk\Execution\MarginWindow;
+use App\Desk\Execution\OrderBudget;
 use App\Desk\Execution\OrderResult;
 use App\Desk\Execution\PaperExecutor;
 use App\Desk\Execution\Perps;
@@ -22,11 +23,13 @@ use App\Desk\Execution\PerpsCalendar;
 use App\Desk\Execution\PerpsGate;
 use App\Desk\Execution\PerpsSession;
 use App\Desk\Execution\PostOnlyShadows;
+use App\Desk\Execution\ReconcilesOrders;
 use App\Exchange\Coinbase\CoinbasePerpsExecutor;
 use App\Exchange\Contracts\Exchange;
 use App\Models\Candidate;
 use App\Models\DeskRun;
 use App\Models\Fill;
+use App\Models\OrderIntent;
 use App\Models\PaperLedger;
 use App\Models\Position;
 use App\Models\Product;
@@ -238,6 +241,8 @@ class Desk
                 return $run;
             }
 
+            $this->reconcileLiveOrders($strategy, $executor);
+
             $ctx = $this->context($strategy, $health['degraded'], $executor->mode());
             $bank = $this->bank($executor, true);
 
@@ -412,7 +417,7 @@ class Desk
      */
     private function mutateLockSeconds(): int
     {
-        return max(90, (int) config('coinbase.timeout', 30) * 3);
+        return OrderBudget::lockSeconds();
     }
 
     /**
@@ -442,6 +447,12 @@ class Desk
 
     private function doEnter(Executor $executor, SizeDecision $size, DeskContext $ctx, DeskRun $run, Candidate $row, CandidateRow $c, string $pid, string $mode, float $cycleDeadline): ?Fill
     {
+        if ($this->entriesHaltedByStuckOrder($executor, $pid)) {
+            $this->reporter->warn('FILLS', "{$pid}: entry skipped, a live order on it has been unresolved too long (desk:intents:resolve)");
+
+            return null;
+        }
+
         $existing = Position::open()->mode($mode)->seat($this->arenaSeatId)->where('product_id', $pid)->first();
         $kind = $existing ? 'add' : 'entry';
 
@@ -617,6 +628,9 @@ class Desk
         if (! $existing) {
             return null;   // closed since RISK read it — nothing left to add to
         }
+        if ($this->entriesHaltedByStuckOrder($executor, $pid)) {
+            return null;
+        }
         $short = $existing->isShort();
         $orderSide = $short ? 'SELL' : 'BUY';
         $dollars = (float) $decision->dollars;
@@ -710,6 +724,187 @@ class Desk
     }
 
     // ------------------------------------------------------------------
+    // Live order reconciliation
+    // ------------------------------------------------------------------
+
+    /**
+     * A live order whose outcome was ambiguous (timeout on create, readback that never answered) stays a
+     * pending OrderIntent and blocks new orders on its product. Here the desk asks the venue what became
+     * of each one and books the answer exactly once, so a live fill nobody saw is never left unrecorded
+     * and an order that never landed frees the product again. This pass NEVER sends an order: it only
+     * reads the venue, then books or resolves under the product's mutate lock after re-checking the
+     * intent is still pending, so concurrent cycle/risk processes cannot double-book or re-sell.
+     */
+    public function reconcileLiveOrders(Strategy $strategy, Executor $executor): void
+    {
+        if (! $executor instanceof ReconcilesOrders) {
+            return;
+        }
+
+        $stuckAfter = (int) config('desk.live_orders.stuck_minutes', 30) * 60;
+        foreach (OrderIntent::pending()->mode($executor->mode())->venue($executor->orderVenue())->orderBy('id')->get() as $intent) {
+            try {
+                $result = $executor->reconcile($intent);
+                if ($result !== null) {
+                    $this->bookReconciled($strategy, $executor, $intent, $result);
+
+                    continue;
+                }
+                $this->releaseIfAbsent($executor, $intent);
+                if ($intent->refresh()->status === 'pending') {
+                    $stuck = $intent->secondsSinceSent() >= $stuckAfter;
+                    // A stuck order holds exits until an operator acts, so it pages (Reporter::error goes to
+                    // Telegram) — but once per 15 minutes per intent, not every sweep.
+                    $report = ! $stuck || Cache::add("desk:stuck-report:{$intent->id}", 1, 900);
+                    if ($report) {
+                        $this->reporter->error('FILLS', ($stuck ? 'LIVE ORDER STUCK, new entries halted on this product until resolved (php artisan desk:intents:resolve) — ' : 'LIVE ORDER UNRESOLVED — ')
+                            ."{$intent->method} {$intent->desk_product_id} ({$intent->client_order_id}): the venue has not confirmed it; new orders on this product are held");
+                    }
+                }
+            } catch (LockTimeoutException) {
+                $this->reporter->warn('FILLS', "{$intent->desk_product_id}: mutate lock timed out reconciling {$intent->client_order_id}, will retry next sweep");
+            } catch (\Throwable $e) {
+                $this->reporter->warn('FILLS', "{$intent->desk_product_id}: reconcile of {$intent->client_order_id} failed: ".$e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Operator resolution of a pending live order (desk:intents:resolve). Never takes the operator's word
+     * over the venue: 'filled' is booked from the venue's own record through the reconcile path, and
+     * 'rejected'/'abandoned' are refused unless the venue confirms the order is absent (or is terminal and
+     * unfilled) — $force overrides that and says so loudly.
+     *
+     * @return array{0: bool, 1: string} [done, message]
+     */
+    public function resolveIntent(Executor $executor, OrderIntent $intent, string $outcome, bool $force = false): array
+    {
+        if (! $executor instanceof ReconcilesOrders || $executor->orderVenue() !== $intent->venue) {
+            return [false, "intent {$intent->client_order_id} belongs to {$intent->venue}; the configured executor cannot reach that venue"];
+        }
+
+        if ($outcome === 'filled') {
+            $result = $executor->reconcile($intent);
+            if ($result === null || ! $result->ok()) {
+                return [false, 'the venue does not show this order as filled; refusing to book a fill it cannot confirm'];
+            }
+            $this->bookReconciled($this->strategy(), $executor, $intent, $result);
+
+            return [true, $intent->refresh()->status === 'resolved' ? 'booked from the venue record' : 'not booked'];
+        }
+
+        return $this->mutateLock($executor->mode(), $intent->desk_product_id)->block(5, function () use ($executor, $intent, $outcome, $force) {
+            if ($intent->refresh()->status !== 'pending') {
+                return [false, 'already resolved'];
+            }
+            $result = $executor->reconcile($intent);
+            $safe = $executor->confirmedAbsent($intent) || ($result !== null && ! $result->ok());
+            if (! $safe && ! $force) {
+                return [false, 'the venue has not confirmed this order is absent or unfilled; it may still be live. Re-run with --force only if you have checked the venue yourself'];
+            }
+            if ($result !== null && $result->ok()) {
+                $this->reporter->error('FILLS', "FORCED {$outcome} on {$intent->client_order_id} although the venue shows it FILLED: book the position by hand");
+            } elseif (! $safe) {
+                $this->reporter->error('FILLS', "FORCED {$outcome} on {$intent->client_order_id} without venue confirmation");
+            }
+            $intent->resolve($outcome, 'resolved manually by an operator'.($safe ? '' : ' (forced)'));
+
+            return [true, 'resolved'.($safe ? '' : ' (FORCED, unverified)')];
+        });
+    }
+
+    /** An order the venue provably never received frees its product; decided only while holding the product lock. */
+    private function releaseIfAbsent(ReconcilesOrders&Executor $executor, OrderIntent $intent): void
+    {
+        $this->mutateLock($executor->mode(), $intent->desk_product_id)->block(5, function () use ($executor, $intent) {
+            if ($intent->refresh()->status === 'pending' && $executor->confirmedAbsent($intent)) {
+                $intent->resolve('abandoned', 'order never reached the venue');
+                $this->reporter->warn('FILLS', "{$intent->desk_product_id}: {$intent->method} {$intent->client_order_id} never reached the venue, product released");
+            }
+        });
+    }
+
+    /** True when a pending live order on this product has been unresolved for so long that new entries stop. */
+    private function entriesHaltedByStuckOrder(Executor $executor, string $pid): bool
+    {
+        if (! $executor instanceof ReconcilesOrders) {
+            return false;
+        }
+        $cutoff = now()->subMinutes((int) config('desk.live_orders.stuck_minutes', 30));
+
+        return OrderIntent::pending()->mode($executor->mode())->venue($executor->orderVenue())
+            ->where('desk_product_id', $pid)
+            ->whereRaw('COALESCE(sent_at, created_at) <= ?', [$cutoff])->exists();
+    }
+
+    private function bookReconciled(Strategy $strategy, Executor $executor, OrderIntent $intent, OrderResult $result): void
+    {
+        $mode = $executor->mode();
+        $pid = $intent->desk_product_id;
+        $exit = in_array($intent->method, ['sell', 'cover_short'], true);
+
+        $this->mutateLock($mode, $pid)->block(5, function () use ($strategy, $intent, $result, $mode, $pid, $exit) {
+            if ($intent->refresh()->status !== 'pending') {
+                return;   // another process booked it while we waited for the lock
+            }
+            $existing = Position::open()->mode($mode)->seat($this->arenaSeatId)->where('product_id', $pid)->first();
+            $short = $intent->method === 'open_short';
+            $kind = $exit ? 'exit' : ($existing ? 'add' : 'entry');
+            $orphan = false;
+
+            DB::transaction(function () use ($strategy, $intent, $result, $mode, $pid, $exit, $existing, $short, $kind, &$orphan) {
+                $fill = Fill::create($this->fillAttrs(null, $existing, $pid, $intent->side, $kind, $result, $mode));
+
+                if ($result->ok() && $exit) {
+                    if ($existing !== null && $existing->isShort() === ($intent->method === 'cover_short')) {
+                        $this->bookExit($existing, $result);
+                        if ($existing->quantity > self::QTY_EPSILON) {
+                            $existing->save();
+                        } else {
+                            $this->markFullyClosed($existing, $result, 'reconcile');
+                            $existing->save();
+                        }
+                    } else {
+                        $orphan = true;
+                    }
+                } elseif ($result->ok()) {
+                    if ($existing === null) {
+                        $position = Position::create([
+                            'arena_seat_id' => $this->arenaSeatId, 'mode' => $mode, 'strategy' => $strategy->key(),
+                            'product_id' => $pid, 'side' => $short ? 'short' : 'long',
+                            'quantity' => $result->filledQty, 'entry_price' => $result->fillPrice, 'entry_usd' => $result->filledUsd,
+                            'fees_usd' => $result->feeUsd, 'peak_price' => $result->fillPrice, 'last_price' => $result->fillPrice,
+                            'opened_at' => now(),
+                            'meta' => [
+                                'decision_price' => $result->decisionPrice, 'entry_fees_usd' => $result->feeUsd,
+                                'initial_cost_usd' => $result->filledUsd, 'last_action_ts' => now()->getTimestamp(),
+                                'reconciled_from_intent' => $intent->client_order_id,
+                            ],
+                        ]);
+                        $fill->update(['position_id' => $position->id]);
+                    } elseif ($existing->isShort() === $short) {
+                        $this->bookAdd($existing, $result, null, null);
+                        $fill->update(['position_id' => $existing->id]);
+                    } else {
+                        $orphan = true;
+                    }
+                }
+
+                $intent->resolve($result->ok() ? 'filled' : 'rejected', 'booked by reconcile');
+            });
+
+            if ($result->ok()) {
+                $this->reporter->trade('FILLS', sprintf('RECONCILED %s %s $%.2f @ %.6f (%s)', strtoupper($intent->method), $pid, $result->filledUsd, $result->fillPrice, $intent->client_order_id));
+            } else {
+                $this->reporter->warn('FILLS', "{$pid} reconciled {$intent->method} did not fill: ".($result->note ?? $result->status));
+            }
+            if ($orphan || ($result->ok() && $exit && $existing === null)) {
+                $this->reporter->error('FILLS', "ORPHAN LIVE FILL {$intent->method} {$pid} ({$intent->client_order_id}): filled at the venue but there is no matching open position to book it against");
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------
     // RISK — own timer, final authority
     // ------------------------------------------------------------------
 
@@ -724,6 +919,8 @@ class Desk
     {
         $this->chief->heartbeat('RISK');
         $out = [];
+
+        $this->reconcileLiveOrders($strategy, $executor);
 
         if ($executor instanceof CoinbasePerpsExecutor) {
             try {
@@ -1056,6 +1253,10 @@ class Desk
      */
     private function recordForceCloseAttemptOutcome(Position $p, ?Fill $fill): void
     {
+        if ($fill?->status === 'unknown') {
+            return;   // an unconfirmed order is held for reconcile, not a failed attempt to count toward giving up
+        }
+
         $ok = $fill !== null && $fill->status === 'filled' && $fill->filled_qty > 0 && $fill->fill_price !== null && $fill->fill_price > 0;
         if ($ok) {
             return;
@@ -1172,7 +1373,9 @@ class Desk
                 $fill = Fill::create($this->fillAttrs(null, $p, $p->product_id, $p->isShort() ? 'BUY' : 'SELL', 'exit', $result, $executor->mode()));
 
                 if (! $result->ok()) {
-                    $this->reporter->error('RISK', "CLOSE FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
+                    $this->reporter->error('RISK', ($result->raw['blocked_by_intent'] ?? null) !== null
+                        ? "EXIT BLOCKED {$p->product_id} ({$rule}) by unresolved live order {$result->raw['blocked_by_intent']}: resolve it (desk:intents:resolve) — ".($result->note ?? '')
+                        : "CLOSE FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
 
                     return $fill;
                 }
@@ -1293,7 +1496,11 @@ class Desk
             return DB::transaction(function () use ($p, $rule, $result, $executor, $qtyBefore, $limitPrice) {
                 $fill = Fill::create($this->fillAttrs(null, $p, $p->product_id, $p->isShort() ? 'BUY' : 'SELL', 'trim', $result, $executor->mode()));
                 if (! $result->ok()) {
-                    $this->reporter->warn('RISK', "TRIM FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
+                    if (($result->raw['blocked_by_intent'] ?? null) !== null) {
+                        $this->reporter->error('RISK', "EXIT BLOCKED {$p->product_id} ({$rule}) by unresolved live order {$result->raw['blocked_by_intent']}: resolve it (desk:intents:resolve) — ".($result->note ?? ''));
+                    } else {
+                        $this->reporter->warn('RISK', "TRIM FAILED {$p->product_id} ({$rule}): ".($result->note ?? $result->status));
+                    }
 
                     return $fill;
                 }

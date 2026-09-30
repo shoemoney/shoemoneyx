@@ -99,6 +99,20 @@ return [
         'slippage_bps' => (float) env('DESK_PAPER_SLIPPAGE_BPS', 1),   // on top of the real bid/ask; Coinbase majors quote 0.2–3 bps wide
     ],
 
+    // Live order idempotency (App\Desk\Execution\Concerns\SubmitsOrdersIdempotently).
+    'live_orders' => [
+        // An order the venue cannot show us is only treated as "never arrived" after this long, so a
+        // slow-to-index order is never re-sent under a fresh identity.
+        'not_found_grace_seconds' => (static function (): int {
+            $seconds = filter_var(env('DESK_LIVE_ORDER_GRACE_SECONDS', 120), FILTER_VALIDATE_INT);
+
+            return $seconds === false ? 120 : max(60, $seconds);
+        })(),
+        // A pending order older than this halts new entries on its product and is reported as STUCK.
+        'stuck_minutes' => (int) env('DESK_LIVE_ORDER_STUCK_MINUTES', 30),
+        'poll_sleep_ms' => (int) env('DESK_LIVE_ORDER_POLL_SLEEP_MS', 400),
+    ],
+
     // Post-only shadow A/B (paper only): what a resting maker limit would have done instead of the
     // taker fill the desk actually made. See App\Desk\Execution\PostOnlyShadows.
     'post_only' => [
