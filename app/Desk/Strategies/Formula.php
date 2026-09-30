@@ -38,6 +38,12 @@ final class Formula
         'sold_usd' => ['reentry'],
     ];
 
+    private const MAX_LENGTH = 512;
+
+    private const MAX_DEPTH = 32;
+
+    private static int $depth = 0;
+
     private const FUNCTIONS = [
         'min' => 2,
         'max' => 2,
@@ -64,8 +70,12 @@ final class Formula
      */
     public static function parse(string $expr): array
     {
+        if (strlen($expr) > self::MAX_LENGTH) {
+            throw new FormulaParseError('expression too long (max '.self::MAX_LENGTH.' characters)', self::MAX_LENGTH);
+        }
         $tokens = self::tokenize($expr);
         $pos = 0;
+        self::$depth = 0;
         $ast = self::parseExpr($tokens, $pos);
         if ($tokens[$pos]['type'] !== 'eof') {
             throw new FormulaParseError("unexpected '{$tokens[$pos]['text']}'", $tokens[$pos]['offset']);
@@ -163,6 +173,7 @@ final class Formula
     /** @param array<int, array{type: string, text: string, offset: int}> $tokens */
     private static function parseExpr(array $tokens, int &$pos): array
     {
+        self::descend($tokens[$pos]['offset']);
         $node = self::parseTerm($tokens, $pos);
         while (in_array($tokens[$pos]['type'], ['plus', 'minus'], true)) {
             $op = $tokens[$pos]['type'] === 'plus' ? '+' : '-';
@@ -170,8 +181,16 @@ final class Formula
             $right = self::parseTerm($tokens, $pos);
             $node = ['type' => 'bin', 'op' => $op, 'left' => $node, 'right' => $right];
         }
+        self::$depth--;
 
         return $node;
+    }
+
+    private static function descend(int $offset): void
+    {
+        if (++self::$depth > self::MAX_DEPTH) {
+            throw new FormulaParseError('expression nested too deeply (max '.self::MAX_DEPTH.')', $offset);
+        }
     }
 
     /** @param array<int, array{type: string, text: string, offset: int}> $tokens */
@@ -192,9 +211,12 @@ final class Formula
     private static function parseUnary(array $tokens, int &$pos): array
     {
         if ($tokens[$pos]['type'] === 'minus') {
+            self::descend($tokens[$pos]['offset']);
             $pos++;
+            $node = ['type' => 'unary', 'expr' => self::parseUnary($tokens, $pos)];
+            self::$depth--;
 
-            return ['type' => 'unary', 'expr' => self::parseUnary($tokens, $pos)];
+            return $node;
         }
 
         return self::parsePrimary($tokens, $pos);

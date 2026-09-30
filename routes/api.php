@@ -24,19 +24,16 @@ use App\Http\Controllers\Api\StrategySyncController;
 use App\Http\Controllers\Api\UdfController;
 use App\Http\Middleware\DeskMutationThrottle;
 use App\Http\Middleware\DeskToken;
+use App\Http\Middleware\StartDeskSession;
 use Illuminate\Cookie\Middleware\EncryptCookies;
-use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 
 // The desk is operated inside a private, firewalled network. DeskToken adds an
 // optional master-password layer on top of that access boundary (no-op when unset).
-Route::middleware(DeskToken::class)->group(function () {
-    // master-password needs a real session to authenticate the browser (mirrors DeskAuthController)
-    // — api routes carry no session by default, so start one for just these two endpoints.
-    Route::middleware([EncryptCookies::class, StartSession::class])->group(function () {
-        Route::get('/onboarding', [OnboardingController::class, 'show']);
-        Route::post('/onboarding/{step}', [OnboardingController::class, 'update']);
-    });
+// The session lets the logged-in SPA authenticate with its cookie instead of a stored secret.
+Route::middleware([EncryptCookies::class, StartDeskSession::class, DeskToken::class])->group(function () {
+    Route::get('/onboarding', [OnboardingController::class, 'show']);
+    Route::post('/onboarding/{step}', [OnboardingController::class, 'update']);
 
     Route::get('/landing', [LandingController::class, 'index']);
     Route::get('/status', [StatusController::class, 'index']);
@@ -123,9 +120,12 @@ Route::middleware(DeskToken::class)->group(function () {
 
     Route::get('/hub/strategies/search', [HubArchiveController::class, 'search']);
     Route::get('/hub/strategies/typeahead', [HubArchiveController::class, 'typeahead']);
-    Route::get('/hub/strategies/{slug}/versions/{version}', [HubArchiveController::class, 'version']);
-    Route::get('/hub/strategies/{slug}/comments', [HubArchiveController::class, 'comments']);
-    Route::get('/hub/strategies/{slug}', [HubArchiveController::class, 'show']);
+    Route::get('/hub/strategies/{slug}/versions/{version}', [HubArchiveController::class, 'version'])
+        ->where(['slug' => HubArchiveController::SLUG_PATTERN, 'version' => HubArchiveController::VERSION_PATTERN]);
+    Route::get('/hub/strategies/{slug}/comments', [HubArchiveController::class, 'comments'])
+        ->where('slug', HubArchiveController::SLUG_PATTERN);
+    Route::get('/hub/strategies/{slug}', [HubArchiveController::class, 'show'])
+        ->where('slug', HubArchiveController::SLUG_PATTERN);
     Route::post('/hub/import', [HubArchiveController::class, 'import']);
 
     Route::get('/hub/contests', [HubContestController::class, 'index']);

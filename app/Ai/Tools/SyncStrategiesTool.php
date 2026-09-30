@@ -16,7 +16,7 @@ final class SyncStrategiesTool implements Tool
 
     public function description(): string
     {
-        return 'Check the community strategies repo for new or updated strategies, optionally importing the new ones as plugins.';
+        return 'Check the community strategies repo for new or updated strategies, read-only. Importing needs the user confirmation in the UI.';
     }
 
     public function parameters(): array
@@ -40,7 +40,11 @@ final class SyncStrategiesTool implements Tool
         }
 
         if ($args['import'] ?? false) {
-            $result['imported'] = array_map(fn (array $entry) => $sync->import($entry['id']), $result['new']);
+            // Imports pull in untrusted community strategies; only the user's own action may do that.
+            $result['needs_confirmation'] = true;
+            $result['action'] = 'import';
+            $result['endpoint'] = 'POST /api/strategies/sync/import (one id) or /api/strategies/sync/import-all';
+            $result['message'] = 'Nothing was imported. Ask the user to import from the strategy sync panel.';
         }
 
         return $result;

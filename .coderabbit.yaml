@@ -8,8 +8,11 @@ early_access: false
 enable_free_tier: true
 
 reviews:
-  profile: chill
-  request_changes_workflow: false
+  # assertive: this is a money-moving, internet-exposed app; we want the extra findings.
+  profile: assertive
+  # Request changes on real findings and approve once they are resolved, so the PR page shows
+  # when a PR is clear to merge (branch protection isn't available on this plan).
+  request_changes_workflow: true
   high_level_summary: true
   review_status: true
   commit_status: true
@@ -42,6 +45,56 @@ reviews:
     - "!composer.lock"
 
   path_instructions:
+    - path: "**/*"
+      instructions: >-
+        Security is the first review priority (see SECURITY.md scope: credential handling, live
+        order paths, authentication, authorization). For every change ask: can an unauthenticated
+        or cross-site caller reach this, can a secret (master password, exchange keys, OpenRouter
+        keys, APP_KEY, Telegram token) reach a response, log, URL, broadcast or LLM prompt, and can
+        user- or community-supplied data steer a request, a file path, a shell argument or an order.
+
+    - path: "app/Http/**"
+      instructions: >-
+        Auth model: an optional master password. Browsers authenticate with the login session
+        (App\Desk\DeskLogin) and must send X-CSRF-TOKEN on writes; scripts send X-Desk-Token. The
+        password must never be rendered, returned or accepted from a query string. Flag any route
+        or controller that skips DeskToken/MasterPassword, any setting key accepted without
+        Settings::isCanonicalKey/isSecret, and any JSON response that serialises config('desk')
+        or a model without $hidden on secret columns.
+
+    - path: "routes/**"
+      instructions: >-
+        Every /api route must sit inside the DeskToken group, and every page route behind
+        MasterPassword, unless it is deliberately public (health, robots, llms, discovery). Flag new
+        public routes and any mutating GET route.
+
+    - path: "app/Ai/**"
+      instructions: >-
+        Tool results can contain community-controlled text (strategy names, changelogs, manifests),
+        so treat them as untrusted input to the model (prompt injection). Flag any tool that
+        publishes, registers, imports, spends money or changes settings without a human
+        confirmation step, and any tool that skips the validation its HTTP controller applies.
+
+    - path: "app/Exchange/**/*Executor*.php"
+      instructions: >-
+        Order submission must be idempotent. A transport error, timeout or failed readback is an
+        UNKNOWN outcome, never 'rejected'. Flag random per-call client order ids, catch blocks that
+        turn exceptions into rejections, and any retry that can send a second live order.
+
+    - path: "{Dockerfile,docker-compose.yml,docker/**,ops/**,deploy/**}"
+      instructions: >-
+        Internet-exposed images. Flag secrets or private keys baked into image layers, containers
+        running as root, published ports other than 443, missing security headers in nginx, weak
+        default credentials, and shell that interpolates untrusted input.
+
+    - path: "tests/**"
+      instructions: >-
+        Flag tests that would still pass if the bug they target came back: assertions on mocks
+        only, status-code-only checks where the body matters, or security tests that only try the
+        exact-cased happy input. Tests run on SQLite, but production is MariaDB with
+        utf8mb4_unicode_ci (case-, accent- and trailing-space-insensitive), so key/identity
+        comparisons need an alias case.
+
     - path: "database/migrations/**"
       instructions: >-
         The test suite runs on SQLite in memory but production runs MariaDB in strict mode.
@@ -77,6 +130,11 @@ reviews:
 
     - path: "**/*.php"
       instructions: >-
+        Production MariaDB compares strings under utf8mb4_unicode_ci (unless a column sets its own
+        collation): 'MASTER_PASSWORD', 'master_password ' and 'mäster_password' all equal
+        'master_password' in WHERE clauses and unique/primary keys. Flag a PHP === / in_array check
+        only when a concrete case, accent or trailing-space alias would pass it and then select or
+        overwrite a different (protected) row.
         Laravel 13 conventions. Prefer framework idioms over hand-rolled equivalents. Watch for
         N+1 queries, unbounded SELECTs on tables that grow without limit such as failed_jobs and
         job_batches, and missing casts on model attributes.

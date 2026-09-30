@@ -1,15 +1,13 @@
 import { publicDemo } from './demoMode.js';
 
-// The desk's master password doubles as the API token (App\Http\Middleware\DeskToken). The app
-// shell writes it to localStorage on login and the onboarding wizard writes it when the password is
-// first set; without this header every /api call 401s the moment a password exists.
-export function deskToken() {
-    try { return localStorage.getItem('desk_token') || ''; } catch { return ''; }
-}
+// The browser authenticates to /api with its login session cookie (App\Http\Middleware\DeskToken);
+// writes also carry the session's CSRF token, which app.blade.php renders into a meta tag.
+// v0.2.1 and earlier kept the master password itself in localStorage, so scrub it on load.
+try { localStorage.removeItem('desk_token'); } catch { /* storage blocked */ }
 
 export function deskHeaders(extra = {}) {
-    const token = deskToken();
-    return token ? { ...extra, 'X-Desk-Token': token } : { ...extra };
+    const csrf = globalThis.document?.querySelector('meta[name="csrf-token"]')?.content;
+    return csrf ? { ...extra, 'X-CSRF-TOKEN': csrf } : { ...extra };
 }
 
 async function request(method, url, body) {
@@ -22,6 +20,13 @@ async function request(method, url, body) {
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (res.status === 401 && !publicDemo) {
+        globalThis.location?.assign('/login');
+    }
+    // A login in another tab rotated the CSRF token this page rendered with.
+    if (res.status === 419) {
+        globalThis.location?.reload();
+    }
     if (!res.ok) {
         const msg = (data && (data.message || data.error)) || `${res.status} ${res.statusText}`;
         throw new Error(msg);
