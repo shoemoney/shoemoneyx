@@ -15,6 +15,9 @@ final class StrategyAgent
 
     private const MAX_HISTORY = 40;
 
+    /** Tools whose results carry community-written text (names, changelogs, manifests) or third-party MCP output. */
+    private const UNTRUSTED_TOOLS = ['list_versions', 'compare_versions', 'get_backtest', 'sync_strategies'];
+
     public function __construct(
         private readonly ChatClient $chatClient,
         private readonly ToolRegistry $tools,
@@ -77,7 +80,7 @@ final class StrategyAgent
                     $result = $tool ? $tool->run($call['arguments'], $context) : ['error' => "unknown tool: {$call['name']}"];
                     $executed++;
                     $toolEvents[] = ['tool' => $call['name'], 'args' => $call['arguments'], 'result' => $result];
-                    $messages[] = ['role' => 'tool', 'tool_call_id' => $call['id'], 'content' => json_encode($result)];
+                    $messages[] = ['role' => 'tool', 'tool_call_id' => $call['id'], 'content' => self::toolContent($call['name'], $result)];
                 }
                 if ($capped) {
                     $content = $response->content;
@@ -99,6 +102,21 @@ final class StrategyAgent
         ]);
 
         return ['content' => $content, 'tool_events' => $toolEvents, 'phase' => $context->phase, 'error' => $error];
+    }
+
+    /** Community text is fenced as data so the model does not read it as instructions. */
+    public static function toolContent(string $toolName, array $result): string
+    {
+        $json = json_encode($result);
+
+        if (! in_array($toolName, self::UNTRUSTED_TOOLS, true) && ! str_starts_with($toolName, 'mcp.')) {
+            return $json;
+        }
+
+        // Strip the closing marker so the payload cannot break out of the fence.
+        $json = str_replace('</untrusted_data>', '', (string) $json);
+
+        return "<untrusted_data>\n{$json}\n</untrusted_data>";
     }
 
     /** @return list<array> */

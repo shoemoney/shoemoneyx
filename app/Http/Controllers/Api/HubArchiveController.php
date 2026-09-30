@@ -20,6 +20,11 @@ use Illuminate\Http\Request;
  */
 class HubArchiveController extends Controller
 {
+    /** Also used as route constraints: slug/version end up as HubClient URL path segments. */
+    public const SLUG_PATTERN = '[a-z0-9][a-z0-9-]{0,63}';
+
+    public const VERSION_PATTERN = '\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z][0-9A-Za-z.-]{0,31})?';
+
     public function search(Request $request, HubClient $hub): JsonResponse
     {
         $data = $request->validate([
@@ -69,8 +74,8 @@ class HubArchiveController extends Controller
     public function import(Request $request, HubClient $hub): JsonResponse
     {
         $data = $request->validate([
-            'slug' => 'required|string',
-            'version' => 'required|string',
+            'slug' => ['required', 'string', 'regex:/^'.self::SLUG_PATTERN.'$/D'],
+            'version' => ['required', 'string', 'regex:/^'.self::VERSION_PATTERN.'$/D'],
         ]);
 
         $hub->import($data['slug']);

@@ -17,9 +17,7 @@ class HubClient
 {
     private ?int $rateLimitRemaining = null;
 
-    public function __construct()
-    {
-    }
+    public function __construct() {}
 
     // Accounts
 
@@ -62,6 +60,7 @@ class HubClient
 
     public function deleteDesk(int|string $id): void
     {
+        $id = rawurlencode((string) $id);
         $this->request('DELETE', "/me/desks/{$id}");
     }
 
@@ -74,16 +73,23 @@ class HubClient
 
     public function publishVersion(string $slug, array $data): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('POST', "/strategies/{$slug}/versions", ['json' => $data]);
     }
 
     public function strategy(string $slug): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('GET', "/strategies/{$slug}");
     }
 
     public function version(string $slug, string $version): array
     {
+        $slug = rawurlencode((string) $slug);
+        $version = rawurlencode((string) $version);
+
         return $this->request('GET', "/strategies/{$slug}/versions/{$version}");
     }
 
@@ -99,21 +105,28 @@ class HubClient
 
     public function star(string $slug): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('POST', "/strategies/{$slug}/star");
     }
 
     public function unstar(string $slug): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('DELETE', "/strategies/{$slug}/star");
     }
 
     public function import(string $slug): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('POST', "/strategies/{$slug}/import");
     }
 
     public function deleteStrategy(string $slug): void
     {
+        $slug = rawurlencode((string) $slug);
         $this->request('DELETE', "/strategies/{$slug}");
     }
 
@@ -121,16 +134,22 @@ class HubClient
 
     public function user(string $handle): array
     {
+        $handle = rawurlencode((string) $handle);
+
         return $this->request('GET', "/users/{$handle}");
     }
 
     public function follow(string $handle): array
     {
+        $handle = rawurlencode((string) $handle);
+
         return $this->request('POST', "/users/{$handle}/follow");
     }
 
     public function unfollow(string $handle): array
     {
+        $handle = rawurlencode((string) $handle);
+
         return $this->request('DELETE', "/users/{$handle}/follow");
     }
 
@@ -141,16 +160,21 @@ class HubClient
 
     public function comments(string $slug, int $page = 1): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('GET', "/strategies/{$slug}/comments", ['query' => ['page' => $page]]);
     }
 
     public function postComment(string $slug, array $data): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('POST', "/strategies/{$slug}/comments", ['json' => $data]);
     }
 
     public function deleteComment(int|string $id): void
     {
+        $id = rawurlencode((string) $id);
         $this->request('DELETE', "/comments/{$id}");
     }
 
@@ -163,11 +187,15 @@ class HubClient
 
     public function contest(string $slug): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('GET', "/contests/{$slug}");
     }
 
     public function enter(string $slug, string $strategySlug, string $version): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('POST', "/contests/{$slug}/enter", ['json' => [
             'strategy_slug' => $strategySlug,
             'version' => $version,
@@ -176,23 +204,30 @@ class HubClient
 
     public function withdraw(string $slug): void
     {
+        $slug = rawurlencode((string) $slug);
         $this->request('DELETE', "/contests/{$slug}/enter");
     }
 
     /** Paper trading stays local — this reports already-executed local fills, it doesn't request new ones. Idempotent on each fill's `client_id`. */
     public function pushFills(string $slug, array $fills): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('POST', "/contests/{$slug}/fills", ['json' => ['fills' => $fills]]);
     }
 
     /** The hub enforces at most one accepted snapshot per minute per entry; call more often and it just no-ops the extras. */
     public function pushSnapshot(string $slug, array $snapshot): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('POST', "/contests/{$slug}/snapshots", ['json' => $snapshot]);
     }
 
     public function account(string $slug): array
     {
+        $slug = rawurlencode((string) $slug);
+
         return $this->request('GET', "/contests/{$slug}/account");
     }
 
@@ -203,6 +238,9 @@ class HubClient
      */
     public function tape(string $slug, string $productId, array $query = []): array
     {
+        $slug = rawurlencode((string) $slug);
+        $productId = rawurlencode((string) $productId);
+
         return $this->request('GET', "/contests/{$slug}/tape/{$productId}", ['query' => $this->withoutNulls($query)]);
     }
 
