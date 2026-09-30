@@ -172,16 +172,26 @@ class Desk
         }
 
         try {
-            return $this->runCycle($this->strategy(), $this->executor(), null);
+            // Executor comes from the mode the lock was taken for; re-reading the global mode here could pair
+            // this lock with an executor for a mode changed mid-request.
+            return $this->runCycle($this->strategy(), $this->executorForMode($mode), null);
         } finally {
             $lock->release();
         }
     }
 
-    /** Comfortably above the worst-case cycle: several per-product mutate locks' worth of exchange round trips. */
+    /**
+     * Lease far longer than the cycle budget (config desk.cycle_budget_seconds), which stops new entries
+     * well before this expires; the slack covers the one in-flight entry (mutate lock TTL) at the deadline.
+     */
     private function cycleLockSeconds(): int
     {
-        return max(600, $this->mutateLockSeconds() * 5);
+        return max(3600, $this->cycleBudgetSeconds() * 3);
+    }
+
+    private function cycleBudgetSeconds(): int
+    {
+        return max(0, (int) config('desk.cycle_budget_seconds', 1200));
     }
 
     /**
@@ -203,6 +213,7 @@ class Desk
             'started_at' => now(),
         ]);
         $this->reporter->runId = $run->id;
+        $cycleDeadline = microtime(true) + $this->cycleBudgetSeconds();
 
         try {
             if ($this->chief->halted()) {
@@ -272,6 +283,11 @@ class Desk
             // ---- VET -> SIZE -> FILLS, one candidate at a time --------
             // Context is rebuilt per candidate so capacity and free cash reflect fills made this cycle.
             foreach ($candidates as $c) {
+                if (microtime(true) >= $cycleDeadline) {
+                    $this->reporter->warn('CHIEF', sprintf('cycle budget (%ds) spent — no further candidates this cycle', $this->cycleBudgetSeconds()));
+
+                    break;
+                }
                 $this->chief->heartbeat('VET');
                 $ctx = $this->context($strategy, $health['degraded'], $executor->mode());
                 $bank = $this->bank($executor);

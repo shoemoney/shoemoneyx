@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 use App\Desk\Strategies\CustomStrategy;
+use App\Desk\Strategies\JsonPluginStrategy;
 use App\Desk\Strategies\MeanReversionStrategy;
 
 /*
@@ -26,7 +27,7 @@ return [
     'strategies' => [
         'mr' => MeanReversionStrategy::class,
         'custom' => CustomStrategy::class,
-        'json' => \App\Desk\Strategies\JsonPluginStrategy::class,
+        'json' => JsonPluginStrategy::class,
     ],
 
     // Which Coinbase products form the tradeable universe.
@@ -221,6 +222,11 @@ return [
 
     // True on internet-exposed images: onboarding refuses to leave the desk password-less.
     'require_master_password' => (bool) env('DESK_REQUIRE_MASTER_PASSWORD', false),
+
+    // Wall-clock budget for one cycle's candidate loop. Once spent, no new candidate is vetted or entered
+    // (logged). Must stay far below the cycle lock lease (Desk::cycleLockSeconds) so the lease cannot lapse
+    // while orders are still being submitted.
+    'cycle_budget_seconds' => (int) env('DESK_CYCLE_BUDGET_SECONDS', 1200),
 
     // Must be the literal string "yes" before the desk will send a real order.
     'live_confirm' => env('DESK_LIVE_CONFIRM', 'no'),
