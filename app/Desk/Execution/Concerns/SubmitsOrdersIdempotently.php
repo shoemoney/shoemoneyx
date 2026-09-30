@@ -60,6 +60,11 @@ trait SubmitsOrdersIdempotently
         return $e->getMessage();
     }
 
+    protected function newClientOrderId(): string
+    {
+        return (string) Str::uuid();
+    }
+
     protected function pollAttempts(): int
     {
         return 6;
@@ -97,7 +102,7 @@ trait SubmitsOrdersIdempotently
         } else {
             $intent = OrderIntent::create([
                 'mode' => $this->mode(), 'venue' => $this->orderVenue(), 'sent_at' => now(), 'desk_product_id' => $deskPid, 'venue_product_id' => $venuePid,
-                'method' => $method, 'side' => $side, 'client_order_id' => (string) Str::uuid(),
+                'method' => $method, 'side' => $side, 'client_order_id' => $this->newClientOrderId(),
                 'requested_usd' => $requestedUsd, 'decision_price' => $decisionPrice, 'context' => $context,
             ]);
         }
@@ -187,6 +192,10 @@ trait SubmitsOrdersIdempotently
 
         if ($order !== null) {
             return $this->finish($intent, [], $order, $requestedUsd, $decisionPrice);
+        }
+
+        if (OrderBudget::exhausted()) {
+            return $this->unknownFor($intent, $requestedUsd, $decisionPrice, "lookup of {$intent->client_order_id} overran the order budget; absence is unconfirmed");
         }
 
         $grace = (int) config('desk.live_orders.not_found_grace_seconds', 120);

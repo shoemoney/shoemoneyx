@@ -13,9 +13,11 @@ use App\Models\CoinbaseAccount;
 use App\Models\Fill;
 use App\Models\OrderIntent;
 use App\Models\Position;
+use ccxt\DuplicateOrderId;
 use ccxt\InsufficientFunds;
 use ccxt\RequestTimeout;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Env;
 use Illuminate\Support\Facades\Cache;
 use Tests\Exchange\FakeCoinbaseVenue;
 use Tests\Exchange\StubCcxtClient;
@@ -672,5 +674,110 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertCount(1, $client->clientOrderIds, 'no second buy');
         $this->assertSame(1, OrderIntent::pending()->count());
         $this->assertFalse($executor->confirmedAbsent(OrderIntent::sole()));
+    }
+
+    public function test_an_expired_absent_lookup_does_not_resend_the_same_method(): void
+    {
+        $executor = $this->spot();
+        $this->venue->timeoutBeforePlacing = true;
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 100.0, 100.0)->status);
+        $intent = OrderIntent::sole();
+        $this->venue->timeoutBeforePlacing = false;
+        $this->travel(3)->minutes();
+        $this->venue->lookupTakesSeconds = 70;
+
+        $result = $executor->buy('BTC-USD', 100.0, 100.0);
+
+        $this->assertSame('unknown', $result->status);
+        $this->assertCount(1, $this->venue->attempts, 'an expired lookup cannot authorize another send');
+        $this->assertSame('pending', $intent->fresh()->status);
+    }
+
+    public function test_okx_receives_a_valid_client_id_and_reuses_it_after_the_grace_window(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->has['fetchOrders'] = true;
+        $client->createThrows = new RequestTimeout('timed out');
+        $executor = new CcxtExecutor($client, 'okx');
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $intent = OrderIntent::sole();
+        $this->assertMatchesRegularExpression('/^[a-zA-Z0-9]{1,32}$/', $intent->client_order_id);
+        $this->assertSame($intent->client_order_id, $client->clientOrderIds[0]);
+        $this->travel(3)->minutes();
+        $client->createThrows = null;
+        $client->stubCreate = ['id' => 'okx-1'];
+        $client->stubOrders = [['id' => 'okx-1', 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0, 'fee' => ['cost' => 0.0]]];
+
+        $this->assertSame('filled', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $this->assertSame([$intent->client_order_id, $intent->client_order_id], $client->clientOrderIds);
+        $this->assertSame(1, OrderIntent::count());
+    }
+
+    public function test_coinbase_and_other_ccxt_venues_keep_uuid_client_ids(): void
+    {
+        $this->venue->timeoutBeforePlacing = true;
+        $this->spot()->buy('BTC-USD', 100.0, 100.0);
+        $client = new StubCcxtClient([]);
+        $client->createThrows = new RequestTimeout('timed out');
+        (new CcxtExecutor($client, 'stubex'))->buy('BTC-USD', 1000.0, 50_000.0);
+
+        $this->assertSame(2, OrderIntent::count());
+        foreach (OrderIntent::all() as $intent) {
+            $this->assertMatchesRegularExpression('/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i', $intent->client_order_id);
+        }
+    }
+
+    public function test_a_ccxt_duplicate_order_id_stays_pending_until_the_original_is_found(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->has['fetchOrders'] = true;
+        $client->createThrows = new DuplicateOrderId('duplicate');
+        $executor = new CcxtExecutor($client, 'stubex');
+
+        $this->assertSame('unknown', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $intent = OrderIntent::sole();
+        $this->assertSame('pending', $intent->status);
+        $client->stubOrderList = [['id' => 'original-1', 'clientOrderId' => $intent->client_order_id, 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0, 'fee' => ['cost' => 0.0]]];
+
+        $this->assertSame('filled', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $this->assertCount(1, $client->clientOrderIds);
+        $this->assertSame('resolved', $intent->fresh()->status);
+    }
+
+    public function test_a_ccxt_resend_after_the_grace_window_uses_the_original_client_id(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->has['fetchOrders'] = true;
+        $client->createThrows = new RequestTimeout('timed out');
+        $executor = new CcxtExecutor($client, 'stubex');
+        $executor->buy('BTC-USD', 1000.0, 50_000.0);
+        $intent = OrderIntent::sole();
+        $client->createThrows = null;
+        $client->stubCreate = ['id' => 'resent-1'];
+        $client->stubOrders = [['id' => 'resent-1', 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0, 'fee' => ['cost' => 0.0]]];
+        $this->travel(3)->minutes();
+
+        $this->assertSame('filled', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $this->assertSame([$intent->client_order_id, $intent->client_order_id], $client->clientOrderIds);
+        $this->assertSame(1, OrderIntent::count());
+    }
+
+    public function test_live_order_grace_configuration_has_a_safe_floor_and_rejects_malformed_values(): void
+    {
+        $environment = Env::getRepository();
+        $name = 'DESK_LIVE_ORDER_GRACE_SECONDS';
+        $original = $environment->get($name);
+        try {
+            foreach (['0' => 60, '-1' => 60, '30' => 60, '60' => 60, '120' => 120, '600' => 600, 'oops' => 120, '120s' => 120, '1.5' => 120] as $raw => $expected) {
+                $environment->set($name, (string) $raw);
+                $settings = require config_path('desk.php');
+                $this->assertSame($expected, $settings['live_orders']['not_found_grace_seconds'], (string) $raw);
+            }
+            $environment->clear($name);
+            $settings = require config_path('desk.php');
+            $this->assertSame(120, $settings['live_orders']['not_found_grace_seconds']);
+        } finally {
+            $original === null ? $environment->clear($name) : $environment->set($name, $original);
+        }
     }
 }

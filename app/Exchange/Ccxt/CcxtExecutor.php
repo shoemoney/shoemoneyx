@@ -17,6 +17,7 @@ use ccxt\Exchange;
 use ccxt\InsufficientFunds;
 use ccxt\InvalidOrder;
 use ccxt\NotSupported;
+use Illuminate\Support\Str;
 
 /**
  * LIVE market execution through ccxt. Spot only: what gets stored is the order
@@ -116,6 +117,11 @@ class CcxtExecutor implements Executor, ReconcilesOrders
     protected function pollAttempts(): int
     {
         return ($this->client->has['fetchOrder'] ?? false) ? 6 : 0;
+    }
+
+    protected function newClientOrderId(): string
+    {
+        return $this->ccxtId === 'okx' ? bin2hex(random_bytes(16)) : (string) Str::uuid();
     }
 
     public function orderVenue(): string
