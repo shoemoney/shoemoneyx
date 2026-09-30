@@ -104,7 +104,7 @@ class DeskDegradedFillBoundaryTest extends TestCase
         $executor = $this->degradedBuyExecutor($this->degradedResult());
         $enter = new \ReflectionMethod(Desk::class, 'enter');
         $enter->setAccessible(true);
-        $fill = $enter->invoke($desk, $executor, $size, $ctx, $run, $row);
+        $fill = $enter->invoke($desk, $executor, $size, $ctx, $run, $row, microtime(true) + 60);
 
         $this->assertNotNull($fill, 'a Fill row is still written for the degraded attempt, just never a position');
         $this->assertSame(0, Position::count(), 'a degraded (fillPrice<=0) fill must never open a position');
