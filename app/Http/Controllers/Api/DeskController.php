@@ -98,6 +98,8 @@ class DeskController extends Controller
      */
     private function assertSaneRiskValue(string $key, mixed $value): void
     {
+        abort_unless(Settings::isCanonicalKey($key), 422, "invalid setting key path {$key}");
+
         $bare = preg_replace('/^per_product\.[^.]+\./i', '', $key);
         // MariaDB's utf8mb4_unicode_ci matches keys case-insensitively, so "size.KELLY_CAP_PCT" would
         // overwrite the "size.kelly_cap_pct" row: match risk paths on the lowercased path and demand the canonical spelling.

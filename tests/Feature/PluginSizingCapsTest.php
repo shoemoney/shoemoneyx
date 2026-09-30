@@ -169,6 +169,24 @@ class PluginSizingCapsTest extends TestCase
         $this->assertRejected('size.KELLY_CAP_PCT.foo', [], 'canonical');
     }
 
+    public function test_non_canonical_child_keys_in_a_parent_map_are_rejected(): void
+    {
+        config(['cache.default' => 'array']);
+        $this->assertRejected('size', ['Kelly Cap ' => 1], 'size.Kelly Cap ');
+        $this->assertRejected('size', ['x y' => 2], 'size.x y');
+        $this->assertRejected('size', ['' => 2], 'size.');
+        $this->assertRejected('paper', ['a' => ['b c' => 1]], 'paper.a.b c');
+        $this->assertRejected('per_product.BTC-USD.mr', ['tf.x!' => 1], 'per_product.BTC-USD.mr.tf.x!');
+        $this->assertRejected('paper', ['caf\u{e9}' => 1], 'paper.caf');
+    }
+
+    public function test_a_valid_nested_write_is_accepted(): void
+    {
+        config(['cache.default' => 'array']);
+        $this->putJson('/api/settings', ['key' => 'paper', 'value' => ['starting_cash' => 500, 'a' => ['b_c-1' => 1]]])->assertOk();
+        $this->assertSame(500, app(Settings::class)->get('paper.starting_cash'));
+    }
+
     public function test_valid_risk_writes_persist(): void
     {
         config(['cache.default' => 'array']);
