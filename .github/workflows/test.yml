@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Install frontend test deps
         run: |
           mkdir -p "$RUNNER_TEMP/fedeps" && cd "$RUNNER_TEMP/fedeps"
@@ -69,6 +69,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - run: npm ci
       - run: npm run test:feeder
