@@ -19,12 +19,12 @@ FROM base AS deps
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --no-scripts --no-autoloader --prefer-dist
 
-FROM node:22-bookworm-slim AS feeder-deps
+FROM node:24-bookworm-slim AS feeder-deps
 WORKDIR /feeder
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
-FROM node:22-bookworm-slim AS frontend-build
+FROM node:24-bookworm-slim AS frontend-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -45,7 +45,7 @@ COPY . .
 RUN composer dump-autoload --optimize --no-dev && php artisan package:discover --ansi || true
 COPY --from=frontend-build /app/public/build ./public/build
 # node for the feeder role
-COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=feeder-deps /feeder/node_modules ./node_modules
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p storage/logs storage/framework/{cache,sessions,views} bootstrap/cache && chmod -R 777 storage bootstrap/cache
