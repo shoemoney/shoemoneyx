@@ -76,7 +76,7 @@ jobs:
           mkdir -p /tmp/digests/${{ matrix.target }}
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${{ matrix.target }}/${digest#sha256:}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.target }}-${{ matrix.arch }}
           path: /tmp/digests/${{ matrix.target }}/*
@@ -93,7 +93,7 @@ jobs:
       matrix:
         target: [app, nginx]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digests-${{ matrix.target }}-*
