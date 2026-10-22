@@ -52,6 +52,63 @@ async function confirmLive() {
         liveBusy.value = false;
     }
 }
+// The onboarding endpoint is the only write that may replace the master password.
+// Doing so regenerates the session, so the CSRF meta tag has to pick up the new token
+// or the next settings save is rejected.
+const MIN_PASSWORD = 12;
+const MAX_PASSWORD_BYTES = 72;
+const currentPassword = ref("");
+const newPassword = ref("");
+const confirmPassword = ref("");
+const passwordBusy = ref(false);
+const passwordError = ref("");
+const passwordTooShort = computed(
+    () => newPassword.value !== "" && newPassword.value.length < MIN_PASSWORD,
+);
+const passwordTooLong = computed(
+    () => new TextEncoder().encode(newPassword.value).length > MAX_PASSWORD_BYTES,
+);
+const passwordMismatch = computed(
+    () => confirmPassword.value !== "" && newPassword.value !== confirmPassword.value,
+);
+const canChangePassword = computed(
+    () =>
+        currentPassword.value !== "" &&
+        newPassword.value.length >= MIN_PASSWORD &&
+        !passwordTooLong.value &&
+        newPassword.value === confirmPassword.value,
+);
+watch([currentPassword, newPassword, confirmPassword], () => {
+    passwordError.value = "";
+});
+async function submitPasswordChange() {
+    if (publicDemo || passwordBusy.value || !canChangePassword.value) return;
+    passwordBusy.value = true;
+    passwordError.value = "";
+    msg.value = "";
+    error.value = "";
+    try {
+        const res = await api.post("/onboarding/master-password", {
+            current_password: currentPassword.value,
+            password: newPassword.value,
+            password_confirmation: confirmPassword.value,
+        });
+        const token = res?.csrf_token;
+        const meta = globalThis.document?.querySelector?.('meta[name="csrf-token"]');
+        if (meta && res?.ok !== false && typeof token === "string" && token !== "") {
+            meta.content = token;
+            meta.setAttribute?.("content", token);
+        }
+        currentPassword.value = "";
+        newPassword.value = "";
+        confirmPassword.value = "";
+        msg.value = "master password changed";
+    } catch (e) {
+        passwordError.value = e.message;
+    } finally {
+        passwordBusy.value = false;
+    }
+}
 async function save(key, value, extra = {}, rethrow = false) {
     msg.value = "";
     error.value = "";
@@ -343,6 +400,78 @@ onMounted(load);
                         entries; RISK continues managing open positions.
                     </p>
                 </article>
+            </section>
+
+            <section class="rc-panel" aria-labelledby="rc-password-title">
+                <div class="rc-panel-heading">
+                    <span class="rc-section-no">04</span>
+                    <div>
+                        <span class="rc-overline">Account</span>
+                        <h2 id="rc-password-title">Master password</h2>
+                    </div>
+                </div>
+                <form
+                    class="rc-password-form"
+                    :aria-busy="passwordBusy"
+                    @submit.prevent="submitPasswordChange"
+                >
+                    <label class="rc-field"
+                        >Current password
+                        <input
+                            id="rc-current-password"
+                            v-model="currentPassword"
+                            name="current_password"
+                            type="password"
+                            autocomplete="current-password"
+                            :disabled="publicDemo || passwordBusy"
+                    /></label>
+                    <label class="rc-field"
+                        >New password
+                        <input
+                            id="rc-new-password"
+                            v-model="newPassword"
+                            name="password"
+                            type="password"
+                            autocomplete="new-password"
+                            :disabled="publicDemo || passwordBusy"
+                    /></label>
+                    <label class="rc-field"
+                        >Confirm new password
+                        <input
+                            id="rc-confirm-password"
+                            v-model="confirmPassword"
+                            name="password_confirmation"
+                            type="password"
+                            autocomplete="new-password"
+                            :disabled="publicDemo || passwordBusy"
+                    /></label>
+                    <p v-if="passwordTooShort" class="rc-inline-danger" role="alert">
+                        Choose a password of at least {{ MIN_PASSWORD }} characters.
+                    </p>
+                    <p v-if="passwordTooLong" class="rc-inline-danger" role="alert">
+                        Use at most 72 bytes: longer passwords are silently cut short by the hashing algorithm.
+                    </p>
+                    <p v-if="passwordMismatch" class="rc-inline-danger" role="alert">
+                        The two passwords do not match.
+                    </p>
+                    <p v-if="passwordError" class="rc-inline-danger" role="alert">
+                        {{ passwordError }}
+                    </p>
+                    <button
+                        class="btn btn-primary"
+                        type="submit"
+                        :disabled="publicDemo || passwordBusy || !canChangePassword"
+                    >
+                        {{ passwordBusy ? "Changing…" : "Change password" }}
+                    </button>
+                </form>
+                <p class="rc-help">
+                    Replaces the password that signs in to this desk. This browser stays
+                    signed in, and every other browser is signed out. Use at least
+                    {{ MIN_PASSWORD }} characters. The
+                    <code>master_password_hint</code> parameter below is the text on the
+                    sign-in page.
+                </p>
             </section>
 
             <section

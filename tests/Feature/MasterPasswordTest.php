@@ -97,6 +97,33 @@ class MasterPasswordTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_a_settings_session_can_change_the_password_and_later_writes_need_the_new_csrf_token(): void
+    {
+        $this->ownerPassword();
+        $this->post('/login', ['password' => self::OWNER])->assertRedirect('/');
+        $stale = session()->token();
+        $changed = 'changed-desk-password';
+
+        $fresh = $this->postJson('/api/onboarding/master-password', [
+            'current_password' => self::OWNER,
+            'password' => $changed,
+            'password_confirmation' => $changed,
+        ], ['X-CSRF-TOKEN' => $stale])->assertOk()->json('csrf_token');
+
+        $this->assertIsString($fresh);
+        $this->assertNotSame('', $fresh);
+        $this->assertNotSame($stale, $fresh);
+        $this->assertSame($fresh, session()->token());
+        $this->assertTrue(app(Settings::class)->verifyMasterPassword($changed));
+        $this->assertFalse(app(Settings::class)->verifyMasterPassword(self::OWNER));
+        $this->assertTrue(DeskLogin::check(app('session.store')));
+
+        $this->putJson('/api/settings', ['key' => 'mode', 'value' => 'paper'], ['X-CSRF-TOKEN' => $stale])->assertStatus(419);
+        $this->putJson('/api/settings', ['key' => 'mode', 'value' => 'paper'], ['X-CSRF-TOKEN' => $fresh])
+            ->assertOk()
+            ->assertJson(['ok' => true, 'key' => 'mode', 'value' => 'paper']);
+    }
+
     public function test_logout_revokes_page_and_api_access(): void
     {
         $this->ownerPassword();

@@ -347,6 +347,15 @@
     font-size: 14px;
     line-height: 1.6;
 }
+.rc-page .rc-password-form {
+    display: grid;
+    gap: 16px;
+    max-width: min(100%, 420px);
+}
+.rc-page .rc-password-form .rc-field + .rc-field,
+.rc-page .rc-password-form .rc-inline-danger {
+    margin-top: 0;
+}
 .rc-page .rc-notice {
     display: flex;
     align-items: center;
