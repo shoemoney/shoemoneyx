@@ -34,7 +34,12 @@ async function request(method, url, body) {
     }
     if (!res.ok) {
         const msg = (data && (data.message || data.error)) || `${res.status} ${res.statusText}`;
-        throw new Error(msg);
+        const error = new Error(msg);
+        // Laravel's message is a summary. Pages that can point at a field need errors too.
+        if (data && typeof data === 'object' && data.errors && typeof data.errors === 'object') {
+            error.errors = data.errors;
+        }
+        throw error;
     }
     return data;
 }

@@ -14,10 +14,15 @@ use App\Desk\Settings;
 use App\Exchange\ExchangeRegistry;
 use App\Http\Controllers\Controller;
 use App\Models\AiConnection;
+use App\Models\Setting;
 use App\Strategies\Sync\StrategySync;
+use Illuminate\Contracts\Database\ConcurrencyErrorDetector;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 /**
  * First-run wizard: no key -> paper trading, in under five minutes. Each step but
@@ -82,9 +87,62 @@ class OnboardingController extends Controller
             throw ValidationException::withMessages(['password' => 'Choose a password different from the first-login key.']);
         }
 
-        $settings->setMasterPassword($data['password']);
+        // The password row and the onboarding row commit together. A second
+        // request waits on the locked hash and has to prove the current password
+        // again, so two tabs cannot both accept the old one. The session rotates
+        // only after that commit. Two first-time inserts can deadlock, because
+        // there is no row to lock yet: retry, and if it never clears answer 422.
+        // The failed recheck is counted only after that rollback. The rate
+        // limiter writes on this same connection, so a hit inside the
+        // transaction would disappear with it.
+        $failedRecheck = false;
+        try {
+            DB::transaction(function () use ($settings, $wizard, $data, $changing, &$failedRecheck): void {
+                $passwordRow = Setting::query()->where('key', 'master_password')->lockForUpdate()->first();
+                Setting::query()->where('key', 'onboarding_state')->lockForUpdate()->first();
+
+                $stored = $passwordRow?->value;
+                $hasStored = is_string($stored) && $stored !== '';
+                if ($hasStored || $changing) {
+                    $matches = false;
+                    if ($hasStored) {
+                        try {
+                            $matches = Hash::check((string) ($data['current_password'] ?? ''), $stored);
+                        } catch (Throwable) {
+                            $matches = false;
+                        }
+                    }
+                    if (! $matches) {
+                        $failedRecheck = $changing;
+
+                        throw ValidationException::withMessages(['current_password' => 'The current password is wrong.']);
+                    }
+                }
+
+                $settings->setMasterPassword($data['password']);
+                $wizard->markDone('master-password', ['password_set' => true]);
+            }, 3);
+        } catch (ValidationException $exception) {
+            if ($failedRecheck) {
+                DeskAuthThrottle::recordFailure($request);
+            }
+
+            throw $exception;
+        } catch (Throwable $exception) {
+            // Same set DB::transaction retries: a deadlock, a lock wait, a SQLite lock.
+            // Once that budget is spent the caller still gets 422, not 500.
+            if (app(ConcurrencyErrorDetector::class)->causedByConcurrencyError($exception)) {
+                throw ValidationException::withMessages(['password' => 'The password could not be saved. Try again.']);
+            }
+
+            throw $exception;
+        } finally {
+            // set() forgets the cache while the transaction is still open, and the
+            // onboarding read can refill it from those uncommitted rows.
+            Settings::invalidate();
+        }
+
         DeskLogin::grant($request->session());
-        $wizard->markDone('master-password', ['password_set' => true]);
 
         return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => true, 'csrf_token' => $request->session()->token()]);
     }

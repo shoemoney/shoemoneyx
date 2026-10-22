@@ -31,6 +31,24 @@ test('private-network API client sends JSON requests without desk credentials', 
     assert.equal(Object.hasOwn(api, 'token'), false);
 });
 
+test('validation failures keep the field errors with the thrown error', async (t) => {
+    t.mock.method(globalThis, 'fetch', async () => ({
+        ok: false,
+        status: 422,
+        statusText: 'Unprocessable Content',
+        text: async () => JSON.stringify({
+            message: 'The given data was invalid.',
+            errors: { current_password: ['The current password is wrong.'] },
+        }),
+    }));
+
+    await assert.rejects(api.post('/onboarding/master-password', {}), (error) => {
+        assert.equal(error.message, 'The given data was invalid.');
+        assert.deepEqual(error.errors, { current_password: ['The current password is wrong.'] });
+        return true;
+    });
+});
+
 test('request failures still reach page error handling', async (t) => {
     t.mock.method(globalThis, 'fetch', async () => ({
         ok: false,
