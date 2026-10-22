@@ -3,10 +3,13 @@
 # fronts the `web` role's php-fpm over HTTPS. Multi-arch:
 #   docker buildx build --platform linux/arm64,linux/amd64 --target app   -t ghcr.io/shoemoney/shoemoneyx:latest       --push .
 #   docker buildx build --platform linux/arm64,linux/amd64 --target nginx -t ghcr.io/shoemoney/shoemoneyx-nginx:latest --push .
-FROM php:8.4-fpm-bookworm AS base
+FROM php:8.5-fpm-bookworm AS base
+# PHP 8.5 compiles OPcache into the core, so it is not a shared extension anymore.
+# `docker-php-ext-install opcache` configures successfully and then dies in
+# install-modules with `cp: cannot stat 'modules/*'` because no opcache.so is built.
 RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99qemu \
     && apt-get update && apt-get install -y --no-install-recommends git unzip libzip-dev libsodium-dev libicu-dev libgmp-dev \
-    && docker-php-ext-install -j1 pdo_mysql bcmath sodium intl zip pcntl opcache gmp \
+    && docker-php-ext-install -j1 pdo_mysql bcmath sodium intl zip pcntl gmp \
     && pecl install redis && docker-php-ext-enable redis \
     && rm -rf /var/lib/apt/lists/*
 # opcache on for CLI too: backtests are hot loops over the same classes, and this base now also
