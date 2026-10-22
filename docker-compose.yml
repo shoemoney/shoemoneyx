@@ -60,7 +60,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-shoemoneyx}
 
   mariadb:
-    image: mariadb:11
+    image: mariadb:13
     restart: unless-stopped
     environment:
       MARIADB_RANDOM_ROOT_PASSWORD: "yes"
