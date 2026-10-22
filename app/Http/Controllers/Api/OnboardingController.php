@@ -21,6 +21,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 /**
  * First-run wizard: no key -> paper trading, in under five minutes. Each step but
@@ -88,9 +89,14 @@ class OnboardingController extends Controller
         // The password row and the onboarding row commit together. A second
         // request waits on the locked hash and has to prove the current password
         // again, so two tabs cannot both accept the old one. The session rotates
-        // only after that commit.
+        // only after that commit. Two first-time inserts can deadlock, because
+        // there is no row to lock yet: retry, and if it never clears answer 422.
+        // The failed recheck is counted only after that rollback. The rate
+        // limiter writes on this same connection, so a hit inside the
+        // transaction would disappear with it.
+        $failedRecheck = false;
         try {
-            DB::transaction(function () use ($settings, $wizard, $data, $changing, $request): void {
+            DB::transaction(function () use ($settings, $wizard, $data, $changing, &$failedRecheck): void {
                 $passwordRow = Setting::query()->where('key', 'master_password')->lockForUpdate()->first();
                 Setting::query()->where('key', 'onboarding_state')->lockForUpdate()->first();
 
@@ -101,14 +107,12 @@ class OnboardingController extends Controller
                     if ($hasStored) {
                         try {
                             $matches = Hash::check((string) ($data['current_password'] ?? ''), $stored);
-                        } catch (\Throwable) {
+                        } catch (Throwable) {
                             $matches = false;
                         }
                     }
                     if (! $matches) {
-                        if ($changing) {
-                            DeskAuthThrottle::recordFailure($request);
-                        }
+                        $failedRecheck = $changing;
 
                         throw ValidationException::withMessages(['current_password' => 'The current password is wrong.']);
                     }
@@ -116,7 +120,19 @@ class OnboardingController extends Controller
 
                 $settings->setMasterPassword($data['password']);
                 $wizard->markDone('master-password', ['password_set' => true]);
-            });
+            }, 3);
+        } catch (ValidationException $exception) {
+            if ($failedRecheck) {
+                DeskAuthThrottle::recordFailure($request);
+            }
+
+            throw $exception;
+        } catch (Throwable $exception) {
+            if ($this->deadlocked($exception)) {
+                throw ValidationException::withMessages(['password' => 'The password could not be saved. Try again.']);
+            }
+
+            throw $exception;
         } finally {
             // set() forgets the cache while the transaction is still open, and the
             // onboarding read can refill it from those uncommitted rows.
@@ -126,6 +142,23 @@ class OnboardingController extends Controller
         DeskLogin::grant($request->session());
 
         return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => true, 'csrf_token' => $request->session()->token()]);
+    }
+
+    private function deadlocked(Throwable $exception): bool
+    {
+        $current = $exception;
+        while ($current !== null) {
+            $message = $current->getMessage();
+            if (str_contains($message, 'Deadlock found when trying to get lock')
+                || str_contains($message, 'deadlock detected')
+                || str_contains($message, 'has been chosen as the deadlock victim')
+                || (string) $current->getCode() === '40001') {
+                return true;
+            }
+            $current = $current->getPrevious();
+        }
+
+        return false;
     }
 
     private function openrouter(Request $request, OnboardingWizard $wizard): JsonResponse

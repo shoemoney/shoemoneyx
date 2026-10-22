@@ -4,14 +4,20 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Desk\DeskAuthThrottle;
 use App\Desk\DeskLogin;
 use App\Desk\Onboarding\OnboardingWizard;
 use App\Desk\Settings;
 use App\Models\Setting;
+use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
+use PDOException;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -163,6 +169,124 @@ class MasterPasswordTest extends TestCase
         $this->assertFalse(app(Settings::class)->verifyMasterPassword($changed));
         $this->assertSame($token, session()->token());
         $this->assertTrue(DeskLogin::check(app('session.store')));
+    }
+
+    public function test_a_first_setup_deadlock_retries_and_the_loser_gets_a_422(): void
+    {
+        config(['desk.master_password' => '']);
+        $this->releaseOuterTransaction();
+
+        $chosen = 'my-own-desk-password';
+        $winner = 'the-other-setup-password';
+        $deadlocks = 0;
+        $planted = false;
+
+        Setting::creating(function (Setting $setting) use (&$deadlocks, &$planted): void {
+            if ($setting->key !== 'master_password' || $planted) {
+                return;
+            }
+            $deadlocks++;
+            throw $this->deadlock();
+        });
+        Event::listen(TransactionRolledBack::class, function () use (&$planted, $winner): void {
+            if ($planted) {
+                return;
+            }
+            $planted = true;
+            Setting::create(['key' => 'master_password', 'value' => Hash::make($winner)]);
+        });
+
+        try {
+            $this->postJson('/api/onboarding/master-password', [
+                'password' => $chosen,
+                'password_confirmation' => $chosen,
+            ])->assertStatus(422)->assertJsonValidationErrors('current_password');
+        } finally {
+            Setting::flushEventListeners();
+            Event::forget(TransactionRolledBack::class);
+        }
+
+        $this->assertSame(1, $deadlocks, 'the loser should retry once it has seen the other setup commit');
+        $this->assertTrue($planted);
+        $this->assertFalse(app(Settings::class)->verifyMasterPassword($chosen));
+        $this->assertTrue(app(Settings::class)->verifyMasterPassword($winner));
+    }
+
+    public function test_a_first_setup_deadlock_that_never_clears_is_a_422(): void
+    {
+        config(['desk.master_password' => '']);
+        $this->releaseOuterTransaction();
+
+        $deadlocks = 0;
+        Setting::creating(function (Setting $setting) use (&$deadlocks): void {
+            if ($setting->key !== 'master_password') {
+                return;
+            }
+            $deadlocks++;
+            throw $this->deadlock();
+        });
+
+        try {
+            $this->postJson('/api/onboarding/master-password', [
+                'password' => 'my-own-desk-password',
+                'password_confirmation' => 'my-own-desk-password',
+            ])->assertStatus(422)->assertJsonValidationErrors('password');
+        } finally {
+            Setting::flushEventListeners();
+        }
+
+        $this->assertSame(3, $deadlocks, 'a stuck deadlock should use the retry budget, then still answer 422');
+        $this->assertNull(Setting::find('master_password'));
+    }
+
+    public function test_a_failed_locked_recheck_still_counts_after_the_transaction_rolls_back(): void
+    {
+        config(['cache.default' => 'database']);
+        $this->ownerPassword();
+        $this->post('/login', ['password' => self::OWNER])->assertRedirect('/');
+        $token = session()->token();
+        $changed = 'changed-desk-password';
+        $winner = 'committed-by-the-other-tab';
+
+        $row = Setting::find('master_password');
+        $stale = $row->value;
+        $row->value = Hash::make($winner);
+        $row->save();
+
+        RateLimiter::clear('desk-auth-failures:127.0.0.1');
+
+        for ($i = 0; $i < DeskAuthThrottle::MAX_FAILURES; $i++) {
+            Cache::store('database')->put('desk:settings', ['master_password' => $stale], 60);
+
+            $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])->postJson('/api/onboarding/master-password', [
+                'current_password' => self::OWNER,
+                'password' => $changed,
+                'password_confirmation' => $changed,
+            ], ['X-CSRF-TOKEN' => $token])->assertStatus(422)->assertJsonValidationErrors('current_password');
+        }
+
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])->postJson('/api/onboarding/master-password', [
+            'current_password' => $winner,
+            'password' => $changed,
+            'password_confirmation' => $changed,
+        ], ['X-CSRF-TOKEN' => $token, 'X-Desk-Token' => $winner])->assertStatus(429);
+
+        $this->assertTrue(app(Settings::class)->verifyMasterPassword($winner));
+        $this->assertFalse(app(Settings::class)->verifyMasterPassword($changed));
+    }
+
+    /** The suite wraps each test in a transaction, and Laravel will not retry a nested deadlock. */
+    private function releaseOuterTransaction(): void
+    {
+        $connection = DB::connection();
+        while ($connection->transactionLevel() > 0) {
+            $connection->commit();
+        }
+    }
+
+    private function deadlock(): PDOException
+    {
+        return new PDOException('SQLSTATE[40001]: Serialization failure: 1213 Deadlock found when trying to get lock; try restarting transaction', 40001);
     }
 
     public function test_logout_revokes_page_and_api_access(): void
