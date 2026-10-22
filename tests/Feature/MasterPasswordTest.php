@@ -104,6 +104,18 @@ class MasterPasswordTest extends TestCase
         $stale = session()->token();
         $changed = 'changed-desk-password';
 
+        // The owner's password is exact. A space or a different case is not the current password.
+        foreach ([' '.self::OWNER, self::OWNER.' ', strtoupper(self::OWNER)] as $variant) {
+            $this->postJson('/api/onboarding/master-password', [
+                'current_password' => $variant,
+                'password' => $changed,
+                'password_confirmation' => $changed,
+            ], ['X-CSRF-TOKEN' => $stale])
+                ->assertStatus(422)
+                ->assertJsonValidationErrors('current_password');
+        }
+        $this->assertTrue(app(Settings::class)->verifyMasterPassword(self::OWNER));
+
         $fresh = $this->postJson('/api/onboarding/master-password', [
             'current_password' => self::OWNER,
             'password' => $changed,
@@ -122,6 +134,35 @@ class MasterPasswordTest extends TestCase
         $this->putJson('/api/settings', ['key' => 'mode', 'value' => 'paper'], ['X-CSRF-TOKEN' => $fresh])
             ->assertOk()
             ->assertJson(['ok' => true, 'key' => 'mode', 'value' => 'paper']);
+    }
+
+    public function test_a_failed_onboarding_write_rolls_the_password_back_and_keeps_the_session(): void
+    {
+        $this->ownerPassword();
+        $this->post('/login', ['password' => self::OWNER])->assertRedirect('/');
+        $token = session()->token();
+        $changed = 'changed-desk-password';
+
+        Setting::updating(function (Setting $setting): void {
+            if ($setting->key === 'onboarding_state') {
+                throw new \RuntimeException('onboarding write failed');
+            }
+        });
+
+        try {
+            $this->postJson('/api/onboarding/master-password', [
+                'current_password' => self::OWNER,
+                'password' => $changed,
+                'password_confirmation' => $changed,
+            ], ['X-CSRF-TOKEN' => $token])->assertStatus(500);
+        } finally {
+            Setting::flushEventListeners();
+        }
+
+        $this->assertTrue(app(Settings::class)->verifyMasterPassword(self::OWNER));
+        $this->assertFalse(app(Settings::class)->verifyMasterPassword($changed));
+        $this->assertSame($token, session()->token());
+        $this->assertTrue(DeskLogin::check(app('session.store')));
     }
 
     public function test_logout_revokes_page_and_api_access(): void

@@ -17,7 +17,7 @@ function setup({ api, publicDemo = false }) {
         'watch',
         'api',
         'publicDemo',
-        source + '\nreturn { currentPassword, newPassword, confirmPassword, passwordBusy, passwordError, canChangePassword, passwordTooShort, passwordMismatch, passwordTooLong, submitPasswordChange, msg, error };',
+        source + '\nreturn { currentPassword, newPassword, confirmPassword, passwordBusy, passwordError, canChangePassword, passwordTooShort, passwordMismatch, passwordTooLong, submitPasswordChange, save, reset, act, msg, error };',
     );
     const scope = effectScope();
     const state = scope.run(() => create(
@@ -65,6 +65,15 @@ test('settings renders a change-password panel for the onboarding endpoint', () 
     assert.match(component, /autocomplete="new-password"/);
     assert.match(component, /\/onboarding\/master-password/);
     assert.match(component, /csrf_token/);
+    assert.match(component, /id="rc-password-short"/);
+    assert.match(component, /id="rc-password-long"/);
+    assert.match(component, /id="rc-password-mismatch"/);
+    assert.match(component, /:aria-invalid="passwordTooShort \|\| passwordTooLong \|\| passwordMismatch \|\| undefined"/);
+    assert.match(component, /:aria-describedby="newPasswordDescribedBy"/);
+    assert.match(component, /:aria-invalid="passwordMismatch \|\| undefined"/);
+    assert.match(component, /:aria-describedby="passwordMismatch \? 'rc-password-mismatch' : undefined"/);
+    assert.match(component, /:disabled="publicDemo \|\| passwordBusy" @click="save\('mode', 'paper'\)/);
+    assert.match(component, /:disabled="publicDemo \|\| passwordBusy" @click="act\('start'\)/);
     assert.equal((component.match(/type="password"/g) || []).length >= 4, true);
 });
 
@@ -189,6 +198,23 @@ test('client-side password problems never hit the network', async (t) => {
     assert.equal(new TextEncoder().encode(tooManyBytes).length > 72, true);
     await state.submitPasswordChange();
 
+    const sixEmoji = '😀'.repeat(6);
+    assert.equal(sixEmoji.length, 12);
+    assert.equal([...sixEmoji].length, 6);
+    state.newPassword.value = sixEmoji;
+    state.confirmPassword.value = sixEmoji;
+    assert.equal(state.passwordTooShort.value, true);
+    assert.equal(state.canChangePassword.value, false);
+    await state.submitPasswordChange();
+
+    const twelveEmoji = '😀'.repeat(12);
+    assert.equal([...twelveEmoji].length, 12);
+    assert.equal(new TextEncoder().encode(twelveEmoji).length <= 72, true);
+    state.newPassword.value = twelveEmoji;
+    state.confirmPassword.value = twelveEmoji;
+    assert.equal(state.passwordTooShort.value, false);
+    assert.equal(state.canChangePassword.value, true);
+
     const maxBytes = 'é'.repeat(36);
     state.newPassword.value = maxBytes;
     state.confirmPassword.value = maxBytes;
@@ -201,6 +227,78 @@ test('client-side password problems never hit the network', async (t) => {
     assert.equal(meta.content, 'nope');
     assert.equal(state.msg.value, 'master password changed');
     assert.equal(state.passwordError.value, '');
+});
+
+test('a field validation error is shown instead of the generic summary', async (t) => {
+    const { document } = passwordDocument();
+    globalThis.document = document;
+    t.after(() => { delete globalThis.document; });
+    const api = {
+        async post() {
+            const error = new Error('The given data was invalid.');
+            error.errors = {
+                current_password: ['The current password is wrong.'],
+                password: ['Choose a password of at least 12 characters.'],
+            };
+            throw error;
+        },
+    };
+    const { state, stop } = setup({ api });
+    t.after(stop);
+    validFields(state);
+
+    await state.submitPasswordChange();
+
+    assert.equal(state.passwordError.value, 'The current password is wrong. Choose a password of at least 12 characters.');
+    assert.equal(state.currentPassword.value, 'current-password-1');
+    assert.equal(state.msg.value, '');
+});
+
+test('other settings writes wait until the new csrf token is installed', async (t) => {
+    const calls = [];
+    let release;
+    const { meta, document } = passwordDocument();
+    globalThis.document = document;
+    t.after(() => { delete globalThis.document; });
+    const api = {
+        async post(url) {
+            calls.push(['post', url, meta.content]);
+            if (url === '/onboarding/master-password') {
+                await new Promise((resolve) => { release = resolve; });
+                return { ok: true, csrf_token: 'fresh-token' };
+            }
+            return { ok: true };
+        },
+        async put(url, body) {
+            calls.push(['put', url, meta.content, body]);
+            return { ok: true };
+        },
+        async del(url) {
+            calls.push(['del', url, meta.content]);
+        },
+        async get() {
+            calls.push(['get', meta.content]);
+            return { params: {}, overrides: {}, mode: 'paper', strategy: 'mr', strategies: [] };
+        },
+    };
+    const { state, stop } = setup({ api });
+    t.after(stop);
+    validFields(state);
+
+    const pending = state.submitPasswordChange();
+    assert.equal(state.passwordBusy.value, true);
+    await state.save('mode', 'paper');
+    await state.reset('mode');
+    await state.act('stop');
+    assert.deepEqual(calls, [['post', '/onboarding/master-password', 'stale-token']]);
+
+    release();
+    await pending;
+
+    assert.equal(meta.content, 'fresh-token');
+    assert.equal(state.passwordBusy.value, false);
+    await state.save('mode', 'paper');
+    assert.deepEqual(calls.at(-2), ['put', '/settings', 'fresh-token', { key: 'mode', value: 'paper' }]);
 });
 
 test('the public demo cannot submit a password change', async (t) => {
