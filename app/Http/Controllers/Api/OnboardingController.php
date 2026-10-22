@@ -16,6 +16,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AiConnection;
 use App\Models\Setting;
 use App\Strategies\Sync\StrategySync;
+use Illuminate\Contracts\Database\ConcurrencyErrorDetector;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -128,7 +129,9 @@ class OnboardingController extends Controller
 
             throw $exception;
         } catch (Throwable $exception) {
-            if ($this->deadlocked($exception)) {
+            // Same set DB::transaction retries: a deadlock, a lock wait, a SQLite lock.
+            // Once that budget is spent the caller still gets 422, not 500.
+            if (app(ConcurrencyErrorDetector::class)->causedByConcurrencyError($exception)) {
                 throw ValidationException::withMessages(['password' => 'The password could not be saved. Try again.']);
             }
 
@@ -142,23 +145,6 @@ class OnboardingController extends Controller
         DeskLogin::grant($request->session());
 
         return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => true, 'csrf_token' => $request->session()->token()]);
-    }
-
-    private function deadlocked(Throwable $exception): bool
-    {
-        $current = $exception;
-        while ($current !== null) {
-            $message = $current->getMessage();
-            if (str_contains($message, 'Deadlock found when trying to get lock')
-                || str_contains($message, 'deadlock detected')
-                || str_contains($message, 'has been chosen as the deadlock victim')
-                || (string) $current->getCode() === '40001') {
-                return true;
-            }
-            $current = $current->getPrevious();
-        }
-
-        return false;
     }
 
     private function openrouter(Request $request, OnboardingWizard $wizard): JsonResponse

@@ -239,6 +239,33 @@ class MasterPasswordTest extends TestCase
         $this->assertNull(Setting::find('master_password'));
     }
 
+    public function test_a_lock_wait_that_never_clears_is_a_422(): void
+    {
+        config(['desk.master_password' => '']);
+        $this->releaseOuterTransaction();
+
+        $attempts = 0;
+        Setting::creating(function (Setting $setting) use (&$attempts): void {
+            if ($setting->key !== 'master_password') {
+                return;
+            }
+            $attempts++;
+            throw new PDOException('SQLSTATE[HY000]: General error: 1205 Lock wait timeout exceeded; try restarting transaction');
+        });
+
+        try {
+            $this->postJson('/api/onboarding/master-password', [
+                'password' => 'my-own-desk-password',
+                'password_confirmation' => 'my-own-desk-password',
+            ])->assertStatus(422)->assertJsonValidationErrors('password');
+        } finally {
+            Setting::flushEventListeners();
+        }
+
+        $this->assertSame(3, $attempts, 'a lock wait is the same retry budget as a deadlock, then still 422');
+        $this->assertNull(Setting::find('master_password'));
+    }
+
     public function test_a_failed_locked_recheck_still_counts_after_the_transaction_rolls_back(): void
     {
         config(['cache.default' => 'database']);
