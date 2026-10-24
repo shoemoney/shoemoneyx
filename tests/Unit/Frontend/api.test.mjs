@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 // Importing the client does not require location/localStorage or a desk credential.
-import { api, deskFetch, fmt } from '../../../resources/js/api.js';
+import { api, deskFetch, fmt, updateCsrfToken } from '../../../resources/js/api.js';
 
 test('private-network API client sends JSON requests without desk credentials', async (t) => {
     const calls = [];
@@ -29,6 +29,24 @@ test('private-network API client sends JSON requests without desk credentials', 
     assert.deepEqual(JSON.parse(calls[2].options.body), { key: 'size.kelly_cap_pct', value: '0.04' });
     assert.equal(calls[3].options.body, undefined);
     assert.equal(Object.hasOwn(api, 'token'), false);
+});
+
+test('validation failures keep the field errors with the thrown error', async (t) => {
+    t.mock.method(globalThis, 'fetch', async () => ({
+        ok: false,
+        status: 422,
+        statusText: 'Unprocessable Content',
+        text: async () => JSON.stringify({
+            message: 'The given data was invalid.',
+            errors: { current_password: ['The current password is wrong.'] },
+        }),
+    }));
+
+    await assert.rejects(api.post('/onboarding/master-password', {}), (error) => {
+        assert.equal(error.message, 'The given data was invalid.');
+        assert.deepEqual(error.errors, { current_password: ['The current password is wrong.'] });
+        return true;
+    });
 });
 
 test('request failures still reach page error handling', async (t) => {
@@ -167,4 +185,21 @@ test('fmt keeps the minus sign of real losses under a non-Latin-digit locale', (
     assert.match(fmt.num(-1234.5), /-/);
     assert.doesNotMatch(fmt.num(-0.001), /-/);
     assert.match(fmt.px(-5), /-/);
+});
+
+
+test('rotated CSRF installation rejects missing or malformed tokens without changing the current token', (t) => {
+    const meta = { content: 'existing-token', setAttribute(name, value) { this[name] = value; } };
+    globalThis.document = { querySelector: () => meta };
+    t.after(() => { delete globalThis.document; });
+    for (const value of [null, undefined, '', 123, {}]) {
+        assert.equal(updateCsrfToken(value), false);
+        assert.equal(meta.content, 'existing-token');
+    }
+    assert.equal(updateCsrfToken('replacement-token'), true);
+    assert.equal(meta.content, 'replacement-token');
+    assert.equal(updateCsrfToken('another-token'), true);
+    assert.equal(meta.content, 'another-token');
+    globalThis.document = { querySelector: () => null };
+    assert.equal(updateCsrfToken('unavailable-meta'), false);
 });

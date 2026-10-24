@@ -316,6 +316,11 @@ instance ID once; you'll be asked to choose your own password", paste the ID, an
 set-password screen (new password plus confirmation, 12+ characters). The ID opens nothing else,
 neither in the browser nor as an `X-Desk-Token`, and stops working the moment you set your password.
 
+After onboarding, open **Settings**, then **Master password** to change it. Enter the current
+password, a new password of at least 12 characters and no more than 72 UTF-8 bytes, and matching
+confirmation. A successful change keeps this browser signed in and signs out other browsers.
+The old password stops authenticating both browser logins and `X-Desk-Token` requests.
+
 For scripting, `test-boot.sh` retrieves the root-only credential file over SSH after verifying
 TLS and the first-login page, then keeps disposable credentials in private files. Avoid printing
 that file or passing credentials in command arguments or logs. It contains the URL, one-time

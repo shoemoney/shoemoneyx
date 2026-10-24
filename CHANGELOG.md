@@ -6,6 +6,8 @@
   requested host, including existing sessions and header-based password setup.
 - Verify owner passwords without bcrypt suffix truncation, make concurrent
   password changes atomic, and prevent CLI reads of password material.
+- Add a Settings form for changing the master password after onboarding, with
+  current-password verification, field errors and immediate CSRF-token refresh.
 - Exercise browser password setup, rotation, session and token revocation, CSRF
   and SDK tool execution against disposable local and AWS-style test profiles.
 - Run the strategy agent through the pinned PHP LangChain/LangGraph SDK while
@@ -16,6 +18,8 @@
   same immutable strategy version.
 - Pin position management to its execution venue and preserve reconciled fills
   without changing positions belonging to a different venue.
+- Preserve the order-intent identifier when a sell result includes dust, so a
+  booked fill is resolved before later reconciliation passes.
 - Serialize cycle lock ownership and heartbeat updates across restarts; recover
   stale backtests using primary-key locks and a fresh heartbeat check.
 - Keep cycle heartbeats current during scanning and reconciliation, stop new

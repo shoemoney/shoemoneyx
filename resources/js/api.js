@@ -10,12 +10,23 @@ export function deskHeaders(extra = {}) {
     return csrf ? { ...extra, 'X-CSRF-TOKEN': csrf } : { ...extra };
 }
 
+// Install a rotated session token before the next shared API request.
+export function updateCsrfToken(token) {
+    if (typeof token !== 'string' || token === '') return false;
+    const meta = globalThis.document?.querySelector?.('meta[name="csrf-token"]');
+    if (!meta) return false;
+    meta.content = token;
+    meta.setAttribute?.('content', token);
+    return true;
+}
+
 export class ApiError extends Error {
     constructor(message, { status, data } = {}) {
         super(message);
         this.name = 'ApiError';
         this.status = status;
         this.data = data;
+        if (data?.errors && typeof data.errors === 'object') this.errors = data.errors;
     }
 }
 
