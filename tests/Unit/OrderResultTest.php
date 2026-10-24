@@ -10,6 +10,29 @@ use Tests\TestCase;
 /** Round-4 review, finding 1: ok() is the one boundary every Desk booking path trusts. */
 class OrderResultTest extends TestCase
 {
+    public function test_with_dust_preserves_the_live_intent_and_all_other_fields_without_mutating_the_original(): void
+    {
+        $ledgerWrites = 0;
+        $ledgerWrite = function () use (&$ledgerWrites): void {
+            $ledgerWrites++;
+        };
+        $original = new OrderResult('filled', 12.0, 11.928, 0.12, 100.0, 100.0, 0.072,
+            partial: true, venueOrderId: 'ord-1', raw: ['client_order_id' => 'client-1'],
+            note: 'venue fill', ledgerWrite: $ledgerWrite, basisRecovered: true, dustQty: 0.001);
+        $original->intentId = 123;
+        $before = get_object_vars($original);
+
+        $withDust = $original->withDust(0.0034);
+
+        $this->assertNotSame($original, $withDust);
+        $this->assertSame(123, $withDust->intentId, 'the desk must still be able to resolve the live intent when booking the fill');
+        $this->assertSame(array_replace($before, ['dustQty' => 0.0034]), get_object_vars($withDust));
+        $this->assertSame($before, get_object_vars($original));
+        $this->assertSame(0, $ledgerWrites, 'copying a result must not run its deferred ledger write');
+        $withDust->writeLedger();
+        $this->assertSame(1, $ledgerWrites, 'the copy retains the exact deferred ledger closure');
+    }
+
     public function test_ok_is_true_for_a_normal_filled_result(): void
     {
         $r = new OrderResult('filled', 200.0, 200.0, 2.0, 100.0, 100.0, 1.2);

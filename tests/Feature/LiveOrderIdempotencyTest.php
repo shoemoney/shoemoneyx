@@ -15,6 +15,7 @@ use App\Models\DeskEvent;
 use App\Models\Fill;
 use App\Models\OrderIntent;
 use App\Models\Position;
+use App\Models\Product;
 use ccxt\DuplicateOrderId;
 use ccxt\InsufficientFunds;
 use ccxt\RequestTimeout;
@@ -342,6 +343,46 @@ class LiveOrderIdempotencyTest extends TestCase
     }
 
     // ------------------------------------------------------------------ spot exit
+
+    public function test_a_live_sell_with_a_dust_tail_resolves_its_intent_and_reconcile_never_books_it_twice(): void
+    {
+        Product::create([
+            'product_id' => 'BTC-USD', 'base_currency' => 'BTC', 'quote_currency' => 'USD',
+            'base_increment' => '0.01', 'base_min_size' => '0.01',
+        ]);
+        $desk = app(Desk::class);
+        $executor = $this->spot();
+        $position = $this->livePosition(['quantity' => 0.1234, 'entry_usd' => 12.34]);
+
+        // The real executor sells 0.12 and attaches the unsellable 0.0034 tail to its terminal result.
+        $fill = $desk->close($position, 'stop', 100.0, $executor);
+
+        $this->assertSame('filled', $fill->status);
+        $this->assertEqualsWithDelta(0.12, (float) $fill->filled_qty, 1e-9);
+        $this->assertSame('closed', $position->fresh()->status, 'the executor reported the tail so the desk wrote it off');
+        $this->assertEqualsWithDelta(0.0, (float) $position->fresh()->quantity, 1e-9);
+        $intent = OrderIntent::sole();
+        $this->assertSame('resolved', $intent->status, 'dust decoration must preserve the intent resolved in the booking transaction');
+        $this->assertSame('filled', $intent->outcome);
+        $this->assertSame(0, OrderIntent::pending()->count());
+        $this->assertSame($intent->client_order_id, $fill->raw['client_order_id']);
+        $this->assertSame(1, Fill::count());
+        $bookedPosition = $position->fresh()->getAttributes();
+        $bookedFill = $fill->fresh()->getAttributes();
+
+        $strategy = new FixedTicketStrategy(100.0);
+        $desk->reconcileLiveOrders($strategy, $executor);
+        $desk->reconcileLiveOrders($strategy, $executor);
+
+        $this->assertSame(1, Fill::count(), 'the already-booked live sell must never be applied again');
+        $this->assertSame($bookedPosition, $position->fresh()->getAttributes());
+        $this->assertSame($bookedFill, $fill->fresh()->getAttributes());
+        $this->assertSame('resolved', $intent->refresh()->status);
+        $this->assertSame(1, OrderIntent::count());
+        $this->assertCount(1, $this->venue->attempts, 'close and reconciliation sent exactly one sell');
+        $this->assertSame(1, $this->venue->landedCount());
+        $this->assertSame('SELL', $this->venue->attempts[0]['side']);
+    }
 
     public function test_a_failed_readback_on_close_does_not_sell_again_and_the_replay_books_the_close(): void
     {

@@ -101,7 +101,7 @@ const SWITCH_COPY = {
     strategy: {
         title: 'Switch strategy',
         label: 'Active strategy',
-        body: () => ['New entries follow the new strategy\'s rules right away.', 'Positions that are already open are managed with the new strategy\'s exit rules, so their original stops may change.'],
+        body: () => ['New entries follow the new strategy\'s rules right away.', 'Existing positions use their recorded opening strategy and saved version for exit rules. Legacy positions with missing or unrecognized strategy information fall back to the active strategy.'],
     },
     exchange: {
         title: 'Switch exchange',

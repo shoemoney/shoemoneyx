@@ -46,8 +46,11 @@ final class OrderResult
 
     public function withDust(float $dustQty): self
     {
-        return new self($this->status, $this->requestedUsd, $this->filledUsd, $this->filledQty, $this->decisionPrice, $this->fillPrice, $this->feeUsd,
+        $result = new self($this->status, $this->requestedUsd, $this->filledUsd, $this->filledQty, $this->decisionPrice, $this->fillPrice, $this->feeUsd,
             $this->partial, $this->venueOrderId, $this->raw, $this->note, $this->ledgerWrite, $this->basisRecovered, $dustQty);
+        $result->intentId = $this->intentId;
+
+        return $result;
     }
 
     /**
