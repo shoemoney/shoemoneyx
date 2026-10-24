@@ -36,7 +36,29 @@ final class OrderResult
          * Position.pnl_usd. slippageBps() refuses to report a number when this is true.
          */
         public readonly bool $basisRecovered = false,
+        /**
+         * Base quantity the venue can never sell (a tail below the product's increment, or a whole
+         * holding below its minimum order size). The desk writes it off instead of leaving the position
+         * open with a remainder no order can clear.
+         */
+        public readonly float $dustQty = 0.0,
     ) {}
+
+    public function withDust(float $dustQty): self
+    {
+        $result = new self($this->status, $this->requestedUsd, $this->filledUsd, $this->filledQty, $this->decisionPrice, $this->fillPrice, $this->feeUsd,
+            $this->partial, $this->venueOrderId, $this->raw, $this->note, $this->ledgerWrite, $this->basisRecovered, $dustQty);
+        $result->intentId = $this->intentId;
+
+        return $result;
+    }
+
+    /**
+     * The live OrderIntent behind this result when it is terminal but not yet booked. The executor never
+     * resolves it: the desk does, inside the transaction that books the fill, so a failed booking leaves
+     * the intent pending for reconcile instead of an unbooked live order nobody can see.
+     */
+    public ?int $intentId = null;
 
     /**
      * A degraded fill (filled_size > 0 but no usable price/value from the venue — seen on
@@ -100,6 +122,8 @@ final class OrderResult
         }
     }
 
+    private const MAX_SLIPPAGE_BPS = 99_999_999.99;
+
     public function slippageBps(string $side): ?float
     {
         if ($this->basisRecovered || ! $this->fillPrice || $this->decisionPrice <= 0) {
@@ -107,7 +131,11 @@ final class OrderResult
         }
         $bps = ($this->fillPrice / $this->decisionPrice - 1) * 10_000;
 
-        return round($side === 'BUY' ? $bps : -$bps, 2);   // positive = worse than decision
+        $bps = round($side === 'BUY' ? $bps : -$bps, 2);   // positive = worse than decision
+
+        // fills.slippage_bps is decimal(10,2). A nonsense decision price (stale/placeholder tick) must not
+        // overflow it: strict MariaDB aborts the insert, losing the record of an order that already executed.
+        return max(-self::MAX_SLIPPAGE_BPS, min(self::MAX_SLIPPAGE_BPS, $bps));
     }
 
     public function feePct(): float

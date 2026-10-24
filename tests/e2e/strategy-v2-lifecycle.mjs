@@ -116,9 +116,10 @@ async function onboardAndLogin() {
   await page.goto(BASE + '/', { waitUntil: 'networkidle' });
   check('root redirects to onboarding on a fresh desk', page.url().endsWith('/onboarding'), page.url());
 
-  const pw = page.locator('input[placeholder*="master password"]');
+  const pw = page.getByLabel('New password', { exact: true });
   await pw.waitFor({ timeout: 15000 });
   await pw.fill(PASSWORD);
+  await page.getByLabel('Confirm new password', { exact: true }).fill(PASSWORD);
   await page.locator('button:has-text("Continue")').first().click();
   const keyInput = page.locator('input[placeholder="sk-or-v1-…"]');
   await keyInput.waitFor({ timeout: 15000 });

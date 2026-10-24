@@ -9,7 +9,6 @@ use App\Ai\CurrentUser;
 use App\Ai\Exceptions\AiGateException;
 use App\Ai\Gate;
 use App\Desk\Backtester;
-use App\Desk\Strategies\BacktestVersionPin;
 use App\Http\Controllers\Api\BacktestController;
 use App\Models\Backtest;
 use App\Models\Product;
@@ -65,24 +64,28 @@ class AgentBacktestLoop implements ShouldQueue
             return;
         }
 
-        $this->review($plugin, $version, $this->runBacktest($plugin, $bt, $store), $client, $gate);
+        $this->review($plugin, $version, $this->runBacktest($plugin, $version, $bt, $store), $client, $gate);
     }
 
     /** Built exactly the way StrategyPluginController::backtest() builds it, then run inline. */
-    private function runBacktest(StrategyPlugin $plugin, Backtester $bt, CandleStore $store): Backtest
+    private function runBacktest(StrategyPlugin $plugin, StrategyPluginVersion $version, Backtester $bt, CandleStore $store): Backtest
     {
-        $suggest = $plugin->definition['suggest'] ?? [];
+        $definition = $version->definition;
+        $suggest = $definition['suggest'] ?? [];
         $products = $suggest['products'] ?? Product::tracked()->orderByDesc('volume_24h_usd')->limit(20)->pluck('product_id')->all();
         $to = now()->startOfHour();
         $from = $to->copy()->subDays((int) ($suggest['days'] ?? config('ai.loop.days', 7)));
 
-        $rawParams = isset($plugin->definition['schema_version']) ? [] : ($plugin->definition['params'] ?? []);
+        $rawParams = isset($definition['schema_version']) ? [] : ($definition['params'] ?? []);
         $overrides = array_replace_recursive($rawParams, ['json' => ['plugin_key' => $plugin->key]]);
-        [$versionId, $params] = BacktestVersionPin::resolve('json', BacktestController::normalizeOverrides($overrides));
+        $params = BacktestController::normalizeOverrides($overrides);
+        // Do not resolve the plugin's mutable current_version a second time: an edit
+        // between the interval check and this write must not change this tick's input.
+        $params['json.plugin_version_id'] = $version->id;
 
         $row = Backtest::create([
             'strategy' => 'json',
-            'strategy_plugin_version_id' => $versionId,
+            'strategy_plugin_version_id' => $version->id,
             'products' => array_map('strtoupper', $products),
             'from' => $from,
             'to' => $to,
@@ -111,7 +114,7 @@ class AgentBacktestLoop implements ShouldQueue
         try {
             $reply = $client->chat([
                 ['role' => 'system', 'content' => self::SYSTEM_PROMPT],
-                ['role' => 'user', 'content' => self::brief($plugin, $row)],
+                ['role' => 'user', 'content' => self::brief($plugin, $version, $row)],
             ]);
         } catch (AiGateException) {
             return;   // over budget or suspended — this tick is done, the next one retries
@@ -137,12 +140,12 @@ class AgentBacktestLoop implements ShouldQueue
         ]);
     }
 
-    private static function brief(StrategyPlugin $plugin, Backtest $row): string
+    private static function brief(StrategyPlugin $plugin, StrategyPluginVersion $version, Backtest $row): string
     {
         $trades = is_array($row->trades) ? $row->trades : [];
 
         return implode("\n", [
-            'Strategy: '.$plugin->key.' v'.$plugin->current_version,
+            'Strategy: '.$plugin->key.' v'.$version->version,
             'Window: '.$row->from?->toDateString().' to '.$row->to?->toDateString(),
             'Products: '.implode(', ', $row->products ?? []),
             'Starting cash: '.$row->starting_cash.'; ending equity: '.($row->ending_equity ?? 'unknown'),

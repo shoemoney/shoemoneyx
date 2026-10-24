@@ -87,4 +87,17 @@ class JsonRunnerV2SizingLiquidityTest extends TestCase
         $this->assertFalse($d->zero());
         $this->assertEqualsWithDelta(3500.0, $d->dollars, 1.0);
     }
+
+    public function test_a_v2_ticket_is_never_larger_than_free_cash(): void
+    {
+        $this->plugin('v2-free-cash', ['size' => ['mode' => 'usd', 'value' => 500]]);
+        $ctx = new DeskContext(['json' => ['plugin_key' => 'v2-free-cash'], 'size' => ['kelly_cap_pct' => 1.0]], 'paper', false, [], new \DateTimeImmutable('2026-09-19 12:00:00', new \DateTimeZone('UTC')));
+        // $120 cash, 20% locked: free cash is $96. Kelly (100% of equity) would allow $120 and liquidity $3,500.
+        $bank = new Bank(120, 0, 0.2, 0, 0);
+        $v = Verdict::pass($this->candidate(), ['test'], [], 'ok');
+
+        $d = (new JsonPluginStrategy)->size($v, $bank, $ctx);
+
+        $this->assertEqualsWithDelta(96.0, $d->dollars, 0.01);
+    }
 }

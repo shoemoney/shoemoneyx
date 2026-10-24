@@ -27,6 +27,8 @@ namespace App\Desk\Strategies;
  */
 final class SchemaMigrator
 {
+    public const MAX_DEFINITION_BYTES = 65536;
+
     public const CURRENT_VERSION = 1;
 
     public const V2_VERSION = 2;
@@ -39,6 +41,11 @@ final class SchemaMigrator
      */
     public static function validateForSave(array $definition): array
     {
+        $json = json_encode($definition);
+        if ($json === false || strlen($json) > self::MAX_DEFINITION_BYTES) {
+            return ['valid' => false, 'errors' => [['path' => '', 'message' => 'definition must be valid UTF-8 JSON of at most 64KB']], 'warnings' => []];
+        }
+
         return isset($definition['schema_version'])
             ? StrategySchemaValidator::validate($definition)
             : JsonPluginValidator::validate($definition);

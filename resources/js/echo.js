@@ -1,6 +1,7 @@
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 import { publicDemo } from './demoMode.js';
+import { deskHeaders } from './api.js';
 import { createDemoEcho } from './demoEcho.js';
 
 window.Pusher = Pusher;
@@ -18,6 +19,19 @@ export const echo = publicDemo ? createDemoEcho() : new Echo({
     wssPort: port,
     forceTLS: scheme === 'https',
     enabledTransports: ['ws', 'wss'],
+    // Read the CSRF token when a channel is authorized, not once at construction: another tab's login rotates it.
+    authorizer: (channel) => ({
+        authorize: (socketId, callback) => {
+            fetch('/broadcasting/auth', {
+                method: 'POST',
+                headers: deskHeaders({ Accept: 'application/json', 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ socket_id: socketId, channel_name: channel.name }),
+            })
+                .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`channel auth ${res.status}`))))
+                .then((data) => callback(null, data))
+                .catch((error) => callback(error, null));
+        },
+    }),
 });
 
 if (!publicDemo && !import.meta.env.VITE_REVERB_APP_KEY) echo.disconnect();

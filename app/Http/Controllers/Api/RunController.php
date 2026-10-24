@@ -17,7 +17,7 @@ class RunController extends Controller
 {
     public function index(Request $request, Desk $desk): JsonResponse
     {
-        return response()->json(DeskRun::where('mode', $request->input('mode', $desk->mode()))->orderByDesc('started_at')->paginate((int) $request->integer('per_page', 25)));
+        return response()->json(DeskRun::where('mode', $request->input('mode', $desk->mode()))->seat($this->seatId($request))->orderByDesc('started_at')->paginate((int) $request->integer('per_page', 25)));
     }
 
     public function show(DeskRun $run): JsonResponse
@@ -25,16 +25,18 @@ class RunController extends Controller
         return response()->json($run->load('candidates', 'fills'));
     }
 
-    public function latest(Desk $desk): JsonResponse
+    public function latest(Request $request, Desk $desk): JsonResponse
     {
-        $run = DeskRun::where('mode', $desk->mode())->orderByDesc('started_at')->first();
+        $run = DeskRun::where('mode', $desk->mode())->seat($this->seatId($request))->orderByDesc('started_at')->first();
 
         return response()->json($run?->load('candidates', 'fills'));
     }
 
-    public function candidates(Request $request): JsonResponse
+    public function candidates(Request $request, Desk $desk): JsonResponse
     {
-        $q = Candidate::orderByDesc('id');
+        $seatId = $this->seatId($request);
+        $mode = $request->input('mode', $desk->mode());
+        $q = Candidate::whereHas('run', fn ($query) => $query->where('mode', $mode)->seat($seatId))->orderByDesc('id');
         if ($v = $request->input('verdict')) {
             $q->where('verdict', $v);
         }
@@ -47,7 +49,14 @@ class RunController extends Controller
 
     public function fills(Request $request, Desk $desk): JsonResponse
     {
-        return response()->json(Fill::where('mode', $request->input('mode', $desk->mode()))->orderByDesc('id')->paginate((int) $request->integer('per_page', 50)));
+        return response()->json(Fill::where('mode', $request->input('mode', $desk->mode()))->seat($this->seatId($request))->orderByDesc('id')->paginate((int) $request->integer('per_page', 50)));
+    }
+
+    private function seatId(Request $request): ?int
+    {
+        $scope = $request->validate(['arena_seat_id' => ['nullable', 'integer', 'min:1', 'exists:arena_seats,id']]);
+
+        return isset($scope['arena_seat_id']) ? (int) $scope['arena_seat_id'] : null;
     }
 
     public function events(Request $request): JsonResponse

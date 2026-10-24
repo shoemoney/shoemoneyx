@@ -72,6 +72,12 @@ trait SubmitsOrdersIdempotently
         return false;
     }
 
+    /** Venues with their own id format override this; the id is stored on the intent and reused on every resend and lookup. */
+    protected function newClientOrderId(): string
+    {
+        return str_replace('-', '', (string) Str::uuid());
+    }
+
     protected function pollAttempts(): int
     {
         return 6;
@@ -111,7 +117,7 @@ trait SubmitsOrdersIdempotently
         } else {
             $intent = OrderIntent::create([
                 'mode' => $this->mode(), 'venue' => $this->orderVenue(), 'sent_at' => now(), 'desk_product_id' => $deskPid, 'venue_product_id' => $venuePid,
-                'method' => $method, 'side' => $side, 'client_order_id' => str_replace('-', '', (string) Str::uuid()),
+                'method' => $method, 'side' => $side, 'client_order_id' => $this->newClientOrderId(),
                 'requested_usd' => $requestedUsd, 'decision_price' => $decisionPrice, 'context' => $context,
             ]);
         }
@@ -122,6 +128,12 @@ trait SubmitsOrdersIdempotently
     private function sendIntent(OrderIntent $intent, float $requestedUsd, float $decisionPrice, \Closure $send): OrderResult
     {
         $intent->forceFill(['sent_at' => now()])->save();
+        // Readback and settlement of an already-submitted intent stay available after ownership loss.
+        // Only a physical entry (re)send is fenced, outside the venue-error catch: losing ownership
+        // must escape to the cycle without resolving a possibly submitted intent as rejected.
+        if (in_array($intent->method, ['buy', 'open_short'], true)) {
+            OrderBudget::assertEntryAllowed();
+        }
         try {
             $create = $send($intent->client_order_id);
         } catch (\Throwable $e) {
@@ -170,7 +182,10 @@ trait SubmitsOrdersIdempotently
         return $this->finish($intent, $create, $order, $requestedUsd, $decisionPrice);
     }
 
-    /** Terminal order -> resolve the intent and report it; anything else stays pending as unknown. */
+    /**
+     * Terminal order -> report it; anything else stays pending as unknown. A terminal order's intent stays
+     * pending too, until the desk resolves it (OrderResult::$intentId) in the same transaction that books it.
+     */
     private function finish(OrderIntent $intent, array $create, ?array $order, float $requestedUsd, float $decisionPrice): OrderResult
     {
         if ($order === null || ! $this->orderTerminal($order)) {
@@ -182,7 +197,7 @@ trait SubmitsOrdersIdempotently
         }
 
         $result = $this->resultFromOrder($intent, $create, $order);
-        $intent->resolve($result->filledQty > 0 ? 'filled' : 'rejected');
+        $result->intentId = $intent->id;
 
         return $result;
     }

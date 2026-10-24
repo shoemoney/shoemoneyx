@@ -1,4 +1,4 @@
-# Hub API contract 🏟️
+# Hub API contract
 
 The desk is single-user. Everything social lives on the hosted hub (`shoemoneyx-hub`). This file is the contract both sides build to. The desk ships a client (`app/Hub/HubClient`); the hub implements these routes. Change this file first, then both sides.
 
@@ -121,7 +121,7 @@ How the desk itself (`app/Hub/*`) wires up against everything above.
 
 **Publishing.** `App\Hub\Publisher::publish(StrategyPlugin $plugin, ?string $version, ?string $changelog, ?int $backtestId)` is the one place "first publish creates the strategy, later publishes push a version" lives — both `StrategyPluginController::publish()` and the `publish_strategy` agent tool call it. It tracks state with two columns: `strategy_plugins.hub_slug` (null until the first successful publish) and `strategy_plugin_versions.published_at`. When `include_backtest` is given it attaches a best-effort `backtest` payload built from `Backtest::stats` (`total_return_pct` → the contract's `return_pct`, `win_rate`, `trades`, `max_drawdown_pct`, `profit_factor` pass through, `days` from `from`/`to`, `assets` from `products`) — only fields it can honestly derive, nothing fabricated.
 
-**Agent tools** (`app/Ai/Tools/`, registered in `ToolRegistry::withDefaults()`): `hub_register` (never echoes the password or token back), `hub_status`, `publish_strategy`. `suggest_share`'s result now carries `action: 'publish'` alongside `plugin_id`/`version`, which is what the Strategy Builder's share-card "Publish" button reads to call `POST /api/strategy-plugins/{id}/publish`.
+**Agent tools** (`app/Ai/Tools/`, registered in `ToolRegistry::withDefaults()`): `hub_register` takes no arguments and directs the user to the Hub connect panel; email, handle, and password are entered only in that panel and never requested through the model conversation. `hub_status` and `publish_strategy` provide account status and publishing guidance. `suggest_share`'s result now carries `action: 'publish'` alongside `plugin_id`/`version`, which is what the Strategy Builder's share-card "Publish" button reads to call `POST /api/strategy-plugins/{id}/publish`.
 
 **Archive import.** `HubArchiveController::import()` validates the fetched definition the same way `StrategyPluginController::store()` does (`StrategySchemaValidator` or `JsonPluginValidator` depending on `schema_version`), then reuses a plugin already linked by `hub_slug` if one exists, or creates one keyed off the hub slug (falling back to `{slug}-hub`, `{slug}-hub-2`, … if that key is already taken locally by an unrelated plugin). It sets `current_version` to the remote version directly (no local re-bump) and writes a version row with changelog `"imported from hub {handle}/{slug}"`.
 

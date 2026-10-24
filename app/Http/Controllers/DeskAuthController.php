@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Desk\BootstrapTls;
 use App\Desk\DeskAuthThrottle;
 use App\Desk\DeskLogin;
 use App\Desk\Settings;
@@ -21,6 +22,9 @@ class DeskAuthController extends Controller
         }
 
         $settings = app(Settings::class);
+        if (BootstrapTls::blocked($request)) {
+            return view('login', ['tlsBlocked' => true]);
+        }
         if (! $settings->hasMasterPassword()) {
             return redirect('/onboarding');
         }
@@ -28,7 +32,7 @@ class DeskAuthController extends Controller
             return redirect('/');
         }
 
-        return view('login');
+        return view('login', ['tlsBlocked' => false]);
     }
 
     public function store(Request $request): RedirectResponse
@@ -37,6 +41,8 @@ class DeskAuthController extends Controller
             return redirect('/');
         }
 
+        abort_if(BootstrapTls::blocked($request), 503, 'Trusted HTTPS is required before first login.');
+
         $request->validate(['password' => 'required|string|max:200']);
 
         if (DeskAuthThrottle::tooManyFailures($request)) {
@@ -44,8 +50,9 @@ class DeskAuthController extends Controller
         }
 
         $settings = app(Settings::class);
+        $credential = $settings->credentialFingerprintSource();
         if ($settings->hasMasterPassword() && $settings->verifyMasterPassword((string) $request->input('password'))) {
-            DeskLogin::grant($request->session());
+            DeskLogin::grant($request->session(), $credential);
 
             // The bootstrap key is one-time: its session can only reach the set-password screen.
             return redirect($settings->needsPasswordSetup() ? '/onboarding' : '/');

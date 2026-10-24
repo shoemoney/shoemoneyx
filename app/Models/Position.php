@@ -17,7 +17,7 @@ class Position extends Model
         return [
             'quantity' => 'float', 'entry_price' => 'float', 'entry_usd' => 'float', 'fees_usd' => 'float',
             'exit_price' => 'float', 'exit_usd' => 'float', 'pnl_usd' => 'float', 'pnl_pct' => 'float', 'realised_usd' => 'float',
-            'peak_price' => 'float', 'last_price' => 'float',
+            'peak_price' => 'float', 'last_price' => 'float', 'arena_seat_id' => 'integer',
             'meta' => 'array', 'opened_at' => 'datetime', 'closed_at' => 'datetime',
         ];
     }

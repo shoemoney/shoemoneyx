@@ -102,6 +102,20 @@ class PaperExecutor implements Executor
         return abs($qty - round($qty / $spec['contract_size']) * $spec['contract_size']) > 1e-9 * max(1.0, $qty);
     }
 
+    /**
+     * Whole-contract flooring can fill less than the requested quantity (a half-trim of 3 contracts asks
+     * for 1.5 and sells 1). The entry cost being released must shrink with the fill, or the margin and
+     * cost basis credited back to the ledger would cover contracts that are still open.
+     */
+    private function filledShare(float $entryUsdShare, float $requestedQty, float $filledQty): float
+    {
+        if ($requestedQty <= 0 || $filledQty >= $requestedQty) {
+            return $entryUsdShare;
+        }
+
+        return $entryUsdShare * ($filledQty / $requestedQty);
+    }
+
     /** Perps enabled and the settings/config flag says to size fills in whole nano contracts. Spot never does. */
     private function wholeContracts(): bool
     {
@@ -120,9 +134,28 @@ class PaperExecutor implements Executor
         return MarginWindow::Overnight->marginRate();
     }
 
+    /**
+     * Entries read the account's cash and then spend it; the per-product mutate lock does not stop two
+     * products from reading the same balance and both spending it. One lock per account (main desk or
+     * seat) makes the check and the ledger write a single step.
+     */
+    private function withCashLock(\Closure $spend): OrderResult
+    {
+        $key = $this->arenaSeatId === null ? 'desk:mutate:paper:cash' : "desk:mutate:paper:cash:seat:{$this->arenaSeatId}";
+
+        return Cache::lock($key, 10)->block(5, $spend);
+    }
+
     public function buy(string $productId, float $usd, float $decisionPrice): OrderResult
     {
+        // Market I/O stays outside the lock: a slow ticker must not eat the lock's lifetime before the ledger write.
         $t = $this->market->ticker($productId, 1);
+
+        return $this->withCashLock(fn () => $this->placeBuy($productId, $usd, $decisionPrice, $t));
+    }
+
+    private function placeBuy(string $productId, float $usd, float $decisionPrice, array $t): OrderResult
+    {
         $ask = $t['best_ask'] > 0 ? $t['best_ask'] : $decisionPrice;
         $slip = (float) $this->settings->get('paper.slippage_bps', 15) / 10_000;
         $fillPrice = $ask * (1 + $slip);
@@ -152,6 +185,7 @@ class PaperExecutor implements Executor
                 return OrderResult::rejected('rejected', $usd, $decisionPrice, sprintf('insufficient margin: need $%.2f, cash $%.2f', $margin + $feeUsd, $cash));
             }
 
+            OrderBudget::assertEntryAllowed();
             PaperLedger::create(['arena_seat_id' => $this->arenaSeatId, 'kind' => 'buy', 'amount' => -($margin + $feeUsd), 'ref' => $productId, 'note' => sprintf('MARGIN %.8f @ %.6f', $qty, $fillPrice)]);
 
             return new OrderResult('filled', $usd, $notional, $qty, $decisionPrice, $fillPrice, $feeUsd, false, 'paper-'.uniqid(), ['margin' => $margin, 'ask' => $ask, 'best_bid' => $t['best_bid'], 'best_ask' => $ask]);
@@ -167,6 +201,7 @@ class PaperExecutor implements Executor
                 return OrderResult::rejected('rejected', $usd, $decisionPrice, 'under one contract');
             }
 
+            OrderBudget::assertEntryAllowed();
             PaperLedger::create(['arena_seat_id' => $this->arenaSeatId, 'kind' => 'buy', 'amount' => -($lot->notional + $lot->feeUsd), 'ref' => $productId, 'note' => sprintf('%.8f @ %.6f', $lot->qty, $fillPrice)]);
 
             return new OrderResult('filled', $usd, $lot->notional, $lot->qty, $decisionPrice, $fillPrice, $lot->feeUsd, false, 'paper-'.uniqid(), ['ask' => $ask, 'best_bid' => $t['best_bid'], 'best_ask' => $ask]);
@@ -175,6 +210,7 @@ class PaperExecutor implements Executor
         $feeUsd = Lot::fee($usd, 0, $rate, $perContract);
         $qty = ($usd - $feeUsd) / $fillPrice;
 
+        OrderBudget::assertEntryAllowed();
         PaperLedger::create(['arena_seat_id' => $this->arenaSeatId, 'kind' => 'buy', 'amount' => -$usd, 'ref' => $productId, 'note' => sprintf('%.8f @ %.6f', $qty, $fillPrice)]);
 
         return new OrderResult('filled', $usd, $usd, $qty, $decisionPrice, $fillPrice, $feeUsd, false, 'paper-'.uniqid(), ['ask' => $ask, 'best_bid' => $t['best_bid'], 'best_ask' => $ask]);
@@ -192,6 +228,8 @@ class PaperExecutor implements Executor
         $wholeContracts = $this->wholeContracts();
         $spec = $wholeContracts ? Perps::spec($productId) : null;
         $lot = Lot::forQty($productId, $qty, $fillPrice, $rate, $perContract, $wholeContracts, $this->legacyFractional($productId, $spec));
+
+        $entryUsdShare = $this->filledShare($entryUsdShare, $qty, $lot->qty);
 
         if ($this->marginEnabled()) {
             $marginBack = $entryUsdShare * $this->initialRate();
@@ -216,6 +254,12 @@ class PaperExecutor implements Executor
             return OrderResult::rejected('rejected', $usd, $decisionPrice, 'shorts need desk.perps.enabled and a perps.map entry for '.$productId);
         }
         $t = $this->market->ticker($productId, 1);
+
+        return $this->withCashLock(fn () => $this->placeShort($productId, $usd, $decisionPrice, $t));
+    }
+
+    private function placeShort(string $productId, float $usd, float $decisionPrice, array $t): OrderResult
+    {
         $bid = $t['best_bid'] > 0 ? $t['best_bid'] : $decisionPrice;
         $slip = (float) $this->settings->get('paper.slippage_bps', 15) / 10_000;
         $fillPrice = $bid * (1 - $slip);          // we hit the bid
@@ -245,6 +289,7 @@ class PaperExecutor implements Executor
                 return OrderResult::rejected('rejected', $usd, $decisionPrice, sprintf('insufficient margin: need $%.2f, cash $%.2f', $margin + $feeUsd, $cash));
             }
 
+            OrderBudget::assertEntryAllowed();
             PaperLedger::create(['arena_seat_id' => $this->arenaSeatId, 'kind' => 'short', 'amount' => -($margin + $feeUsd), 'ref' => $productId, 'note' => sprintf('MARGIN SHORT %.8f @ %.6f', $qty, $fillPrice)]);
 
             return new OrderResult('filled', $usd, $notional, $qty, $decisionPrice, $fillPrice, $feeUsd, false, 'paper-'.uniqid(), ['margin' => $margin, 'bid' => $bid, 'best_bid' => $bid, 'best_ask' => $t['best_ask']]);
@@ -261,6 +306,7 @@ class PaperExecutor implements Executor
             }
 
             // 1× margin model: post the lot's notional as margin, proceeds stay locked at the venue, fee is gone for good.
+            OrderBudget::assertEntryAllowed();
             PaperLedger::create(['arena_seat_id' => $this->arenaSeatId, 'kind' => 'short', 'amount' => -($lot->notional + $lot->feeUsd), 'ref' => $productId, 'note' => sprintf('SHORT %.8f @ %.6f', $lot->qty, $fillPrice)]);
 
             return new OrderResult('filled', $usd, $lot->notional, $lot->qty, $decisionPrice, $fillPrice, $lot->feeUsd, false, 'paper-'.uniqid(), ['bid' => $bid, 'best_bid' => $bid, 'best_ask' => $t['best_ask']]);
@@ -270,6 +316,7 @@ class PaperExecutor implements Executor
         $qty = $usd / $fillPrice;                  // notional sold = gross proceeds = the short's entry_usd
 
         // 1× margin model: post $usd of cash as margin, proceeds stay locked at the venue, fee is gone for good.
+        OrderBudget::assertEntryAllowed();
         PaperLedger::create(['arena_seat_id' => $this->arenaSeatId, 'kind' => 'short', 'amount' => -($usd + $feeUsd), 'ref' => $productId, 'note' => sprintf('SHORT %.8f @ %.6f', $qty, $fillPrice)]);
 
         return new OrderResult('filled', $usd, $usd, $qty, $decisionPrice, $fillPrice, $feeUsd, false, 'paper-'.uniqid(), ['bid' => $bid, 'best_bid' => $bid, 'best_ask' => $t['best_ask']]);
@@ -288,6 +335,8 @@ class PaperExecutor implements Executor
         $spec = $wholeContracts ? Perps::spec($productId) : null;
         $lot = Lot::forQty($productId, $qty, $fillPrice, $rate, $perContract, $wholeContracts, $this->legacyFractional($productId, $spec));
         $cost = $lot->notional + $lot->feeUsd;      // the short's exit_usd
+
+        $entryUsdShare = $this->filledShare($entryUsdShare, $qty, $lot->qty);
 
         if ($this->marginEnabled()) {
             $marginBack = $entryUsdShare * $this->initialRate();

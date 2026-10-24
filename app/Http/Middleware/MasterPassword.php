@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Middleware;
 
+use App\Desk\BootstrapTls;
 use App\Desk\DeskLogin;
 use App\Desk\Settings;
 use Closure;
@@ -24,6 +25,9 @@ class MasterPassword
         }
 
         $settings = app(Settings::class);
+        if (BootstrapTls::blocked($request)) {
+            return redirect('/login');
+        }
         $onboarding = $request->is('onboarding', 'onboarding/*');
 
         if (! $settings->hasMasterPassword()) {

@@ -6,8 +6,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Desk\Desk;
 use App\Desk\Execution\ExecutionModeMismatchException;
-use App\Http\Controllers\Controller;
 use App\Exchange\Contracts\MarketData;
+use App\Http\Controllers\Controller;
 use App\Models\Position;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,8 +16,10 @@ class PositionController extends Controller
 {
     public function index(Request $request, Desk $desk, MarketData $market): JsonResponse
     {
+        $scope = $request->validate(['arena_seat_id' => ['nullable', 'integer', 'min:1', 'exists:arena_seats,id']]);
+        $seatId = isset($scope['arena_seat_id']) ? (int) $scope['arena_seat_id'] : null;
         $status = $request->input('status', 'open');
-        $q = Position::mode($request->input('mode', $desk->mode()))->orderByDesc('opened_at');
+        $q = Position::mode($request->input('mode', $desk->mode()))->seat($seatId)->orderByDesc('opened_at');
         if ($status !== 'all') {
             $q->where('status', $status);
         }

@@ -28,6 +28,8 @@ final class DeskContext
         public readonly bool $backtest = false,
         /** Optional bar source (pid, timeframe, fromUnix, toUnix) => bars; backtests inject preloaded history. */
         private readonly ?\Closure $barsProvider = null,
+        /** The arena seat this context belongs to; null is the main desk's own account. Seat-scoped reads (daily PnL, cooldown) key off it. */
+        public readonly ?int $arenaSeatId = null,
     ) {
         $this->params = $params;
     }
@@ -72,7 +74,7 @@ final class DeskContext
 
     public function withParams(array $overrides): self
     {
-        return new self(array_replace_recursive($this->params, $overrides), $this->mode, $this->degraded, $this->openPositions, $this->now, $this->backtest, $this->barsProvider);
+        return new self(array_replace_recursive($this->params, $overrides), $this->mode, $this->degraded, $this->openPositions, $this->now, $this->backtest, $this->barsProvider, $this->arenaSeatId);
     }
 
     public function now(): \DateTimeImmutable

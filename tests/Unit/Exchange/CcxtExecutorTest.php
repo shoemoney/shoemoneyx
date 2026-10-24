@@ -163,6 +163,139 @@ class CcxtExecutorTest extends TestCase
         $this->assertSame(7.0, $this->executor->sell('BTC-USD', 0.01, 99_000.0)->feeUsd);
     }
 
+    public function test_a_base_currency_buy_fee_is_netted_out_of_the_booked_qty(): void
+    {
+        $this->client->stubCreate = ['id' => 'o-b1', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-b1', 'status' => 'closed', 'filled' => 0.01, 'cost' => 1000.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'BTC', 'cost' => 0.00001],
+        ]];
+
+        $result = $this->executor->buy('BTC-USD', 1000.0, 100_000.0);
+
+        $this->assertEqualsWithDelta(0.00999, $result->filledQty, 1e-12);   // what the account really holds
+        $this->assertSame(1000.0, $result->filledUsd);                      // paid the cost; the fee came out of the coins
+        $this->assertEqualsWithDelta(1.0, $result->feeUsd, 1e-9);           // 0.00001 BTC at the fill price
+    }
+
+    public function test_base_fees_in_a_fees_list_are_netted_and_quote_fees_stay_usd(): void
+    {
+        $this->client->stubCreate = ['id' => 'o-b2', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-b2', 'status' => 'closed', 'filled' => 0.01, 'cost' => 1000.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'BTC', 'cost' => 0.00001],
+            'fees' => [['currency' => 'BTC', 'cost' => 0.00001], ['currency' => 'USD', 'cost' => 0.5]],
+        ]];
+
+        $result = $this->executor->buy('BTC-USD', 1000.0, 100_000.0);
+
+        $this->assertEqualsWithDelta(0.00999, $result->filledQty, 1e-12);
+        $this->assertSame(1000.5, $result->filledUsd);
+        $this->assertEqualsWithDelta(1.5, $result->feeUsd, 1e-9);
+    }
+
+    public function test_a_close_after_a_base_fee_buy_requests_the_net_qty(): void
+    {
+        $this->client->stubCreate = ['id' => 'o-b3', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-b3', 'status' => 'closed', 'filled' => 0.01, 'cost' => 1000.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'BTC', 'cost' => 0.00001],
+            // second fetch_order: the close fills the net qty and pays a quote fee
+        ], [
+            'id' => 'o-b3s', 'status' => 'closed', 'filled' => 0.00999, 'cost' => 999.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'USD', 'cost' => 1.0],
+        ]];
+        $bought = $this->executor->buy('BTC-USD', 1000.0, 100_000.0);
+
+        $closed = $this->executor->sell('BTC-USD', $bought->filledQty, 100_000.0);
+
+        $sell = collect($this->client->calls)->first(fn ($c) => $c[0] === 'create_order' && $c[3] === 'sell');
+        $this->assertEqualsWithDelta(0.00999, $sell[4], 1e-12);
+        $this->assertSame('filled', $closed->status);
+        $this->assertTrue($closed->ok());
+        $this->assertEqualsWithDelta(0.00999, $closed->filledQty, 1e-12);   // the whole net position, nothing left behind
+        $this->assertSame(1.0, $closed->feeUsd);
+        $this->assertSame(998.0, $closed->filledUsd);                       // cost - fee
+    }
+
+    public function test_a_base_currency_sell_fee_is_consumed_inventory_on_top_of_the_fill(): void
+    {
+        $this->client->stubCreate = ['id' => 'o-s1', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-s1', 'status' => 'closed', 'filled' => 0.00999, 'cost' => 999.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'BTC', 'cost' => 0.00001],
+        ]];
+
+        $result = $this->executor->sell('BTC-USD', 0.01, 100_000.0);
+
+        $this->assertSame('filled', $result->status);
+        $this->assertTrue($result->ok());
+        $this->assertEqualsWithDelta(0.01, $result->filledQty, 1e-12);
+        $this->assertSame(100_000.0, $result->fillPrice);
+        $this->assertSame(999.0, $result->filledUsd);
+        $this->assertEqualsWithDelta(1.0, $result->feeUsd, 1e-9);   // 0.00001 BTC at the fill price
+        $this->assertFalse($result->partial);
+    }
+
+    public function test_a_negative_quote_fee_is_a_rebate(): void
+    {
+        $this->client->stubCreate = ['id' => 'o-r1', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-r1', 'status' => 'closed', 'filled' => 0.01, 'cost' => 1000.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'USD', 'cost' => -1.0],
+        ]];
+
+        $result = $this->executor->sell('BTC-USD', 0.01, 100_000.0);
+
+        $this->assertSame(1001.0, $result->filledUsd);
+        $this->assertSame(-1.0, $result->feeUsd);
+    }
+
+    public function test_a_negative_base_fee_on_a_buy_adds_to_the_qty(): void
+    {
+        $this->client->stubCreate = ['id' => 'o-r2', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-r2', 'status' => 'closed', 'filled' => 0.01, 'cost' => 1000.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'BTC', 'cost' => -0.00001],
+        ]];
+
+        $this->assertEqualsWithDelta(0.01001, $this->executor->buy('BTC-USD', 1000.0, 100_000.0)->filledQty, 1e-12);
+    }
+
+    public function test_a_third_currency_fee_is_converted_through_the_ticker(): void
+    {
+        $this->client->stubTicker = ['last' => 600.0];
+        $this->client->stubCreate = ['id' => 'o-b4', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-b4', 'status' => 'closed', 'filled' => 0.01, 'cost' => 1000.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'BNB', 'cost' => 0.005],
+        ]];
+
+        $result = $this->executor->buy('BTC-USD', 1000.0, 100_000.0);
+
+        $this->assertSame(['fetch_ticker', 'BNB/USD'], collect($this->client->calls)->first(fn ($c) => $c[0] === 'fetch_ticker'));
+        $this->assertSame(0.01, $result->filledQty);
+        $this->assertEqualsWithDelta(3.0, $result->feeUsd, 1e-9);
+        $this->assertEqualsWithDelta(1003.0, $result->filledUsd, 1e-9);
+    }
+
+    public function test_an_unconvertible_third_currency_fee_is_flagged_not_booked_as_usd(): void
+    {
+        $this->client->stubTicker = [];
+        $this->client->stubCreate = ['id' => 'o-b5', 'status' => 'closed'];
+        $this->client->stubOrders = [[
+            'id' => 'o-b5', 'status' => 'closed', 'filled' => 0.01, 'cost' => 1000.0, 'average' => 100_000.0,
+            'fee' => ['currency' => 'BNB', 'cost' => 0.005],
+        ]];
+
+        $result = $this->executor->buy('BTC-USD', 1000.0, 100_000.0);
+
+        $this->assertSame(0.0, $result->feeUsd);
+        $this->assertSame(1000.0, $result->filledUsd);
+        $this->assertStringContainsString('BNB', (string) $result->note);
+        $this->assertSame([['currency' => 'BNB', 'cost' => 0.005]], $result->raw['unconverted_fees']);
+    }
+
     public function test_fill_price_falls_back_to_cost_over_quantity(): void
     {
         $this->client->stubCreate = ['id' => 'o-4', 'status' => 'closed'];

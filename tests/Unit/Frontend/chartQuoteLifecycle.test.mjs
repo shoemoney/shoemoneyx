@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { ref, reactive, computed, watch, nextTick, effectScope } from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import { readQuote, observeQuote } from '../../../resources/js/components/chart/marketLens.js';
-import { deskHeaders } from '../../../resources/js/api.js';
+import { deskFetch } from '../../../resources/js/api.js';
 
 const sourceFile = new URL('../../../resources/js/components/chart/ChartMarketDeck.vue', import.meta.url);
 const { descriptor } = parse(await fs.readFile(sourceFile, 'utf8'));
@@ -13,11 +13,12 @@ for (const node of compiled.scriptSetupAst.filter(n => n.type === 'ImportDeclara
 const listeners = new Set(), requests = [], events = [], mounted = [], unmounted = [];
 let poll, timerCleared = false;
 const document = { hidden: false, addEventListener(_name, fn) { listeners.add(fn); }, removeEventListener(_name, fn) { listeners.delete(fn); } };
-const fetch = (url, options) => new Promise((resolve, reject) => requests.push({ url, signal: options.signal, resolve: data => resolve({ ok: true, json: async () => data }), reject }));
+const fetch = (url, options) => new Promise((resolve, reject) => requests.push({ url, signal: options.signal, resolve: data => resolve({ ok: true, text: async () => JSON.stringify(data) }), reject }));
+globalThis.fetch = fetch;
 const props = reactive({ symbol: 'BTC-USD', products: [], active: true });
-const create = new Function('computed','onMounted','onUnmounted','ref','watch','defineProps','defineEmits','readQuote','observeQuote','deskHeaders','fetch','document','setInterval','clearInterval', `${source}\nreturn {quote,points,error,refresh,status};`);
+const create = new Function('computed','onMounted','onUnmounted','ref','watch','defineProps','defineEmits','readQuote','observeQuote','deskFetch','fetch','document','setInterval','clearInterval', `${source}\nreturn {quote,points,error,refresh,status};`);
 const scope = effectScope();
-const state = scope.run(() => create(computed, fn => mounted.push(fn), fn => unmounted.push(fn), ref, watch, () => props, () => (...args) => events.push(args), readQuote, observeQuote, deskHeaders, fetch, document, fn => { poll = fn; return 1; }, () => { timerCleared = true; }));
+const state = scope.run(() => create(computed, fn => mounted.push(fn), fn => unmounted.push(fn), ref, watch, () => props, () => (...args) => events.push(args), readQuote, observeQuote, deskFetch, fetch, document, fn => { poll = fn; return 1; }, () => { timerCleared = true; }));
 const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await nextTick(); };
 const quote = (symbol, price, ts = Math.floor(Date.now() / 1000)) => ({ product_id: symbol, price, ts, source: 'feed' });
 mounted[0](); poll(); poll(); assert.equal(requests.length, 1, 'only one request is in flight');

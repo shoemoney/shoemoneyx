@@ -10,6 +10,29 @@ use Tests\TestCase;
 /** Round-4 review, finding 1: ok() is the one boundary every Desk booking path trusts. */
 class OrderResultTest extends TestCase
 {
+    public function test_with_dust_preserves_the_live_intent_and_all_other_fields_without_mutating_the_original(): void
+    {
+        $ledgerWrites = 0;
+        $ledgerWrite = function () use (&$ledgerWrites): void {
+            $ledgerWrites++;
+        };
+        $original = new OrderResult('filled', 12.0, 11.928, 0.12, 100.0, 100.0, 0.072,
+            partial: true, venueOrderId: 'ord-1', raw: ['client_order_id' => 'client-1'],
+            note: 'venue fill', ledgerWrite: $ledgerWrite, basisRecovered: true, dustQty: 0.001);
+        $original->intentId = 123;
+        $before = get_object_vars($original);
+
+        $withDust = $original->withDust(0.0034);
+
+        $this->assertNotSame($original, $withDust);
+        $this->assertSame(123, $withDust->intentId, 'the desk must still be able to resolve the live intent when booking the fill');
+        $this->assertSame(array_replace($before, ['dustQty' => 0.0034]), get_object_vars($withDust));
+        $this->assertSame($before, get_object_vars($original));
+        $this->assertSame(0, $ledgerWrites, 'copying a result must not run its deferred ledger write');
+        $withDust->writeLedger();
+        $this->assertSame(1, $ledgerWrites, 'the copy retains the exact deferred ledger closure');
+    }
+
     public function test_ok_is_true_for_a_normal_filled_result(): void
     {
         $r = new OrderResult('filled', 200.0, 200.0, 2.0, 100.0, 100.0, 1.2);
@@ -136,5 +159,15 @@ class OrderResultTest extends TestCase
         // A SELL that actually filled at 97 against a 100 decision price is worse than decision —
         // slippageBps() reports that as positive.
         $this->assertEqualsWithDelta(300.0, $r->slippageBps('SELL'), 1e-9);
+    }
+
+    public function test_slippage_bps_is_clamped_to_the_decimal_10_2_column(): void
+    {
+        // A placeholder decision price against a real fill overflows decimal(10,2); strict MariaDB would
+        // abort the fills insert for an order that already executed.
+        $r = new OrderResult('filled', 2400.0, 2400.0, 0.03, 1.0, 80000.0, 2.4);
+
+        $this->assertSame(99_999_999.99, $r->slippageBps('BUY'));
+        $this->assertSame(-99_999_999.99, $r->slippageBps('SELL'));
     }
 }

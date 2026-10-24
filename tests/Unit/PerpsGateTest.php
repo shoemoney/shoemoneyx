@@ -83,4 +83,16 @@ class PerpsGateTest extends TestCase
         $this->assertTrue($gate->allowed);
         $this->assertNull($gate->reason);
     }
+
+    public function test_the_use_cap_applies_to_margin_not_to_notional_buying_power(): void
+    {
+        $now = new \DateTimeImmutable('2026-09-01T15:00:00Z');
+        // Overnight 35%: $2,000 of buying power is $700 of free margin; the 50% cushion leaves $350.
+        // $1,428 of notional needs $499.80 of margin: over the cushion, though under buyingPower x 50%.
+        $over = PerpsGate::newRisk($this->perpsSession(futuresBuyingPower: 2000.0), $now, 1428, $this->cfg);
+        $this->assertFalse($over->allowed);
+        $this->assertStringContainsString('of margin usable', $over->reason);
+
+        $this->assertTrue(PerpsGate::newRisk($this->perpsSession(futuresBuyingPower: 2000.0), $now, 1000, $this->cfg)->allowed);
+    }
 }

@@ -1,22 +1,25 @@
 # E2E journeys
 
-Five Playwright scripts in `tests/e2e/*.mjs` drive a real, running desk through a browser —
-onboarding, login, the Strategy Builder, the agent, the chart, and the support chat — and assert on literal
-outcomes read back through the app's own API and DOM, never just "the page didn't 500". Each
-script is a standalone Node ESM file (`node tests/e2e/<name>.mjs`), prints `PASS`/`FAIL` per
-check, writes `results.json` + screenshots to `E2E_OUT` (default `storage/e2e`), and exits
-non-zero if any check failed.
+Eight scripts in `tests/e2e/*.mjs` cover browser and API journeys. Five provider-backed
+Playwright scripts drive a real, running desk through a browser: onboarding, login, the Strategy
+Builder, the agent, the chart, and the support chat. They assert outcomes read back through the
+app's API and DOM. Each is a standalone Node ESM file (`node tests/e2e/<name>.mjs`) that prints
+checks, writes `results.json` and screenshots to `E2E_OUT` (default `storage/e2e`), and exits
+non-zero on failed checks. Two more scripts exercise a disposable browser profile; the eighth,
+`password-concurrency.mjs`, uses Playwright's request API without a browser.
 
-**None of these ever touch the shared LAN MariaDB.** Every journey runs against an isolated
-sqlite file on a throwaway desk (fresh onboarding wizard each time), never the fleet database —
-see the recipe below.
+**None of these touch a shared database.** The five provider journeys use isolated SQLite
+files on throwaway desks, with a fresh onboarding wizard for each run. The newer security and
+application journeys use separate disposable profiles; the concurrency profile may use its own
+SQLite file or dedicated disposable MariaDB database. See the recipes below.
 
-## The five journeys
+## Five provider-backed journeys
 
 ### 1. `login-and-ai.mjs` — onboarding, login gate, internal AI, chart auth
 
-Proves a fresh desk's first-run path actually works end to end: the onboarding wizard (master
-password → OpenRouter key, server-validated → exchange pick → launch), that a second, fresh
+Proves a fresh desk's first-run path actually works end to end: the onboarding wizard (new
+password plus confirmation, then OpenRouter key, server-validated, then exchange pick and
+launch), that a second, fresh
 browser session is correctly gated to `/login` once a master password exists (and that a wrong
 password is rejected while the right one gets through), that the Strategy Builder's two separate
 chats — the stateless SMX assist chat and the tool-calling agent chat — both produce real
@@ -159,22 +162,45 @@ non-canned reply` · `the reply drafts an actual strategy (contains a JSON code 
 `the free-model nudge banner appears when pinned to a free model` · `the nudge names a concrete
 switch-to model` · `clicking the nudge persists its model to localStorage`.
 
-## Fresh-desk recipe
+## Disposable authentication and application journeys
 
-Run each journey against its own throwaway sqlite desk — **never the shared LAN MariaDB.** Four
+The other three scripts use disposable loopback profiles. The two browser scripts use an
+explicitly enabled outbound HTTP fixture; the concurrency request script does not need it. See
+[password-security.md](../tests/e2e/password-security.md) for the full setup,
+including separate databases, sessions, caches, nginx/PHP-FPM configuration, and fixture opt-in.
+They exercise real application routes, browser behavior, and request races without paid model calls or a live
+market feed. The local TLS certificate is accepted by the test browser, so these runs do not
+prove public certificate trust or an AMI launch.
+
+| Script | Profile and check | Invocation after profile setup |
+| --- | --- | --- |
+| `password-security.mjs` | Fresh `local` and `aws` profiles; first-owner claim, password confirmation and rotation, cookie and token authentication, first-login trust gate, and rendered readability | `E2E_PROFILE=local E2E_BASE=https://127.0.0.1:18444 E2E_HTTP_BASE=http://127.0.0.1:18132 node tests/e2e/password-security.mjs`, then `E2E_PROFILE=aws E2E_BASE=https://127.0.0.1:18443 E2E_HTTP_BASE=http://127.0.0.1:18131 E2E_TLS_STATUS_PATH=/absolute/disposable/tls-status node tests/e2e/password-security.mjs` |
+| `password-concurrency.mjs` | Its own fresh non-AWS bootstrap profile, at least two PHP-FPM workers; overlapping owner claims and rotations yield exactly one winner | `E2E_BASE=https://127.0.0.1:18445 node tests/e2e/password-concurrency.mjs` |
+| `application-smoke.mjs` | After the local password journey; seeded synthetic market tape, UI strategy validation, save/version and backtest | `E2E_BASE=https://127.0.0.1:18444 E2E_PASSWORD="$DISPOSABLE_OWNER_PASSWORD" node tests/e2e/application-smoke.mjs` |
+
+Set `PLAYWRIGHT_PATH` if Playwright is installed outside this checkout. Set
+`E2E_BROWSER_CHANNEL=chrome` to use installed Chrome for the browser scripts. Before
+`application-smoke.mjs`, seed only its disposable SQLite file with
+`E2E_FIXTURE_MODE=1 DB_CONNECTION=sqlite DB_URL= DB_DATABASE=/absolute/output/playwright/runtime/local.sqlite php tests/e2e/fixtures/seed-market.php`.
+The fixture helper rejects databases outside that runtime directory. These synthetic trades
+verify execution paths; they are not trading-performance evidence. Each script writes results
+under `output/playwright/` by default or to `E2E_OUT`. Set `DISPOSABLE_OWNER_PASSWORD` to the
+final synthetic owner password from the local password journey before running application smoke.
+
+## Provider-backed fresh-desk recipe
+
+These journeys use live OpenRouter calls and may incur provider charges; run them only with
+authorization for those calls. Run each journey against its own throwaway sqlite desk — **never
+a shared database.** Four
 scripts default to ports 8010–8013; `support-chat-deepseek.mjs` also defaults to 8010, colliding
 with `login-and-ai.mjs`. To run all five concurrently, set `E2E_BASE` explicitly for one of them
 (e.g., `http://127.0.0.1:8110` for `support-chat-deepseek`), or reuse one desk sequentially and
 reset between journeys (below).
 
 ```bash
-# 0. One-time: get an OpenRouter key out of the aigate vault (never hardcode or print it)
-if [ -f ~/.claude/aigate/env ]; then set -a; . ~/.claude/aigate/env; set +a; fi
-T="${AIGATE_TOKEN:-$(ssh -l shoemoney 192.168.1.10 'sudo docker exec aigate env | grep ^AIGATE_TOKEN' | cut -d= -f2-)}"
-OPENROUTER_API_KEY=$(curl -s -H "Authorization: Bearer $T" "${AIGATE_URL:-https://aigate.shoemoney.ai}/api/keys/openrouter" \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
-
-# 1. Isolated sqlite desk (repeat per journey with its own $S / port, or reset between journeys — see below)
+# 1. Supply an authorized OpenRouter key to this shell without printing it.
+# These journeys make live provider calls; support-chat-deepseek may incur paid charges.
+# 2. Isolated sqlite desk (repeat per journey with its own $S / port, or reset between journeys — see below)
 S=/tmp/e2e-desk; mkdir -p "$S"; : > "$S/e2e.sqlite"
 export APP_URL=http://127.0.0.1:8010 DB_CONNECTION=sqlite DB_DATABASE="$S/e2e.sqlite" DB_URL= \
        SESSION_DRIVER=file CACHE_STORE=file QUEUE_CONNECTION=sync BROADCAST_CONNECTION=log
@@ -193,7 +219,7 @@ npm run build
 php artisan serve --host=127.0.0.1 --port=8010 &
 
 # 4. Playwright — a global install is fine, point PLAYWRIGHT_PATH at it
-export PLAYWRIGHT_PATH=/opt/homebrew/lib/node_modules/playwright
+export PLAYWRIGHT_PATH=/path/to/node_modules/playwright
 # (first time only) npm i -D playwright && npx playwright install chromium
 
 # 5. Run a journey
@@ -228,7 +254,8 @@ only the onboarding/auth/settings state needs to go back to zero for the wizard 
 
 ### Rule
 
-**E2E never touches the shared LAN MariaDB.** `DB_CONNECTION=sqlite` against a throwaway file
-under `/tmp` (or any scratch dir), always — not the fleet Galera cluster, not a shared dev
-database. Each journey's fixture data (the seeded onboarding state, the tinker'd position/fill)
-lives only in that sqlite file and is disposable.
+**E2E never touches a shared database.** Provider journeys use `DB_CONNECTION=sqlite`
+against a throwaway file under `/tmp` (or another scratch directory). The concurrency journey
+may instead use a dedicated disposable MariaDB database. Never point a journey at a shared
+development or production database. Each journey's fixture data (including onboarding state
+and seeded positions and fills) stays in its own disposable database.

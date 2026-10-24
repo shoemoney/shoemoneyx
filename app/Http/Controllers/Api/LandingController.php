@@ -27,8 +27,8 @@ class LandingController extends Controller
         // The production database uses REPEATABLE-READ. Keep these reads together so a
         // concurrently closed position cannot land in both the open and closed totals.
         [$open, $closed] = DB::transaction(fn () => [
-            Position::open()->mode($mode)->get(),
-            Position::mode($mode)->where('status', 'closed')
+            Position::open()->mode($mode)->seat(null)->get(),
+            Position::mode($mode)->seat(null)->where('status', 'closed')
                 ->selectRaw('product_id, SUM(pnl_usd) AS realised, COUNT(*) AS trades, SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) AS wins')
                 ->groupBy('product_id')->get()->keyBy('product_id'),
         ]);
@@ -38,7 +38,7 @@ class LandingController extends Controller
         // Historical markets belong in the universe too: their realised P&L is in the total.
         $ids = collect($active)->merge($open->pluck('product_id'))->merge($closed->keys())->unique()->values();
         $products = Product::whereIn('product_id', $ids)->get()->keyBy('product_id');
-        $latestRun = DeskRun::where('mode', $mode)->latest('started_at')->first([
+        $latestRun = DeskRun::where('mode', $mode)->seat(null)->latest('started_at')->first([
             'id', 'strategy', 'status', 'degraded', 'products_scanned', 'candidates', 'passed', 'rejected', 'filled', 'started_at', 'finished_at',
         ]);
         $decisions = $latestRun?->candidates()->get([
@@ -85,17 +85,17 @@ class LandingController extends Controller
         $realised = (float) $closed->sum('realised') + (float) $open->sum('realised_usd');
         $unrealised = $unpriced ? null : (float) $pairs->sum('unrealised');
         $trades = (int) $closed->sum('trades');
-        $fills = Fill::where('mode', $mode)->latest('id')->limit(30)->get([
+        $fills = Fill::where('mode', $mode)->seat(null)->latest('id')->limit(30)->get([
             'id', 'product_id', 'side', 'kind', 'status', 'filled_usd', 'filled_qty', 'fill_price', 'fee_usd', 'created_at',
         ]);
-        $bank = BankSnapshot::where('mode', $mode)->latest('taken_at')->first([
+        $bank = BankSnapshot::where('mode', $mode)->seat(null)->latest('taken_at')->first([
             'cash', 'equity', 'positions_value', 'free_cash', 'collateral', 'exposure', 'buying_power', 'taken_at',
         ]);
         $bankAge = $bank ? max(0, now()->timestamp - $bank->taken_at->timestamp) : null;
         $events = DeskEvent::query()->where(fn ($q) => $q->where(fn ($global) => $global->whereNull('desk_run_id')
             ->where(fn ($position) => $position->whereNull('payload->position_id')
-                ->orWhereIn('payload->position_id', Position::mode($mode)->select('id'))))
-            ->orWhereIn('desk_run_id', DeskRun::where('mode', $mode)->select('id')))
+                ->orWhereIn('payload->position_id', Position::mode($mode)->seat(null)->select('id'))))
+            ->orWhereIn('desk_run_id', DeskRun::where('mode', $mode)->seat(null)->select('id')))
             ->latest('id')->limit(40)->get(['id', 'desk_run_id', 'payload', 'agent', 'level', 'message', 'created_at'])
             ->map(fn ($event) => [
                 ...$event->only(['id', 'agent', 'level', 'message', 'created_at']),

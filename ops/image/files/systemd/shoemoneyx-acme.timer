@@ -1,0 +1,10 @@
+[Unit]
+Description=shoemoneyx desk TLS certificate renewal check (twice a day)
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=12h
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

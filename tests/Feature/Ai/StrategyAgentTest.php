@@ -9,6 +9,9 @@ use App\Ai\ChatResponse;
 use App\Ai\Contracts\ChatClient;
 use App\Ai\StrategyAgent;
 use App\Ai\Tools\CompareVersionsTool;
+use App\Ai\Tools\SetPhaseTool;
+use App\Ai\Tools\Tool;
+use App\Ai\Tools\ToolRegistry;
 use App\Desk\Backtester;
 use App\Desk\Strategies\JsonPluginValidator;
 use App\Models\AgentConversation;
@@ -197,10 +200,127 @@ class StrategyAgentTest extends TestCase
         $result = $agent->turn($conversation->id, 'go');
 
         $this->assertCount(6, $result['tool_events']);
-        // 7 chat() calls, not 6: the loop only detects the cap when it examines the
-        // 7th response's tool call (executed=6 >= MAX_TOOL_CALLS), so that 7th round's
-        // chat() has already happened by the time the call is skipped instead of run.
+        // The seventh request asks for a conclusion with no tools. Even if the
+        // provider ignores that, its requested calls receive explicit skipped results.
         $this->assertCount(7, $fake->calls);
+        $this->assertSame([], $fake->calls[6]['tools']);
+        $this->assertSame(7, $conversation->fresh()->phase);
+        $this->assertCompleteToolBatches($conversation->fresh()->messages);
+        $skipped = array_values(array_filter($conversation->fresh()->messages, fn ($m) => ($m['tool_call_id'] ?? null) === 'call_6'));
+        $this->assertStringContainsString('skipped', $skipped[0]['content']);
+    }
+
+    public function test_oversized_tool_batch_is_fully_answered_before_a_text_only_conclusion(): void
+    {
+        $conversation = AgentConversation::create(['messages' => [], 'phase' => 1]);
+        $calls = array_map(fn ($i) => ['id' => "call_{$i}", 'name' => 'set_phase', 'arguments' => ['phase' => $i % 7 + 1]], range(0, 7));
+        $fake = new FakeChatClient([
+            new ChatResponse(content: null, toolCalls: $calls, model: 'fake'),
+            new ChatResponse(content: 'Six steps completed; the remaining steps need another turn.', toolCalls: [], model: 'fake'),
+        ]);
+
+        $result = $this->makeAgent($fake)->turn($conversation->id, 'go');
+
+        $this->assertCount(6, $result['tool_events']);
+        $this->assertCount(2, $fake->calls);
+        $this->assertSame([], $fake->calls[1]['tools']);
+        $this->assertCompleteToolBatches($fake->calls[1]['messages']);
+        $this->assertCompleteToolBatches($conversation->fresh()->messages);
+        $this->assertSame('Six steps completed; the remaining steps need another turn.', $result['content']);
+        $toolMessages = array_values(array_filter($conversation->fresh()->messages, fn ($m) => $m['role'] === 'tool'));
+        $this->assertCount(8, $toolMessages);
+        $this->assertStringContainsString('skipped', $toolMessages[6]['content']);
+        $this->assertStringContainsString('skipped', $toolMessages[7]['content']);
+    }
+
+    public function test_tool_exception_preserves_completed_changes_and_answers_the_rest_of_the_batch(): void
+    {
+        $conversation = AgentConversation::create(['messages' => [], 'phase' => 1]);
+        $throwingTool = new class implements Tool
+        {
+            public function name(): string
+            {
+                return 'mcp.test.failing';
+            }
+
+            public function description(): string
+            {
+                return 'Fails for a transport error.';
+            }
+
+            public function parameters(): array
+            {
+                return ['type' => 'object'];
+            }
+
+            public function run(array $args, AgentContext $context): array
+            {
+                throw new \RuntimeException('server disconnected');
+            }
+        };
+        $fake = new FakeChatClient([
+            new ChatResponse(content: null, toolCalls: [
+                ['id' => 'before', 'name' => 'set_phase', 'arguments' => ['phase' => 3]],
+                ['id' => 'failed', 'name' => 'mcp.test.failing', 'arguments' => []],
+                ['id' => 'after', 'name' => 'set_phase', 'arguments' => ['phase' => 4]],
+            ], model: 'fake'),
+            new ChatResponse(content: 'The MCP call failed, but phase changes were saved.', toolCalls: [], model: 'fake'),
+        ]);
+        $agent = new StrategyAgent($fake, new ToolRegistry([new SetPhaseTool, $throwingTool]));
+
+        $result = $agent->turn($conversation->id, 'continue');
+
+        $this->assertNull($result['error']);
+        $this->assertCount(3, $result['tool_events']);
+        $this->assertSame(4, $conversation->fresh()->phase);
+        $this->assertStringContainsString('server disconnected', $result['tool_events'][1]['result']['error']);
+        $this->assertCompleteToolBatches($fake->calls[1]['messages']);
+        $messages = $conversation->fresh()->messages;
+        $this->assertStringStartsWith('<untrusted_data>', $messages[3]['content']);
+        $this->assertCompleteToolBatches($messages);
+    }
+
+    public function test_history_drops_an_entire_old_turn_when_the_boundary_splits_a_tool_batch(): void
+    {
+        $seeded = [
+            ['role' => 'user', 'content' => 'old turn'],
+            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
+                ['id' => 'old_1', 'type' => 'function', 'function' => ['name' => 'set_phase', 'arguments' => '{"phase":2}']],
+                ['id' => 'old_2', 'type' => 'function', 'function' => ['name' => 'set_phase', 'arguments' => '{"phase":3}']],
+            ]],
+            ['role' => 'tool', 'tool_call_id' => 'old_1', 'content' => '{"phase":2}'],
+            ['role' => 'tool', 'tool_call_id' => 'old_2', 'content' => '{"phase":3}'],
+            ['role' => 'assistant', 'content' => 'old reply'],
+        ];
+        for ($i = 1; $i <= 18; $i++) {
+            $seeded[] = ['role' => 'user', 'content' => "turn {$i}"];
+            $seeded[] = ['role' => 'assistant', 'content' => "reply {$i}"];
+        }
+        $conversation = AgentConversation::create(['messages' => $seeded, 'phase' => 3]);
+        $fake = new FakeChatClient([new ChatResponse(content: 'new reply', toolCalls: [], model: 'fake')]);
+
+        $this->makeAgent($fake)->turn($conversation->id, 'new turn');
+
+        $messages = $conversation->fresh()->messages;
+        $this->assertCount(38, $messages);
+        $this->assertSame('turn 1', $messages[0]['content']);
+        $this->assertCompleteToolBatches($fake->calls[0]['messages']);
+        $this->assertCompleteToolBatches($messages);
+    }
+
+    private function assertCompleteToolBatches(array $messages): void
+    {
+        $pending = [];
+        foreach ($messages as $message) {
+            if ($message['role'] === 'tool') {
+                $this->assertContains($message['tool_call_id'], $pending, 'a tool response must answer a preceding assistant call');
+                $pending = array_values(array_diff($pending, [$message['tool_call_id']]));
+            } else {
+                $this->assertSame([], $pending, 'every assistant tool call must be answered before the next non-tool message');
+                $pending = array_column($message['tool_calls'] ?? [], 'id');
+            }
+        }
+        $this->assertSame([], $pending, 'the transcript must not end with unanswered tool calls');
     }
 
     public function test_history_is_capped_at_forty_messages_keeping_the_newest(): void

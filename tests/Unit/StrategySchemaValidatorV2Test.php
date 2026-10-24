@@ -479,6 +479,48 @@ class StrategySchemaValidatorV2Test extends TestCase
     }
 
     #[Test]
+    public function adds_rung_size_pct_is_capped_at_100_percent_of_initial_cost(): void
+    {
+        $def = $this->validDefinition();
+        $trigger = ['field' => 'position.pnl_pct', 'op' => '<', 'value' => -1];
+
+        $def['adds'] = [['trigger' => $trigger, 'size_pct' => 100]];
+        $this->assertTrue(StrategySchemaValidator::validate($def)['valid'], 'exactly 100% is allowed');
+
+        $def['adds'] = [['trigger' => $trigger, 'size_pct' => 100.5]];
+        $result = StrategySchemaValidator::validate($def);
+        $this->assertFalse($result['valid']);
+        $this->assertContains('adds[0].size_pct', $this->paths($result));
+    }
+
+    #[Test]
+    public function reentry_max_per_position_is_capped_at_5(): void
+    {
+        $def = $this->validDefinition();
+
+        $def['reentry']['max_per_position'] = 5;
+        $this->assertTrue(StrategySchemaValidator::validate($def)['valid'], 'exactly 5 is allowed');
+
+        $def['reentry']['max_per_position'] = 6;
+        $result = StrategySchemaValidator::validate($def);
+        $this->assertFalse($result['valid']);
+        $this->assertContains('reentry.max_per_position', $this->paths($result));
+    }
+
+    #[Test]
+    public function v1_management_adds_size_pct_is_capped_at_100(): void
+    {
+        $def = json_decode(file_get_contents(base_path('resources/strategies/examples/mean-reversion.json')), true);
+        $def['management']['adds'] = [['trigger' => ['field' => 'position.pnl_pct', 'op' => '<', 'value' => -1], 'size_pct' => 100]];
+        $this->assertTrue(StrategySchemaValidator::validate($def)['valid'], json_encode(StrategySchemaValidator::validate($def)['errors']));
+
+        $def['management']['adds'][0]['size_pct'] = 101;
+        $result = StrategySchemaValidator::validate($def);
+        $this->assertFalse($result['valid']);
+        $this->assertContains('management.adds[0].size_pct', $this->paths($result));
+    }
+
+    #[Test]
     public function v1_indicator_aliases_still_validate_in_v2(): void
     {
         $def = $this->validDefinition();

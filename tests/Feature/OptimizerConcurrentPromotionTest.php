@@ -79,7 +79,7 @@ class OptimizerConcurrentPromotionTest extends TestCase
 
         $inserts = 0;
         DB::listen(function ($query) use (&$inserts) {
-            if (str_contains($query->sql, 'insert into "settings"') && ++$inserts === 2) {
+            if (preg_match('/^insert into [`"]settings[`"]/i', $query->sql) && ++$inserts === 2) {
                 throw new \RuntimeException('simulated write failure');
             }
         });

@@ -1,0 +1,24 @@
+{
+  "core": {
+    "main_branch": "main",
+    "remote": "origin",
+    "ci_commands": [
+      "php artisan test",
+      "npm run test:frontend",
+      "npm run test:feeder",
+      "npm run build",
+      "bash ops/image/test-acme.sh",
+      "python3 -B ops/image/test-test-boot.py",
+      "bash ops/image/test-certbot-requirements.sh"
+    ],
+    "review": {
+      "passes": 2,
+      "land": "pr",
+      "docs_only": false,
+      "push_hook": true,
+      "reviewed_paths": [
+        "."
+      ]
+    }
+  }
+}

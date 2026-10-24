@@ -148,9 +148,10 @@ class DeskForceCloseLockTimeoutAttemptCountTest extends TestCase
         $builder->shouldReceive('live')->andReturn($zeroStats);
         $this->app->instance(ProductStatsBuilder::class, $builder);
 
-        // The very first mutateLock() call (sweep 1's escalated close, backoff=1 fires immediately)
-        // times out — everything after that acquires the lock normally.
-        $desk = app(DeskWithFakeLockTimeouts::class, ['timeoutOnAttempt' => [1]]);
+        // Lock call #1 is sweep 1's force_close_sweeps bookkeeping save (taken under the same mutate
+        // lock); call #2 is its escalated close (backoff=1 fires immediately) and that one times
+        // out — everything after that acquires the lock normally.
+        $desk = app(DeskWithFakeLockTimeouts::class, ['timeoutOnAttempt' => [2]]);
         $deskStats = new \ReflectionProperty(Desk::class, 'stats');
         $deskStats->setAccessible(true);
         $deskStats->setValue($desk, $builder);

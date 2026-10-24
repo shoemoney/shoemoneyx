@@ -25,8 +25,13 @@ class ArenaRunner
     ) {}
 
     /** @return array<int, array{seat_id:int, run_id:int, status:string}> */
-    public function cycle(): array
+    public function cycle(?Desk $desk = null): array
     {
+        // desk:run passes the instance captured by its signal handler; container desks are transient.
+        $desk ??= $this->desk;
+        if ($desk->stopRequested()) {
+            return [];
+        }
         $seats = ArenaSeat::active()->get();
         if ($seats->isEmpty()) {
             return [];
@@ -34,12 +39,15 @@ class ArenaRunner
 
         // Built once, off the main desk's own universe() — every seat's SCAN runs against this
         // same snapshot instead of each seat re-fetching live stats for itself.
-        $universe = $this->desk->universe();
+        $universe = $desk->universe();
 
         $out = [];
         foreach ($seats as $seat) {
+            if ($desk->stopRequested()) {
+                break;
+            }
             [$strategy, $overrides] = $this->strategyFor($seat);
-            $seatDesk = $this->desk->forSeat($seat->id, $overrides);
+            $seatDesk = $desk->forSeat($seat->id, $overrides);
             $executor = $seatDesk->executorForMode('paper');
 
             $run = $seatDesk->runCycle($strategy, $executor, $universe);

@@ -12,6 +12,25 @@ use Tests\TestCase;
 
 class McpClientTest extends TestCase
 {
+    public function test_server_rejects_tools_until_the_initialized_notification_is_sent(): void
+    {
+        $client = new McpClient('php', [base_path('tests/Fixtures/fake-mcp-server.php')]);
+
+        try {
+            try {
+                $client->listTools();
+                $this->fail('The strict fixture must reject tools before initialization.');
+            } catch (\RuntimeException $e) {
+                $this->assertStringContainsString('notifications/initialized required', $e->getMessage());
+            }
+
+            $client->initialize();
+            $this->assertSame('echo', $client->listTools()[0]['name']);
+        } finally {
+            $client->close();
+        }
+    }
+
     public function test_initialize_list_tools_and_call_tool_round_trip(): void
     {
         $client = new McpClient('php', [base_path('tests/Fixtures/fake-mcp-server.php')]);
@@ -48,5 +67,41 @@ class McpClientTest extends TestCase
         $context = new AgentContext(1);
         $result = $tool->run(['text' => 'x'], $context);
         $this->assertSame('x', $result['content'][0]['text']);
+    }
+
+    public function test_child_does_not_inherit_parent_secrets(): void
+    {
+        $secrets = ['APP_KEY' => 'base64:k', 'DB_PASSWORD' => 'dbpw', 'MASTER_PASSWORD' => 'mpw', 'EXTRA_ALLOWED' => 'ok'];
+        $original = [];
+        foreach ($secrets as $k => $v) {
+            $original[$k] = ['getenv' => getenv($k), 'env' => array_key_exists($k, $_ENV) ? [$_ENV[$k]] : null];
+            putenv("$k=$v");
+            $_ENV[$k] = $v;
+        }
+
+        try {
+            $client = new McpClient('php', [base_path('tests/Fixtures/fake-mcp-server.php')], ['EXPLICIT' => 'yes'], inheritEnv: ['EXTRA_ALLOWED']);
+            $client->initialize();
+            $seen = json_decode($client->callTool('env', ['keys' => [
+                'APP_KEY', 'DB_PASSWORD', 'MASTER_PASSWORD', 'EXTRA_ALLOWED', 'EXPLICIT', 'PATH',
+            ]])['content'][0]['text'], true);
+            $client->close();
+        } finally {
+            foreach ($original as $k => $was) {
+                putenv($was['getenv'] === false ? $k : "$k={$was['getenv']}");
+                if ($was['env'] === null) {
+                    unset($_ENV[$k]);
+                } else {
+                    $_ENV[$k] = $was['env'][0];
+                }
+            }
+        }
+
+        $this->assertFalse($seen[0]);
+        $this->assertFalse($seen[1]);
+        $this->assertFalse($seen[2]);
+        $this->assertSame('ok', $seen[3]);
+        $this->assertSame('yes', $seen[4]);
+        $this->assertNotFalse($seen[5]);
     }
 }

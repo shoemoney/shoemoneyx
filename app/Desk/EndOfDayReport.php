@@ -27,16 +27,16 @@ class EndOfDayReport
         $from = $day->copy()->startOfDay();
         $to = $day->copy()->endOfDay();
 
-        $runs = DeskRun::where('mode', $mode)->whereBetween('started_at', [$from, $to])->get();
+        $runs = DeskRun::where('mode', $mode)->seat(null)->whereBetween('started_at', [$from, $to])->get();
         $candidates = Candidate::whereIn('desk_run_id', $runs->pluck('id'))->get();
         $rejections = $candidates->where('verdict', 'REJECT')->groupBy('failed_check')->map->count()->sortDesc();
         $sized = $candidates->whereNotNull('size_usd')->where('size_usd', '>', 0);
-        $fills = Fill::where('mode', $mode)->whereBetween('created_at', [$from, $to])->get();
-        $closes = Position::mode($mode)->where('status', 'closed')->whereBetween('closed_at', [$from, $to])->get();
-        $opens = Position::open()->mode($mode)->get();
+        $fills = Fill::where('mode', $mode)->seat(null)->whereBetween('created_at', [$from, $to])->get();
+        $closes = Position::mode($mode)->seat(null)->where('status', 'closed')->whereBetween('closed_at', [$from, $to])->get();
+        $opens = Position::open()->mode($mode)->seat(null)->get();
 
-        $bankOpen = BankSnapshot::where('mode', $mode)->where('taken_at', '>=', $from)->orderBy('taken_at')->first();
-        $bankClose = BankSnapshot::where('mode', $mode)->where('taken_at', '<=', $to)->orderByDesc('taken_at')->first();
+        $bankOpen = BankSnapshot::where('mode', $mode)->whereNull('arena_seat_id')->where('taken_at', '>=', $from)->orderBy('taken_at')->first();
+        $bankClose = BankSnapshot::where('mode', $mode)->whereNull('arena_seat_id')->where('taken_at', '<=', $to)->orderByDesc('taken_at')->first();
 
         $working = (float) $fills->where('side', 'BUY')->where('status', 'filled')->sum('filled_usd');
         $realised = (float) $closes->sum('pnl_usd');

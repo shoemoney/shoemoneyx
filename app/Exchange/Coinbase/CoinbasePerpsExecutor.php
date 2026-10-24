@@ -11,11 +11,13 @@ use App\Desk\Execution\Perps;
 use App\Desk\Execution\PerpsGate;
 use App\Desk\Execution\PerpsSession;
 use App\Desk\Execution\ReconcilesOrders;
+use App\Desk\Reporter;
 use App\Exchange\Coinbase\Api\CoinbaseApiException;
 use App\Exchange\Coinbase\Api\CoinbaseService;
 use App\Exchange\Coinbase\Concerns\SubmitsCoinbaseOrders;
 use App\Models\CoinbaseAccount;
 use App\Models\OrderIntent;
+use Illuminate\Http\Client\ConnectionException;
 
 /**
  * LIVE execution on Coinbase US perpetual futures (Coinbase Financial Markets, venue "cde").
@@ -151,6 +153,27 @@ class CoinbasePerpsExecutor implements Executor, ReconcilesOrders
         $productId = $plan->perpProductId ?? throw new \LogicException('OrderPlan without a rejection must have a perp product id');
 
         $account = $this->account();
+        $contracts = $plan->contracts;
+
+        $exitGuard = fn (): int => $this->exitContracts($account, $productId, $spotPid, $side, $short, $contracts);
+        $guardAtSend = false;
+
+        if (! $checkMargin) {
+            // An exit is a plain market order, so it must never exceed what the venue actually holds on
+            // the side being closed: a flat or opposite-side venue turns it into a fresh opposite position.
+            // A pending intent for this product may be an exit that already filled (venue now flat, only
+            // the readback was lost): submitOrder must reconcile it first, so the check moves to the
+            // moment a (re)send would actually leave the box.
+            $guardAtSend = OrderIntent::pending()->mode($this->mode())->venue($this->orderVenue())->where('desk_product_id', $spotPid)->exists();
+            if (! $guardAtSend) {
+                try {
+                    $contracts = $exitGuard();
+                } catch (CoinbaseApiException $e) {
+                    return OrderResult::rejected(($e->body['guard'] ?? null) === 'flat' ? 'rejected' : 'error', $requested, $decisionPrice, $e->getMessage());
+                }
+            }
+        }
+
         $method = match (true) {
             $short && $side === 'SELL' => 'open_short',
             $short => 'cover_short',
@@ -158,9 +181,50 @@ class CoinbasePerpsExecutor implements Executor, ReconcilesOrders
             default => 'sell',
         };
 
-        return $this->submitOrder($method, $spotPid, $productId, $side, $requested, $decisionPrice,
-            ['spot_pid' => $spotPid, 'short' => $short, 'contracts' => $plan->contracts, 'size' => $plan->contracts],
-            fn (string $clientOrderId) => $this->coinbase->marketContracts($account, $productId, $side, $plan->contracts, $clientOrderId));
+        try {
+            return $this->submitOrder($method, $spotPid, $productId, $side, $requested, $decisionPrice,
+                ['spot_pid' => $spotPid, 'short' => $short, 'contracts' => $contracts, 'size' => $contracts],
+                fn (string $clientOrderId) => $this->coinbase->marketContracts($account, $productId, $side, $guardAtSend ? $exitGuard() : $contracts, $clientOrderId));
+        } finally {
+            // The fill changed margin; the next entry in this cycle must not size on the pre-fill balance.
+            $this->cachedSession = null;
+        }
+    }
+
+    /**
+     * Contracts an exit may send: the planned size capped at the venue's same-side holding. Throws a
+     * CoinbaseApiException: 400 when the venue is flat/opposite (guard=flat, pages; definitive, nothing sent),
+     * 503 when the read itself failed (guard=read). 503 is deliberately ambiguous to the idempotency trait, so
+     * a deferred check on a pending intent leaves it pending for reconcile instead of resolving it rejected.
+     */
+    private function exitContracts(CoinbaseAccount $account, string $productId, string $spotPid, string $side, bool $short, int $planned): int
+    {
+        try {
+            $held = $this->venueContracts($account, $productId, $short ? 'SHORT' : 'LONG');
+        } catch (CoinbaseApiException|ConnectionException $e) {
+            throw new CoinbaseApiException('venue position check failed: '.$e->getMessage(), 503, ['guard' => 'read']);
+        }
+
+        if ($held < 1) {
+            $note = 'no '.($short ? 'short' : 'long')." position on the venue for {$productId}; refusing to send {$side}";
+            app(Reporter::class)->error('PERPS', "{$spotPid}: {$note} (desk row still open, needs an operator)", ['product_id' => $productId, 'side' => $side, 'contracts' => $planned]);
+
+            throw new CoinbaseApiException($note, 400, ['guard' => 'flat']);
+        }
+
+        return min($planned, $held);
+    }
+
+    /** Whole contracts the venue holds in $productId on $side (LONG|SHORT); docs: futures/list-futures-positions. */
+    private function venueContracts(CoinbaseAccount $account, string $productId, string $side): int
+    {
+        foreach ($this->coinbase->futuresPositions($account) as $position) {
+            if (($position['product_id'] ?? null) === $productId && ($position['side'] ?? null) === $side) {
+                return (int) floor((float) ($position['number_of_contracts'] ?? 0) + 1e-9);
+            }
+        }
+
+        return 0;
     }
 
     protected function pollAttempts(): int

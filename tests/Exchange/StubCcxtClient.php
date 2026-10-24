@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Exchange;
 
 use ccxt\Exchange;
+use Illuminate\Support\Carbon;
 
 /**
  * A real \ccxt\Exchange subclass whose fetch methods return canned rows, so the adapter's
@@ -42,6 +43,9 @@ class StubCcxtClient extends Exchange
 
     /** @var array<int, ?string> the clientOrderId each create call carried */
     public array $clientOrderIds = [];
+
+    /** @var array<int, mixed> the raw clientOrderId param (type preserved) each create call carried */
+    public array $rawClientOrderIds = [];
 
     /** Thrown by the next create call, so rejection paths can be exercised. */
     public ?\Throwable $createThrows = null;
@@ -112,7 +116,8 @@ class StubCcxtClient extends Exchange
     public function create_order(string $symbol, string $type, string $side, float $amount, ?float $price = null, $params = [])
     {
         $this->calls[] = ['create_order', $symbol, $type, $side, $amount];
-        $this->clientOrderIds[] = $params['clientOrderId'] ?? null;
+        $this->clientOrderIds[] = isset($params['clientOrderId']) ? (string) $params['clientOrderId'] : null;
+        $this->rawClientOrderIds[] = $params['clientOrderId'] ?? null;
 
         return $this->created();
     }
@@ -120,7 +125,8 @@ class StubCcxtClient extends Exchange
     public function create_market_buy_order_with_cost(string $symbol, float $cost, $params = [])
     {
         $this->calls[] = ['create_market_buy_order_with_cost', $symbol, $cost];
-        $this->clientOrderIds[] = $params['clientOrderId'] ?? null;
+        $this->clientOrderIds[] = isset($params['clientOrderId']) ? (string) $params['clientOrderId'] : null;
+        $this->rawClientOrderIds[] = $params['clientOrderId'] ?? null;
 
         return $this->created();
     }
@@ -143,9 +149,15 @@ class StubCcxtClient extends Exchange
         return $this->stubOpenOrders;
     }
 
+    /** Seconds the venue "spends" answering an order-list call, so the order budget can be burned. */
+    public int $listTakesSeconds = 0;
+
     public function fetch_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = [])
     {
         $this->calls[] = ['fetch_orders', $symbol];
+        if ($this->listTakesSeconds > 0) {
+            Carbon::setTestNow(now()->addSeconds($this->listTakesSeconds));
+        }
 
         return $this->stubOrderList;
     }

@@ -17,6 +17,37 @@ final class OrderBudget
 
     private static ?int $deadline = null;
 
+    private static ?\Closure $entryFence = null;
+
+    /**
+     * Scope the cycle-owner check to a synchronous entry call, including its blocking preparation.
+     * Like the deadline, this process-local scope must not be shared across concurrent coroutines.
+     *
+     * @template T
+     *
+     * @param  \Closure(): void  $fence
+     * @param  \Closure(): T  $work
+     * @return T
+     */
+    public static function withEntryFence(\Closure $fence, \Closure $work): mixed
+    {
+        $previous = self::$entryFence;
+        self::$entryFence = $fence;
+        try {
+            return $work();
+        } finally {
+            self::$entryFence = $previous;
+        }
+    }
+
+    /** Recheck ownership at the last local boundary before creating new exposure. */
+    public static function assertEntryAllowed(): void
+    {
+        if (self::$entryFence !== null) {
+            (self::$entryFence)();
+        }
+    }
+
     public static function lockSeconds(): int
     {
         return max(90, (int) config('coinbase.timeout', 30) * 3);

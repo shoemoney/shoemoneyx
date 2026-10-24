@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ebd62380f691e9301481c970d063f4dd",
+    "content-hash": "9ecd03e3a14fdde39bffabed5d96a285",
     "packages": [
         {
             "name": "brick/math",
@@ -3360,16 +3360,16 @@
         },
         {
             "name": "predis/predis",
-            "version": "v3.6.0",
+            "version": "v3.7.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/predis/predis.git",
-                "reference": "2ff20c08bb63697245ffee3f198d1673086c302d"
+                "reference": "4d91f3b08a60c3bacc2afbd8dc41724559b7626a"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/predis/predis/zipball/2ff20c08bb63697245ffee3f198d1673086c302d",
-                "reference": "2ff20c08bb63697245ffee3f198d1673086c302d",
+                "url": "https://api.github.com/repos/predis/predis/zipball/4d91f3b08a60c3bacc2afbd8dc41724559b7626a",
+                "reference": "4d91f3b08a60c3bacc2afbd8dc41724559b7626a",
                 "shasum": ""
             },
             "require": {
@@ -3411,7 +3411,7 @@
             ],
             "support": {
                 "issues": "https://github.com/predis/predis/issues",
-                "source": "https://github.com/predis/predis/tree/v3.6.0"
+                "source": "https://github.com/predis/predis/tree/v3.7.0"
             },
             "funding": [
                 {
@@ -3419,7 +3419,7 @@
                     "type": "github"
                 }
             ],
-            "time": "2026-08-14T23:07:56+00:00"
+            "time": "2026-10-08T16:46:04+00:00"
         },
         {
             "name": "psr/clock",
@@ -4981,6 +4981,83 @@
                 }
             ],
             "time": "2024-06-11T12:45:25+00:00"
+        },
+        {
+            "name": "shoemoney/langchain-php",
+            "version": "dev-main",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/shoemoney/langchain-php.git",
+                "reference": "8a588b040d943fe8d7d42fef8fad05d7a0624340"
+            },
+            "require": {
+                "ext-json": "*",
+                "ext-mbstring": "*",
+                "guzzlehttp/guzzle": "^7.8",
+                "guzzlehttp/psr7": "^2.6",
+                "php": ">=8.2",
+                "psr/log": "^3.0",
+                "ramsey/uuid": "^4.7"
+            },
+            "require-dev": {
+                "ext-pdo_sqlite": "*",
+                "friendsofphp/php-cs-fixer": "^3.60",
+                "phpunit/phpunit": "^11.0"
+            },
+            "suggest": {
+                "ext-pdo_sqlite": "Needed by LangGraph\\Checkpoint\\SqliteSaver. Upstream ships this saver as a separate optional package (@langchain/langgraph-checkpoint-sqlite); this port bundles it, so the extension is required for that backend and suggested rather than mandatory for the rest."
+            },
+            "default-branch": true,
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "LangChain\\": "src/LangChain/",
+                    "LangGraph\\": "src/LangGraph/"
+                },
+                "files": [
+                    "src/LangChain/Runnables/coerceToRunnable.php",
+                    "src/LangChain/Tools/createTool.php",
+                    "src/LangGraph/Pregel/interrupt.php"
+                ]
+            },
+            "autoload-dev": {
+                "psr-4": {
+                    "LangChain\\Tests\\Unit\\": "tests/Unit/",
+                    "LangChain\\Tests\\Integration\\": "tests/Integration/"
+                }
+            },
+            "scripts": {
+                "test": [
+                    "phpunit"
+                ],
+                "test:unit": [
+                    "phpunit --testsuite unit"
+                ],
+                "test:integration": [
+                    "phpunit --testsuite integration"
+                ],
+                "coverage": [
+                    "phpunit --coverage-text --coverage-filter src"
+                ],
+                "lint": [
+                    "php-cs-fixer fix --dry-run --diff --config=.php-cs-fixer.dist.php --using-cache=no"
+                ]
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "A faithful PHP port of the LangChain JS and LangGraph JS SDKs: messages, LCEL runnables, prompts, model clients, tools, and the Pregel durable-execution engine.",
+            "keywords": [
+                "agents",
+                "ai",
+                "langchain",
+                "langgraph",
+                "lc",
+                "llm",
+                "pregel",
+                "rag"
+            ],
+            "time": "2026-10-09T14:19:12+00:00"
         },
         {
             "name": "symfony/clock",
@@ -8007,16 +8084,16 @@
         },
         {
             "name": "laravel/boost",
-            "version": "v2.7.0",
+            "version": "v2.10.3",
             "source": {
                 "type": "git",
                 "url": "https://github.com/laravel/boost.git",
-                "reference": "b19e98a8637cb69b2aab7b5b6c5fe9e2c79d182f"
+                "reference": "75c269a8a53e931c7252e7cd562e1a209356a7c6"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/laravel/boost/zipball/b19e98a8637cb69b2aab7b5b6c5fe9e2c79d182f",
-                "reference": "b19e98a8637cb69b2aab7b5b6c5fe9e2c79d182f",
+                "url": "https://api.github.com/repos/laravel/boost/zipball/75c269a8a53e931c7252e7cd562e1a209356a7c6",
+                "reference": "75c269a8a53e931c7252e7cd562e1a209356a7c6",
                 "shasum": ""
             },
             "require": {
@@ -8025,12 +8102,13 @@
                 "illuminate/contracts": "^11.45.3|^12.41.1|^13.0",
                 "illuminate/routing": "^11.45.3|^12.41.1|^13.0",
                 "illuminate/support": "^11.45.3|^12.41.1|^13.0",
-                "laravel/mcp": "^0.7.1|^0.8.0|^0.9.0",
+                "laravel/mcp": "^0.7.1|^0.8.0|^0.9.0|^1.0",
                 "laravel/prompts": "^0.3.10",
                 "laravel/roster": "^1.0.0",
                 "php": "^8.2"
             },
             "require-dev": {
+                "jasonmccreary/double": "^1.0",
                 "laravel/pint": "^1.27.0",
                 "mockery/mockery": "^1.6.12",
                 "orchestra/testbench": "^9.15.0|^10.6|^11.0",
@@ -8069,7 +8147,7 @@
                 "issues": "https://github.com/laravel/boost/issues",
                 "source": "https://github.com/laravel/boost"
             },
-            "time": "2026-08-26T21:39:22+00:00"
+            "time": "2026-10-07T19:07:19+00:00"
         },
         {
             "name": "laravel/mcp",
@@ -10560,7 +10638,9 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {},
+    "stability-flags": {
+        "shoemoney/langchain-php": 20
+    },
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {

@@ -165,7 +165,6 @@ return [
         'max_candidates' => 10,
         'min_age_hours' => 24,            // pairs younger than this are held, not ranked
         'liquidity_floor_usd' => 100000,  // 24h volume floor
-        'min_buy_sell_ratio' => 1.0,      // sells > buys in last two windows drops candidate
         // Wall-clock budget for the shortlist's order-book fetches (each up to coinbase.timeout).
         // Once spent, remaining shortlist candidates scan without book depth rather than stalling the cycle.
         'book_fetch_budget_seconds' => (float) env('DESK_BOOK_FETCH_BUDGET_SECONDS', 5.0),
@@ -178,8 +177,6 @@ return [
         'max_breakeven_move_pct' => 2.0,
         // max share of 24h volume a position may represent (liquidity vs size)
         'max_pct_of_volume_24h' => 0.5,   // PERCENT of 24h volume a ticket may represent
-        // rug shape: young + volume falling
-        'min_rejections_per_day_warning' => 10,
     ],
 
     'size' => [
@@ -248,6 +245,11 @@ return [
     // 'aws' turns on the numbered first-login guide on the login page (AMI first boot sets it).
     'first_login_guide' => env('DESK_FIRST_LOGIN_GUIDE'),
 
+    // One-line marker the AMI's acme.sh writes ("trusted ip:1.2.3.4 <time>" or "fallback ..."). The aws
+    // AWS first-login credentials are refused until this records a trusted certificate for the
+    // requested host and the connection itself is HTTPS. Owner passwords are unaffected.
+    'tls_status_path' => env('DESK_TLS_STATUS_PATH', '/var/run/tls-status/status'),
+
     // Wall-clock budget for one cycle's candidate loop. Once spent, no new candidate is vetted or entered
     // (logged). Must stay far below the cycle lock lease (Desk::cycleLockSeconds) so the lease cannot lapse
     // while orders are still being submitted. Raw value: Desk validates it (non-negative integer, else 1200 + a warning).
@@ -261,4 +263,18 @@ return [
     // instead of the long-running `desk:run` loop — never run both. Read via config() (not
     // env()) so the setting survives `artisan config:cache`/`optimize` in production.
     'use_scheduler' => (bool) env('DESK_USE_SCHEDULER', false),
+
+    // desk:run boot clears a cycle lock whose owner is provably dead (same host, pid gone). Set true ONLY
+    // where exactly one desk:run exists (the compose desk role): it then also clears a lock left by a
+    // desk:run on a different hostname — a recreated container's dead predecessor. Leave false on bare
+    // metal, where a second `bin/desk` or worker could legitimately hold the lock under another host name.
+    'reclaim_foreign_cycle_locks' => (bool) env('DESK_RECLAIM_FOREIGN_CYCLE_LOCKS', false),
+
+    // How long housekeeping keeps rows that only feed the dashboard feed / debugging (daily model:prune,
+    // queue:prune-failed, queue:prune-batches in routes/console.php).
+    'retention' => [
+        'events_days' => (int) env('DESK_EVENT_RETENTION_DAYS', 30),
+        'failed_jobs_hours' => (int) env('DESK_FAILED_JOB_RETENTION_HOURS', 168),
+        'job_batches_hours' => (int) env('DESK_JOB_BATCH_RETENTION_HOURS', 48),
+    ],
 ];

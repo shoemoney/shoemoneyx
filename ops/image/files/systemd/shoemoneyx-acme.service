@@ -1,0 +1,24 @@
+[Unit]
+Description=shoemoneyx desk TLS certificate: re-issue if the public IP changed or the cert is near expiry
+After=docker.service network-online.target shoemoneyx-first-boot.service shoemoneyx-firewall.service
+Wants=docker.service network-online.target
+ConditionPathExists=/opt/shoemoneyx/.env
+# Retry a failed issuance in 15 minutes instead of waiting for the 12h timer, but stay far under Let's
+# Encrypt's 5 failed validations per hour (at most 4 starts per hour, timer and boot runs included).
+StartLimitIntervalSec=3600
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+ExecStart=/opt/shoemoneyx-acme.sh renew
+# Runs on success, failure, timeout and SIGKILL alike: inbound 80 never outlives the unit.
+ExecStopPost=/opt/shoemoneyx-acme.sh close-port
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=15min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Also runs once on every boot, so a stop/start that changed the public IP is fixed straight away.
+WantedBy=multi-user.target

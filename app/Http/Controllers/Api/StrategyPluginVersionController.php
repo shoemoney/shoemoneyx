@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Desk\Strategies\SchemaMigrator;
 use App\Http\Controllers\Controller;
 use App\Models\StrategyPlugin;
 use App\Models\StrategyPluginVersion;
@@ -42,6 +43,10 @@ class StrategyPluginVersionController extends Controller
 
         $source = $this->findVersion($plugin, $version);
         $def = $source->definition;
+        $check = SchemaMigrator::validateForSave($def);
+        if (! $check['valid']) {
+            return response()->json($check, 422);
+        }
         $next = SemVer::bump($plugin->current_version ?? '1.0.0', $data['bump'] ?? 'patch');
 
         $plugin->update([

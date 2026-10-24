@@ -16,15 +16,33 @@
 # redis report healthy; web/queue/schedule/reverb/desk all `depends_on: migrate:
 # service_completed_successfully`. Chose a one-shot job over a `migrate:status` healthcheck on
 # `web` — a status healthcheck polls artisan forever and can flap mid-migration, where a one-shot
-# job is a single cheap go/no-go before anything else starts. (`web`'s own entrypoint re-runs
-# `migrate --force` on every start too, on top of this — idempotent, so it's just cheap insurance
-# against config/DB drift between restarts, not a second race.)
+# job is a single cheap go/no-go before anything else starts. `web`'s entrypoint no longer migrates:
+# a failing migration used to crash-loop web, and compose is the only launcher that starts it.
+#
+# Pinned images: every `image:` below that is not ours, and every FROM in the Dockerfile, is
+# tag@sha256 (the tag documents intent, the digest is what runs). To bump, resolve the new digest
+# with `docker buildx imagetools inspect <tag>` (the top-level Digest is the multi-arch index) and
+# replace it in both files; renovate.json opens these PRs automatically.
+#
+# Resource limits are sized for a 2 GB t3.small (+ the 2 GB swapfile ops/image/provision.sh adds): caps
+# sum to ~1.8 GB but steady-state use is well under that, and a runaway container is OOM-killed alone
+# (mariadb has oom_score_adj -900, so it is the last to go) instead of taking the box down. Bigger box:
+# raise MEM_<SERVICE> in .env; memswap_limit is fixed at 2x the default, so edit it here if you go past that.
+# Health: desk/queue/schedule write heartbeat files; docker/entrypoint.sh's watchdog kills a wedged one so
+# `restart: unless-stopped` revives it (plain compose never restarts a merely "unhealthy" container, and
+# autoheal sidecars need /var/run/docker.sock, which is root on the host — not worth it for a trading box).
+x-logging: &logging
+  # json-file is unbounded by default; ~30 MB per container, rotated.
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
 services:
   worker:
     image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     profiles: [worker]
     restart: unless-stopped
+    logging: *logging
     environment:
       ROLE: worker
       WORKERS: ${WORKERS:-0}
@@ -49,6 +67,10 @@ services:
     image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_FEEDER:-96m}
+    memswap_limit: 192m
+    oom_score_adj: 300
     environment:
       ROLE: feeder
       APP_NAME: shoemoneyx
@@ -60,13 +82,25 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-shoemoneyx}
 
   mariadb:
-    image: mariadb:13
+    image: mariadb:13@sha256:0e4bb0f339feba125d1154fbacd36c16ec8518f52e44e1f82ecec7d6771caf39
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_MARIADB:-384m}
+    memswap_limit: 640m
+    oom_score_adj: -900
     environment:
       MARIADB_RANDOM_ROOT_PASSWORD: "yes"
       MARIADB_DATABASE: shoemoneyx
       MARIADB_USER: shoemoneyx
       MARIADB_PASSWORD: ${DB_PASSWORD}
+    # Sized for the 384m mem_limit: buffer pool ~40%, performance_schema off (saves ~100 MB), few connections
+    # (4 fpm + desk + queue + schedule + reverb + backup).
+    command:
+      - --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL:-160M}
+      - --max-connections=60
+      - --performance-schema=OFF
+      - --tmp-table-size=32M
+      - --max-heap-table-size=32M
     volumes: [mariadb-data:/var/lib/mysql]
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
@@ -75,8 +109,13 @@ services:
       retries: 30
 
   redis:
-    image: redis:8-alpine
+    image: redis:8-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+    command: ["redis-server", "--maxmemory", "${REDIS_MAXMEMORY:-96mb}", "--maxmemory-policy", "noeviction"]
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_REDIS:-128m}
+    memswap_limit: 256m
+    oom_score_adj: -500
     volumes: [redis-data:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -92,17 +131,61 @@ services:
       ROLE: artisan
     command: ["migrate", "--force"]
     restart: "no"
+    logging: *logging
+    mem_limit: ${MEM_MIGRATE:-256m}
+    memswap_limit: 512m
+    oom_score_adj: 0
     depends_on:
       mariadb: { condition: service_healthy }
       redis: { condition: service_healthy }
+
+  backup:
+    # Nightly gzip'd mariadb-dump into the `backups` volume, newest 7 kept (docker/backup.sh).
+    # Same disk as the live DB: guards against a bad migration / dropped table, NOT volume loss —
+    # pair with EBS snapshots (docs/HOSTED_IMAGE.md#backups-and-snapshots).
+    image: mariadb:13@sha256:0e4bb0f339feba125d1154fbacd36c16ec8518f52e44e1f82ecec7d6771caf39
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_BACKUP:-96m}
+    memswap_limit: 192m
+    oom_score_adj: 800
+    # Starts as root only to hand the volume to the mysql user, then drops to it (gosu) for the dump loop.
+    entrypoint: ["bash", "-c", "chown -R mysql:mysql /backups && exec gosu mysql bash /backup.sh"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      DB_HOST: mariadb
+      DB_USERNAME: shoemoneyx
+      DB_PASSWORD: ${DB_PASSWORD}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - ./docker/backup.sh:/backup.sh:ro
+      - backups:/backups
+    depends_on:
+      mariadb: { condition: service_healthy }
+    healthcheck:
+      # newest dump younger than 26h (the first dump runs at container start if none is under 24h old)
+      test: ["CMD-SHELL", "test -n \"$$(find /backups -name 'shoemoneyx-*.sql.gz' -size +1k -mmin -1560 | head -n1)\""]
+      interval: 10m
+      timeout: 10s
+      retries: 1
+      start_period: 10m
 
   web:
     image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_WEB:-256m}
+    memswap_limit: 512m
+    oom_score_adj: 200
     env_file: .env
     environment:
       ROLE: web
+    # AMI first login requires a matching trusted activation marker and HTTPS before accepting
+    # bootstrap credentials. Non-AMI self-hosters do not depend on this status volume.
+    volumes: [tls-status:/var/run/tls-status:ro]
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -116,6 +199,10 @@ services:
     image: ghcr.io/shoemoney/shoemoneyx-nginx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: nginx }
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_NGINX:-32m}
+    memswap_limit: 64m
+    oom_score_adj: 0
     ports: ["443:443"]
     volumes: [tls-data:/etc/ssl/shoemoneyx]
     depends_on:
@@ -125,36 +212,79 @@ services:
     image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_DESK:-256m}
+    memswap_limit: 512m
+    oom_score_adj: 0
     env_file: .env
     environment:
       ROLE: desk
+      # Exactly one desk replica, so a predecessor's cycle lock may be cleared at boot, but only once its owner
+      # heartbeat is older than stop_grace_period (60s) + mutate lock TTL (>=90s) + 30s margin (~3 min): a
+      # predecessor still inside its stop grace may be finishing an in-flight entry. See Desk::staleBeatSeconds().
+      DESK_RECLAIM_FOREIGN_CYCLE_LOCKS: "true"
+      PHP_MEMORY_LIMIT: ${DESK_PHP_MEMORY_LIMIT:-192M}
+      DESK_HEARTBEAT_MAX: ${DESK_HEARTBEAT_MAX:-2400}
+    stop_grace_period: 60s   # SIGTERM lets the in-flight cycle wind down and release its lock before SIGKILL
     depends_on:
       migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "sh", "/app/docker/heartbeat-check.sh", "desk", "${DESK_HEARTBEAT_MAX:-2400}"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   queue:
     image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_QUEUE:-384m}
+    memswap_limit: 768m
+    oom_score_adj: 500
     env_file: .env
     environment:
       ROLE: queue
+      PHP_MEMORY_LIMIT: ${QUEUE_PHP_MEMORY_LIMIT:-320M}
+      QUEUE_MEMORY_MB: ${QUEUE_MEMORY_MB:-256}
     depends_on:
       migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "sh", "/app/docker/heartbeat-check.sh", "queue", "4200"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 3m
 
   schedule:
     image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_SCHEDULE:-128m}
+    memswap_limit: 256m
+    oom_score_adj: 300
     env_file: .env
     environment:
       ROLE: schedule
     depends_on:
       migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "sh", "/app/docker/heartbeat-check.sh", "schedule", "300"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   reverb:
     image: ghcr.io/shoemoney/shoemoneyx:${SHOEMONEYX_VERSION:-latest}
     build: { context: ., target: app }
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MEM_REVERB:-96m}
+    memswap_limit: 192m
+    oom_score_adj: 300
     env_file: .env
     environment:
       ROLE: reverb
@@ -162,6 +292,8 @@ services:
       migrate: { condition: service_completed_successfully }
 
 volumes:
+  backups:
   mariadb-data:
   redis-data:
   tls-data:
+  tls-status:

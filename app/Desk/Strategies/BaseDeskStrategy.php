@@ -12,6 +12,7 @@ use App\Desk\Data\RiskDecision;
 use App\Desk\Data\SizeDecision;
 use App\Desk\Data\Verdict;
 use App\Desk\DeskContext;
+use App\Desk\Execution\Quantize;
 use App\Models\Position;
 use App\Support\Fees;
 use App\Support\Kelly;
@@ -444,7 +445,7 @@ abstract class BaseDeskStrategy implements Strategy
             return new SizeDecision($v, 0, 0, 0, $exitable, $ceiling, $why.'; below minimum viable ticket');
         }
 
-        $dollars = floor($dollars * 100) / 100;
+        $dollars = Quantize::floorTo($dollars, 2);
 
         return new SizeDecision(
             $v,

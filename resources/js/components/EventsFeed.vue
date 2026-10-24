@@ -1,24 +1,51 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { api, fmt } from "../api";
+import { deskFetch, fmt } from "../api";
 const props = defineProps({
     limit: { type: Number, default: 60 },
     agent: { type: String, default: "" },
 });
 const events = ref([]);
+// Set while polls are failing, so a frozen feed is labelled instead of looking quiet.
+const staleSince = ref(null);
 let timer;
+let controller = null;
+// A stalled request must not block later polls or hide the stale badge, so each one has a deadline.
+const REQUEST_TIMEOUT_MS = 8000;
 async function load() {
+    if (controller || document.hidden) return;
+    const request = new AbortController();
+    controller = request;
+    const deadline = setTimeout(() => request.abort(), REQUEST_TIMEOUT_MS);
     try {
-        events.value = await api.get(
-            `/events?limit=${props.limit}${props.agent ? "&agent=" + props.agent : ""}`,
+        events.value = await deskFetch(
+            `/api/events?limit=${props.limit}${props.agent ? "&agent=" + props.agent : ""}`,
+            { signal: request.signal },
         );
-    } catch {}
+        staleSince.value = null;
+    } catch {
+        if (staleSince.value === null && !request.unmounted) staleSince.value = Date.now();
+    } finally {
+        clearTimeout(deadline);
+        if (controller === request) controller = null;
+    }
+}
+function onVisible() {
+    if (!document.hidden) load();
 }
 onMounted(() => {
     load();
     timer = setInterval(load, 5000);
+    document.addEventListener("visibilitychange", onVisible);
 });
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => {
+    if (controller) {
+        controller.unmounted = true;
+        controller.abort();
+    }
+    clearInterval(timer);
+    document.removeEventListener("visibilitychange", onVisible);
+});
 const agentColor = {
     CHIEF: "text-amber-300",
     SCAN: "text-sky-300",
@@ -36,6 +63,9 @@ const levelDot = {
 </script>
 <template>
     <div class="smx-events space-y-1 font-mono text-sm leading-relaxed">
+        <div v-if="staleSince" class="text-amber-300" role="status">
+            STALE · feed not updating since {{ new Date(staleSince).toLocaleTimeString() }}
+        </div>
         <div v-for="e in events" :key="e.id" class="smx-event-row">
             <span
                 class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"

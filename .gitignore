@@ -37,6 +37,7 @@ dump.rdb
 
 # browser-check artefacts
 .playwright-mcp/
+.playwright-cli/
 /*.png
 *.sync-conflict-*
 .opencode/ralph-loop.local.md

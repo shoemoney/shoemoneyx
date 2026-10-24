@@ -3,15 +3,14 @@
 # fronts the `web` role's php-fpm over HTTPS. Multi-arch:
 #   docker buildx build --platform linux/arm64,linux/amd64 --target app   -t ghcr.io/shoemoney/shoemoneyx:latest       --push .
 #   docker buildx build --platform linux/arm64,linux/amd64 --target nginx -t ghcr.io/shoemoney/shoemoneyx-nginx:latest --push .
-FROM php:8.5-fpm-bookworm AS base
-# PHP 8.5 compiles OPcache into the core, so it is not a shared extension anymore.
-# `docker-php-ext-install opcache` configures successfully and then dies in
-# install-modules with `cp: cannot stat 'modules/*'` because no opcache.so is built.
+FROM php:8.5-fpm-bookworm@sha256:d3db5340c7ecfb1e3a26af5d3d9de8b4e160cdd75692a830b5cb74b0b85db2cf AS base
 RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99qemu \
     && apt-get update && apt-get install -y --no-install-recommends git unzip libzip-dev libsodium-dev libicu-dev libgmp-dev \
     && docker-php-ext-install -j1 pdo_mysql bcmath sodium intl zip pcntl gmp \
     && pecl install redis && docker-php-ext-enable redis \
     && rm -rf /var/lib/apt/lists/*
+# PHP 8.5 compiles OPcache into the core, so docker-php-ext-install opcache has nothing to
+# install. These ini settings still apply to the built-in opcache (no zend_extension line).
 # opcache on for CLI too: backtests are hot loops over the same classes, and this base now also
 # serves php-fpm (the fpm image ships the php CLI binary as well, which is why it can run both).
 RUN { echo 'opcache.enable_cli=1'; echo 'opcache.jit=tracing'; echo 'opcache.jit_buffer_size=128M'; echo 'memory_limit=1G'; } > /usr/local/etc/php/conf.d/shoemoneyx.ini
@@ -22,12 +21,12 @@ FROM base AS deps
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --no-scripts --no-autoloader --prefer-dist
 
-FROM node:24-bookworm-slim AS feeder-deps
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS feeder-deps
 WORKDIR /feeder
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
-FROM node:24-bookworm-slim AS frontend-build
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS frontend-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -50,12 +49,13 @@ COPY --from=frontend-build /app/public/build ./public/build
 # node for the feeder role
 COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=feeder-deps /feeder/node_modules ./node_modules
+COPY docker/fpm-pool.conf /usr/local/etc/php-fpm.d/zz-shoemoneyx.conf
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p storage/logs storage/framework/{cache,sessions,views} bootstrap/cache && chmod -R 777 storage bootstrap/cache
 ENV ROLE=worker WORKERS=0 REDIS_CLIENT=phpredis DESK_IN_CONTAINER=1
 ENTRYPOINT ["/entrypoint.sh"]
 
-FROM nginx:1.31-alpine AS nginx
+FROM nginx:1.31-alpine@sha256:a3554c0d0b48177b1413c26e01f695334428020d9df01243fbae3e11cfd17417 AS nginx
 # No TLS key at build time: a key baked into this public image would be shared by every install.
 # docker/nginx-tls-init.sh mints a per-install pair on first start into the tls-data volume.
 RUN apk add --no-cache openssl

@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use Illuminate\Support\Facades\Cache;
-
 use App\Desk\Backtester;
 use App\Desk\DeskContext;
 use App\Desk\Execution\Perps;
@@ -28,6 +26,7 @@ use App\Support\Sharpe;
 use Illuminate\Console\Command;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -359,7 +358,7 @@ class DeskOptimize extends Command
             'candidates' => count($cands), 'side' => $roundSide['persisted'], 'folds' => $folds,
             'champion_params' => $champ['params'], 'champion_train' => $champ['train'], 'champion_test' => $champ['test'],
             'best_params' => $best['params'] ?? null, 'best_train' => $best['train'] ?? null, 'best_test' => $best['test'] ?? null,
-            'best_calmar' => $best['train_calmar'] ?? null, 'best_dsr' => $bestDsr, 'best_plateau' => $bestPlateau, 'rank' => $rank,
+            'best_calmar' => $best['train_calmar'] ?? null, 'best_dsr' => $bestDsr, 'best_plateau' => $bestPlateau === null ? null : max(-1e5, min(1e5, $bestPlateau)), 'rank' => $rank,
             'best_test_min' => $best['test_min'] ?? null, 'best_folds_complete' => $best['folds_complete'] ?? null,
             'holdout_return' => $holdoutReturn, 'trials_cumulative' => $trials,
             'cash' => $cash, 'tag' => $tag, 'cache_hits' => $cacheHits, 'note' => $note.$roundSide['noteSuffix'],
@@ -483,7 +482,7 @@ class DeskOptimize extends Command
         $only = array_filter(array_map('trim', explode(',', (string) $this->option('tfs'))));
         $key = $this->prefix().'timeframe';
         // A space without a timeframe knob (the one-idea ablation spaces) keeps the coin's current timeframe.
-        $tfs = $this->space()[$key] ?? [(string) (new \App\Desk\DeskContext(app(Settings::class)->merged(app(\App\Desk\StrategyRegistry::class)->make((string) $this->option('strategy'))), 'paper'))->forProduct($pid)->param($key, '1m')];
+        $tfs = $this->space()[$key] ?? [(string) (new DeskContext(app(Settings::class)->merged(app(StrategyRegistry::class)->make((string) $this->option('strategy'))), 'paper'))->forProduct($pid)->param($key, '1m')];
         foreach ($tfs as $tf) {
             if ($only !== [] && ! in_array($tf, $only, true)) {
                 continue;
@@ -663,8 +662,7 @@ class DeskOptimize extends Command
         $loggedDone = null;
         $loggedAt = 0;
         while (true) {
-            Backtest::whereIn('id', $ids)->where('status', 'running')->where('updated_at', '<', now()->subSeconds(3700))
-                ->update(['status' => 'error', 'error' => 'stale: worker died mid-run']);
+            app(\App\Support\StaleBacktestReaper::class)->reap($ids, 3700);
             $done = Backtest::whereIn('id', $ids)->whereIn('status', ['done', 'error'])->count();
             if ($interactive) {
                 $bar->setProgress($done);

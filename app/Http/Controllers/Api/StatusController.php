@@ -31,11 +31,11 @@ class StatusController extends Controller
             'health' => $health,
             'bank' => $bank,
             'bank_error' => $bankError,
-            'open_positions' => Position::open()->mode($mode)->count(),
-            'closed_today' => Position::mode($mode)->where('status', 'closed')->where('closed_at', '>=', now()->startOfDay())->count(),
-            'realised_today' => (float) Position::mode($mode)->where('status', 'closed')->where('closed_at', '>=', now()->startOfDay())->sum('pnl_usd'),
-            'realised_total' => (float) Position::mode($mode)->where('status', 'closed')->sum('pnl_usd'),
-            'last_run' => DeskRun::where('mode', $mode)->latest('started_at')->first(),
+            'open_positions' => Position::open()->mode($mode)->seat(null)->count(),
+            'closed_today' => Position::mode($mode)->seat(null)->where('status', 'closed')->where('closed_at', '>=', now()->startOfDay())->count(),
+            'realised_today' => (float) Position::mode($mode)->seat(null)->where('status', 'closed')->where('closed_at', '>=', now()->startOfDay())->sum('pnl_usd'),
+            'realised_total' => (float) Position::mode($mode)->seat(null)->where('status', 'closed')->sum('pnl_usd'),
+            'last_run' => DeskRun::where('mode', $mode)->seat(null)->latest('started_at')->first(),
             'live_confirm' => config('desk.live_confirm') === 'yes',
             'server_time' => now()->toIso8601String(),
         ]);
@@ -45,6 +45,7 @@ class StatusController extends Controller
     {
         $hours = (int) $request->integer('hours', 72);
         $rows = BankSnapshot::where('mode', $request->input('mode', $desk->mode()))
+            ->seat(null)
             ->where('taken_at', '>=', now()->subHours($hours))->orderBy('taken_at')->get(['taken_at', 'equity', 'cash', 'positions_value', 'free_cash']);
 
         return response()->json($rows);

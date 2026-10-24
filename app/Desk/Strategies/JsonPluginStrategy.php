@@ -11,6 +11,7 @@ use App\Desk\Data\RiskDecision;
 use App\Desk\Data\SizeDecision;
 use App\Desk\Data\Verdict;
 use App\Desk\DeskContext;
+use App\Desk\Execution\Quantize;
 use App\Models\BankSnapshot;
 use App\Models\Position;
 use App\Models\StrategyPlugin;
@@ -31,9 +32,9 @@ use Carbon\CarbonImmutable;
  * `json.plugin_version_id`, which takes priority — the definition is always
  * read from the immutable version row, never the mutable plugin, once pinned.
  *
- * `definition()` always returns the canonical schema_version:1 shape (see
- * SchemaMigrator): legacy flat-shape definitions are mapped forward on read
- * so every plugin ever saved keeps running unchanged.
+ * `definition()` returns the stored definition with schema_version preserved: legacy
+ * flat-shape definitions are migrated to v1 on read, v2 definitions are passed through
+ * with parameters substituted, so every plugin ever saved keeps running unchanged.
  */
 class JsonPluginStrategy extends BaseDeskStrategy
 {
@@ -52,6 +53,28 @@ class JsonPluginStrategy extends BaseDeskStrategy
         return array_replace_recursive(parent::defaults(), [
             'json' => ['plugin_key' => null, 'plugin_version_id' => null],
         ]);
+    }
+
+    /** The strategy_plugin_versions id a position opened under $ctx runs on: the pinned id, else the plugin_key's current version. */
+    public function pinnedVersionId(DeskContext $ctx): ?int
+    {
+        $versionId = $ctx->param('json.plugin_version_id');
+        if (is_numeric($versionId)) {
+            return StrategyPluginVersion::whereKey((int) $versionId)->exists() ? (int) $versionId : null;
+        }
+
+        $key = $ctx->param('json.plugin_key');
+        if (! is_string($key) || $key === '') {
+            return null;
+        }
+        $plugin = StrategyPlugin::where('key', $key)->first();
+        if ($plugin === null) {
+            return null;
+        }
+        $id = $plugin->versions()->where('version', $plugin->current_version)->orderByDesc('id')->value('id')
+            ?? $plugin->versions()->orderByDesc('id')->value('id');
+
+        return $id === null ? null : (int) $id;
     }
 
     /** @return array<string, mixed>|null */
@@ -282,7 +305,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             return $size;
         }
 
-        $clamped = floor($room * 100) / 100;
+        $clamped = Quantize::floorTo($room, 2);
         $minTicket = (float) $ctx->param('size.min_ticket_usd', 10);
         if ($clamped < $minTicket) {
             return new SizeDecision($v, 0, 0, 0, false, false, $size->why.sprintf(
@@ -471,7 +494,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
             return new SizeDecision($v, 0, 0, 0, $exitable, false, $why.'; below minimum viable ticket');
         }
 
-        $dollars = floor($dollars * 100) / 100;
+        $dollars = Quantize::floorTo($dollars, 2);
 
         return new SizeDecision(
             $v, $dollars,
@@ -1027,7 +1050,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         return null;
     }
 
-    /** v1-compat close-only rules kept on migration (SchemaMigrator::v1ToV2(), "Migration v1 -> v2": `exit.take_profit.rules` -> `take_profit.rules`) — validated by StrategySchemaValidator but otherwise dead until this reads them. */
+    /** v1-compat close-only rules kept on migration (SchemaMigrator::v1ToV2(), "Migration v1 -> v2": `exit.take_profit.rules` -> `take_profit.rules`) — validated by StrategySchemaValidator and evaluated here by riskV2() on every pass where stopDecision() returns no decision. */
     private function takeProfitRulesDecision(Position $position, ProductStats $stats, array $takeProfit, DeskContext $ctx, string $tf): ?RiskDecision
     {
         foreach ($takeProfit['rules'] ?? [] as $rule) {
@@ -1423,6 +1446,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         $todayStart = CarbonImmutable::instance($ctx->now())->utc()->startOfDay();
 
         $startingEquity = (float) (BankSnapshot::where('mode', $ctx->mode)
+            ->where('arena_seat_id', $ctx->arenaSeatId)
             ->where('taken_at', '>=', $todayStart)
             ->orderBy('taken_at')
             ->value('equity') ?? 0);
@@ -1431,6 +1455,7 @@ class JsonPluginStrategy extends BaseDeskStrategy
         }
 
         $realised = (float) Position::where('mode', $ctx->mode)
+            ->seat($ctx->arenaSeatId)
             ->where('status', 'closed')
             ->where('closed_at', '>=', $todayStart)
             ->sum('pnl_usd');

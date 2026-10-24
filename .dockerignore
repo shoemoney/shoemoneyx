@@ -3,6 +3,7 @@ feeder/node_modules
 vendor
 storage/logs/*
 storage/framework/cache/*
+storage/framework/heartbeat-*
 .env
 .env.*
 .patches
@@ -27,5 +28,8 @@ output
 .claude
 .codex
 .cursor
+.playwright-cli
+.playwright-mcp
+.grok
 .idea
 .vscode

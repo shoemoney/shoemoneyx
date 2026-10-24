@@ -1,8 +1,15 @@
 <script setup>
 import { publicDemo } from "../demoMode";
 import PageHeading from "../components/PageHeading.vue";
-import { ref, onMounted, inject, computed, watch } from "vue";
-import { api } from "../api";
+import ConfirmRisk from "../components/ConfirmRisk.vue";
+import {
+    useConfirmRisk,
+    describeSettingChange,
+    describePaperReset,
+    trapTab,
+} from "../riskConfirm";
+import { ref, onMounted, inject, computed, watch, nextTick } from "vue";
+import { api, updateCsrfToken } from "../api";
 import "../../css/research-controls.css";
 
 const s = ref(null);
@@ -15,6 +22,36 @@ const PARAMETER_BATCH = 100;
 const visibleLimit = ref(PARAMETER_BATCH);
 const edits = ref({});
 const refreshStatus = inject("refreshStatus");
+const {
+    request: riskRequest,
+    ask: askRisk,
+    confirm: confirmRisk,
+    cancel: cancelRisk,
+} = useConfirmRisk();
+
+function currentValue(key) {
+    if (key === "mode") return s.value?.mode;
+    if (key === "strategy") return s.value?.strategy;
+    return s.value?.params[key];
+}
+// Every save from the UI goes through here; risky keys ask first. Resolves true once the change went ahead.
+async function requestSave(key, value) {
+    if (publicDemo || passwordBusy.value) return false;
+    const request = describeSettingChange(key, currentValue(key), value);
+    if (request && !(await askRisk(request))) return false;
+    if (passwordBusy.value) return false;
+    if (key === "mode" && value === "live") {
+        askLivePassword();
+        return true;
+    }
+    await save(key, value);
+    return true;
+}
+async function changeStrategy(event) {
+    if (!(await requestSave("strategy", event.target.value))) {
+        event.target.value = s.value.strategy;
+    }
+}
 
 async function load() {
     loading.value = true;
@@ -33,26 +70,137 @@ const liveModal = ref(false);
 const livePassword = ref("");
 const liveError = ref("");
 const liveBusy = ref(false);
+const liveForm = ref(null);
+const liveInput = ref(null);
+let liveOpener = null;
 function askLivePassword() {
+    if (publicDemo || passwordBusy.value) return;
+    liveOpener = document.activeElement;
     livePassword.value = "";
     liveError.value = "";
     liveModal.value = true;
+    nextTick(() => liveInput.value?.focus());
+}
+function closeLive() {
+    liveModal.value = false;
+    liveOpener?.focus?.();
+    liveOpener = null;
+}
+// Keep Tab inside the dialog while it is open; Escape cancels.
+function liveKeydown(event) {
+    if (event.key === "Escape" && !liveBusy.value) {
+        event.preventDefault();
+        closeLive();
+        return;
+    }
+    trapTab(event, liveForm.value);
 }
 async function confirmLive() {
-    if (!livePassword.value) return;
+    if (!livePassword.value || liveBusy.value || passwordBusy.value) return;
     liveBusy.value = true;
     liveError.value = "";
     try {
         await save("mode", "live", { password: livePassword.value }, true);
-        liveModal.value = false;
         livePassword.value = "";
+        closeLive();
     } catch (e) {
         liveError.value = e.message;
     } finally {
         liveBusy.value = false;
     }
 }
+// The onboarding endpoint is the only write that may replace the master password.
+// Doing so regenerates the session, so the CSRF meta tag has to pick up the new token
+// or the next settings save is rejected.
+const MIN_PASSWORD = 12;
+const MAX_PASSWORD_BYTES = 72;
+const currentPassword = ref("");
+const newPassword = ref("");
+const confirmPassword = ref("");
+const passwordBusy = ref(false);
+const settingsWrites = ref(0);
+const passwordError = ref("");
+// Laravel's min:12 counts Unicode code points. String.length counts UTF-16 units,
+// so a handful of emoji would look long enough here and fail on the server.
+function passwordChars(value) {
+    return [...value].length;
+}
+const passwordTooShort = computed(
+    () => newPassword.value !== "" && passwordChars(newPassword.value) < MIN_PASSWORD,
+);
+const passwordTooLong = computed(
+    () => new TextEncoder().encode(newPassword.value).length > MAX_PASSWORD_BYTES,
+);
+const passwordMismatch = computed(
+    () => confirmPassword.value !== "" && newPassword.value !== confirmPassword.value,
+);
+const canChangePassword = computed(
+    () =>
+        currentPassword.value !== "" &&
+        passwordChars(newPassword.value) >= MIN_PASSWORD &&
+        !passwordTooLong.value &&
+        newPassword.value === confirmPassword.value,
+);
+const newPasswordDescribedBy = computed(() => {
+    const ids = [
+        passwordTooShort.value ? "rc-password-short" : "",
+        passwordTooLong.value ? "rc-password-long" : "",
+        passwordMismatch.value ? "rc-password-mismatch" : "",
+    ].filter(Boolean);
+    return ids.length ? ids.join(" ") : undefined;
+});
+function passwordFieldError(error) {
+    const errors = error?.errors;
+    if (!errors || typeof errors !== "object") return "";
+    const keys = [
+        "current_password",
+        "password",
+        "password_confirmation",
+        ...Object.keys(errors),
+    ];
+    const seen = new Set();
+    const messages = [];
+    for (const key of keys) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const value = errors[key];
+        const list = Array.isArray(value) ? value : [value];
+        for (const item of list) {
+            if (item) messages.push(String(item));
+        }
+    }
+    return messages.join(" ");
+}
+watch([currentPassword, newPassword, confirmPassword], () => {
+    passwordError.value = "";
+});
+async function submitPasswordChange() {
+    if (publicDemo || passwordBusy.value || settingsWrites.value > 0 || liveBusy.value || !canChangePassword.value) return;
+    passwordBusy.value = true;
+    passwordError.value = "";
+    msg.value = "";
+    error.value = "";
+    try {
+        const res = await api.post("/onboarding/master-password", {
+            current_password: currentPassword.value,
+            password: newPassword.value,
+            password_confirmation: confirmPassword.value,
+        });
+        updateCsrfToken(res?.csrf_token);
+        currentPassword.value = "";
+        newPassword.value = "";
+        confirmPassword.value = "";
+        msg.value = "master password changed";
+    } catch (e) {
+        passwordError.value = passwordFieldError(e) || e.message;
+    } finally {
+        // Other writes stay disabled until the token above is installed.
+        passwordBusy.value = false;
+    }
+}
 async function save(key, value, extra = {}, rethrow = false) {
+    if (publicDemo || passwordBusy.value) return;
+    settingsWrites.value += 1;
     msg.value = "";
     error.value = "";
     try {
@@ -63,9 +211,16 @@ async function save(key, value, extra = {}, rethrow = false) {
     } catch (e) {
         if (rethrow) throw e;
         error.value = e.message;
+    } finally {
+        settingsWrites.value -= 1;
     }
 }
 async function reset(key) {
+    if (publicDemo || passwordBusy.value) return;
+    const request = describeSettingChange(key, currentValue(key), "default");
+    if (request && !(await askRisk(request))) return;
+    if (passwordBusy.value) return;
+    settingsWrites.value += 1;
     try {
         await api.del(`/settings/${key}`);
         msg.value = `reset ${key}`;
@@ -73,22 +228,30 @@ async function reset(key) {
         await refreshStatus();
     } catch (e) {
         error.value = e.message;
+    } finally {
+        settingsWrites.value -= 1;
     }
 }
 async function act(action) {
+    if (publicDemo || passwordBusy.value) return;
     msg.value = "";
     error.value = "";
-    if (
-        action === "paper-reset" &&
-        !confirm("Wipe all paper positions and the paper ledger?")
-    )
-        return;
+    let body;
+    if (action === "paper-reset") {
+        const answer = await askRisk(describePaperReset());
+        if (!answer) return;
+        body = { scope: answer.choice };
+    }
+    if (passwordBusy.value) return;
+    settingsWrites.value += 1;
     try {
-        await api.post(`/desk/${action}`);
-        msg.value = `${action} ok`;
+        await api.post(`/desk/${action}`, body);
+        msg.value = body ? `${action} ok (${body.scope})` : `${action} ok`;
         await refreshStatus();
     } catch (e) {
         error.value = e.message;
+    } finally {
+        settingsWrites.value -= 1;
     }
 }
 const allGroups = computed(() => {
@@ -187,10 +350,16 @@ onMounted(load);
             <button class="btn" :disabled="loading" @click="load">Retry</button>
         </div>
         <Transition name="rc-notice"
-            ><div v-if="msg" class="rc-notice rc-notice-success" role="status">
+            ><div v-if="msg && msg !== 'master password changed'" class="rc-notice rc-notice-success" role="status">
                 <span aria-hidden="true">✓</span><strong>{{ msg }}</strong>
             </div></Transition
         >
+
+        <ConfirmRisk
+            :request="riskRequest"
+            @confirm="confirmRisk"
+            @cancel="cancelRisk"
+        />
 
         <template v-if="s">
             <div class="rc-state-rail">
@@ -225,7 +394,7 @@ onMounted(load);
                             class="btn"
                             :class="s.mode === 'paper' ? 'btn-primary' : ''"
                             :aria-pressed="s.mode === 'paper'"
-                            :disabled="publicDemo" @click="save('mode', 'paper')"
+                            :disabled="publicDemo || passwordBusy" @click="requestSave('mode', 'paper')"
                         >
                             <span class="rc-mode-dot"></span
                             ><strong>Paper</strong
@@ -235,7 +404,7 @@ onMounted(load);
                             class="btn rc-live-choice"
                             :class="s.mode === 'live' ? 'btn-danger' : ''"
                             :aria-pressed="s.mode === 'live'"
-                            :disabled="publicDemo" @click="askLivePassword"
+                            :disabled="publicDemo || passwordBusy" @click="requestSave('mode', 'live')"
                         >
                             <span class="rc-mode-dot"></span
                             ><strong>Live</strong
@@ -244,26 +413,30 @@ onMounted(load);
                     </div>
                     <form
                         v-if="liveModal"
+                        ref="liveForm"
                         class="rc-live-modal"
                         role="dialog"
+                        aria-modal="true"
                         aria-label="Confirm live mode"
                         @submit.prevent="confirmLive"
+                        @keydown="liveKeydown"
                     >
                         <p class="rc-inline-danger">
                             Live mode sends real orders. Enter the master password to continue.
                         </p>
                         <input
+                            ref="liveInput"
                             v-model="livePassword"
                             type="password"
                             autocomplete="current-password"
                             placeholder="master password"
-                            :disabled="liveBusy"
-                            autofocus
+                            aria-label="Master password"
+                            :readonly="liveBusy"
                         />
                         <p v-if="liveError" class="rc-inline-danger" role="alert">{{ liveError }}</p>
                         <div class="flex gap-2">
-                            <button class="btn btn-danger" type="submit" :disabled="liveBusy || !livePassword">Go live</button>
-                            <button class="btn" type="button" :disabled="liveBusy" @click="liveModal = false">Cancel</button>
+                            <button class="btn btn-danger" type="submit" :aria-disabled="liveBusy" :disabled="liveBusy || passwordBusy || !livePassword">Go live</button>
+                            <button class="btn" type="button" :aria-disabled="liveBusy" @click="!liveBusy && closeLive()">Cancel</button>
                         </div>
                     </form>
                     <p
@@ -289,7 +462,7 @@ onMounted(load);
                     <label class="rc-field"
                         >Active strategy<select
                             :value="s.strategy"
-                            :disabled="publicDemo" @change="save('strategy', $event.target.value)"
+                            :disabled="publicDemo || passwordBusy" @change="changeStrategy"
                         >
                             <option
                                 v-for="st in s.strategies"
@@ -319,21 +492,21 @@ onMounted(load);
                         </div>
                     </div>
                     <div class="rc-control-buttons">
-                        <button class="btn btn-ok" :disabled="publicDemo" @click="act('start')">
+                        <button class="btn btn-ok" :disabled="publicDemo || passwordBusy" @click="act('start')">
                             Start loop
                         </button>
-                        <button class="btn" :disabled="publicDemo" @click="act('stop')">
+                        <button class="btn" :disabled="publicDemo || passwordBusy" @click="act('stop')">
                             Stop loop
                         </button>
-                        <button class="btn btn-danger" :disabled="publicDemo" @click="act('halt')">
+                        <button class="btn btn-danger" :disabled="publicDemo || passwordBusy" @click="act('halt')">
                             Halt entries
                         </button>
-                        <button class="btn" :disabled="publicDemo" @click="act('resume')">
+                        <button class="btn" :disabled="publicDemo || passwordBusy" @click="act('resume')">
                             Resume entries
                         </button>
                         <button
                             class="btn btn-danger rc-paper-reset"
-                            :disabled="publicDemo" @click="act('paper-reset')"
+                            :disabled="publicDemo || passwordBusy" @click="act('paper-reset')"
                         >
                             Reset paper book
                         </button>
@@ -343,6 +516,83 @@ onMounted(load);
                         entries; RISK continues managing open positions.
                     </p>
                 </article>
+            </section>
+
+            <section class="rc-panel rc-password-panel" aria-labelledby="rc-password-title">
+                <div class="rc-panel-heading">
+                    <span class="rc-section-no">04</span>
+                    <div>
+                        <span class="rc-overline">Account</span>
+                        <h2 id="rc-password-title">Master password</h2>
+                    </div>
+                </div>
+                <form
+                    class="rc-password-form"
+                    :aria-busy="passwordBusy"
+                    @submit.prevent="submitPasswordChange"
+                >
+                    <label class="rc-field"
+                        >Current password
+                        <input
+                            id="rc-current-password"
+                            v-model="currentPassword"
+                            name="current_password"
+                            type="password"
+                            autocomplete="current-password"
+                            :disabled="publicDemo || passwordBusy"
+                    /></label>
+                    <label class="rc-field"
+                        >New password
+                        <input
+                            id="rc-new-password"
+                            v-model="newPassword"
+                            name="password"
+                            type="password"
+                            autocomplete="new-password"
+                            :aria-invalid="passwordTooShort || passwordTooLong || passwordMismatch || undefined"
+                            :aria-describedby="newPasswordDescribedBy"
+                            :disabled="publicDemo || passwordBusy"
+                    /></label>
+                    <label class="rc-field"
+                        >Confirm new password
+                        <input
+                            id="rc-confirm-password"
+                            v-model="confirmPassword"
+                            name="password_confirmation"
+                            type="password"
+                            autocomplete="new-password"
+                            :aria-invalid="passwordMismatch || undefined"
+                            :aria-describedby="passwordMismatch ? 'rc-password-mismatch' : undefined"
+                            :disabled="publicDemo || passwordBusy"
+                    /></label>
+                    <p v-if="passwordTooShort" id="rc-password-short" class="rc-inline-danger" role="alert">
+                        Choose a password of at least {{ MIN_PASSWORD }} characters.
+                    </p>
+                    <p v-if="passwordTooLong" id="rc-password-long" class="rc-inline-danger" role="alert">
+                        Use at most 72 bytes: longer passwords are silently cut short by the hashing algorithm.
+                    </p>
+                    <p v-if="passwordMismatch" id="rc-password-mismatch" class="rc-inline-danger" role="alert">
+                        The two passwords do not match.
+                    </p>
+                    <p v-if="passwordError" class="rc-inline-danger" role="alert">
+                        {{ passwordError }}
+                    </p>
+                    <button
+                        class="btn btn-primary"
+                        type="submit"
+                        :disabled="publicDemo || passwordBusy || settingsWrites > 0 || liveBusy || !canChangePassword"
+                    >
+                        {{ passwordBusy ? "Changing…" : "Change password" }}
+                    </button>
+                    <p v-if="msg === 'master password changed'" role="status">Master password changed.</p>
+                </form>
+                <p class="rc-help">
+                    Replaces the password that signs in to this desk. This browser stays
+                    signed in, and every other browser is signed out. Use at least
+                    {{ MIN_PASSWORD }} characters and at most 72 UTF-8 bytes. The
+                    <code>master_password_hint</code> parameter below is the text on the
+                    sign-in page.
+                </p>
             </section>
 
             <section
@@ -463,12 +713,12 @@ onMounted(load);
                                         v-if="typeof it.value !== 'object'"
                                         :id="'rc-param-' + it.key"
                                         :aria-label="it.key"
-                                        :readonly="publicDemo" :value="edits[it.key] ?? it.value"
+                                        :readonly="publicDemo || passwordBusy" :value="edits[it.key] ?? it.value"
                                         @input="
                                             edits[it.key] = $event.target.value
                                         "
                                         @keyup.enter="
-                                            save(
+                                            requestSave(
                                                 it.key,
                                                 edits[it.key] ?? it.value,
                                             )
@@ -484,13 +734,15 @@ onMounted(load);
                                                 !publicDemo && edits[it.key] !== undefined &&
                                                 edits[it.key] != it.value
                                             "
-                                            @click="save(it.key, edits[it.key])"
+                                            :disabled="passwordBusy"
+                                            @click="requestSave(it.key, edits[it.key])"
                                             :aria-label="'Save ' + it.key"
                                         >
                                             Save</button
                                         ><button
                                             class="btn"
                                             v-if="it.override"
+                                            :disabled="passwordBusy"
                                             @click="reset(it.key)"
                                             :aria-label="
                                                 'Remove override for ' + it.key
@@ -567,3 +819,24 @@ onMounted(load);
         </section>
     </div>
 </template>
+
+<style scoped>
+.rc-password-panel { margin-bottom: 24px; font-size: 20px; line-height: 1.5; }
+.rc-password-panel .rc-section-no,
+.rc-password-panel .rc-overline,
+.rc-password-panel .rc-field,
+.rc-password-panel .rc-inline-danger { font-size: 18px; line-height: 1.5; }
+.rc-password-panel h2 { font-size: 24px; line-height: 1.5; }
+.rc-password-panel .rc-help,
+.rc-page .rc-password-panel .rc-help code,
+.rc-page .rc-password-panel .rc-password-form input,
+.rc-password-panel .btn { font-size: 20px; line-height: 1.5; }
+.rc-password-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.rc-password-form .rc-field { min-width: 0; }
+.rc-password-form input { width: 100%; min-width: 0; min-height: 48px; }
+.rc-password-form p { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+.rc-password-form .btn { justify-self: start; min-height: 48px; }
+.rc-password-form :focus-visible { outline: 3px solid var(--accent, #557df4); outline-offset: 3px; }
+.rc-password-panel .rc-help { overflow-wrap: anywhere; }
+@media (max-width: 800px) { .rc-password-form { grid-template-columns: minmax(0, 1fr); } }
+</style>
