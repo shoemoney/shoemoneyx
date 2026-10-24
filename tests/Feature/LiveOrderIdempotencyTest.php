@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Desk\Desk;
 use App\Desk\Execution\OrderBudget;
 use App\Exchange\Ccxt\CcxtExecutor;
+use App\Exchange\Ccxt\ClientOrderIds;
 use App\Exchange\Coinbase\CoinbaseExecutor;
 use App\Exchange\Coinbase\CoinbasePerpsExecutor;
 use App\Models\CoinbaseAccount;
@@ -19,6 +20,7 @@ use ccxt\InsufficientFunds;
 use ccxt\RequestTimeout;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Tests\Exchange\FakeCoinbaseVenue;
 use Tests\Exchange\StubCcxtClient;
 use Tests\Feature\Fixtures\FixedTicketStrategy;
@@ -94,8 +96,8 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertEqualsWithDelta(1.0, $second->filledQty, 1e-9);
         $this->assertSame(1, count($this->venue->attempts), 'no second create call was ever made');
         $this->assertSame(1, $this->venue->landedCount());
-        $this->assertSame('resolved', $intent->refresh()->status);
-        $this->assertSame('filled', $intent->outcome);
+        $this->assertSame('pending', $intent->refresh()->status, 'the executor never resolves; the desk does, in the booking transaction');
+        $this->assertSame($intent->id, $second->intentId);
     }
 
     public function test_the_desk_books_the_position_after_reconciling_an_orphaned_entry(): void
@@ -234,7 +236,109 @@ class LiveOrderIdempotencyTest extends TestCase
         $result = $this->spot()->buy('BTC-USD', 100.0, 100.0);
 
         $this->assertSame('rejected', $result->status);
-        $this->assertSame('resolved', OrderIntent::sole()->status);
+        $this->assertSame(OrderIntent::sole()->id, $result->intentId);
+        $this->assertSame('pending', OrderIntent::sole()->status, 'resolved by the desk alongside the Fill row, not by the executor');
+    }
+
+    public function test_the_desk_resolves_a_cancelled_exit_as_rejected_and_a_filled_exit_as_filled(): void
+    {
+        $desk = app(Desk::class);
+        $executor = $this->spot();
+
+        $this->venue->orderStatus = 'CANCELLED';
+        $cancelled = $desk->close($this->livePosition(), 'stop', 100.0, $executor);
+        $this->assertSame('rejected', $cancelled->status);
+        $intent = OrderIntent::sole();
+        $this->assertSame('resolved', $intent->status);
+        $this->assertSame('rejected', $intent->outcome);
+
+        $this->venue->orderStatus = 'FILLED';
+        $position = Position::where('status', 'open')->sole();
+        $this->assertSame('filled', $desk->close($position, 'stop', 100.0, $executor)->status);
+        $filled = OrderIntent::orderByDesc('id')->first();
+        $this->assertNotSame($intent->id, $filled->id);
+        $this->assertSame('resolved', $filled->status);
+        $this->assertSame('filled', $filled->outcome);
+    }
+
+    public function test_a_failed_booking_leaves_the_intent_pending_and_reconcile_books_the_exit(): void
+    {
+        $desk = app(Desk::class);
+        $executor = $this->spot();
+        $position = $this->livePosition();
+
+        $armed = true;
+        Fill::creating(function () use (&$armed) {
+            if ($armed) {
+                throw new \RuntimeException('connection dropped mid-booking');
+            }
+        });
+
+        try {
+            $desk->close($position, 'stop', 100.0, $executor);
+            $this->fail('the booking failure must surface');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('connection dropped mid-booking', $e->getMessage());
+        }
+
+        $this->assertSame(1, $this->venue->landedCount(), 'the live order really went out');
+        $this->assertSame('pending', OrderIntent::sole()->status, 'unbooked, so reconcile must still see it');
+        $this->assertSame('open', $position->fresh()->status);
+
+        $armed = false;
+        $desk->reconcileLiveOrders(new FixedTicketStrategy(100.0), $executor);
+
+        $this->assertSame('closed', $position->fresh()->status);
+        $this->assertSame(0, OrderIntent::pending()->count());
+        $this->assertSame('filled', OrderIntent::sole()->outcome);
+        $this->assertSame(1, count($this->venue->attempts), 'never sold twice');
+    }
+
+    public function test_a_failed_trim_booking_leaves_the_intent_pending_and_a_retry_books_it_once(): void
+    {
+        $desk = app(Desk::class);
+        $executor = $this->spot();
+        $position = $this->livePosition();
+
+        $armed = true;
+        Fill::creating(function () use (&$armed) {
+            if ($armed) {
+                throw new \RuntimeException('deadlock');
+            }
+        });
+
+        try {
+            $desk->trim($position, 0.4, 'tp1', 100.0, $executor);
+            $this->fail('the booking failure must surface');
+        } catch (\RuntimeException) {
+        }
+        $this->assertSame('pending', OrderIntent::sole()->status);
+
+        $armed = false;
+        $desk->reconcileLiveOrders(new FixedTicketStrategy(100.0), $executor);
+
+        $this->assertEqualsWithDelta(0.6, (float) $position->fresh()->quantity, 1e-9);
+        $this->assertSame(0, OrderIntent::pending()->count());
+        $this->assertSame(1, count($this->venue->attempts));
+    }
+
+    public function test_release_if_absent_does_not_overwrite_an_intent_booked_after_the_stale_read(): void
+    {
+        $desk = app(Desk::class);
+        $executor = $this->spot();
+        $this->venue->timeoutBeforePlacing = true;
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->travel(3)->minutes();   // grace passed: the venue provably never got it
+
+        $stale = OrderIntent::sole();
+        $this->assertSame('pending', $stale->status);
+        // Another process books it between the sweep's read and the lock being granted.
+        OrderIntent::whereKey($stale->id)->update(['status' => 'resolved', 'outcome' => 'filled']);
+
+        $release = new \ReflectionMethod(Desk::class, 'releaseIfAbsent');
+        $release->invoke($desk, $executor, $stale);
+
+        $this->assertSame('filled', OrderIntent::sole()->outcome, 'the post-lock pending recheck must hold');
     }
 
     // ------------------------------------------------------------------ spot exit
@@ -301,6 +405,48 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertSame(1, $this->venue->landedCount());
     }
 
+    public function test_a_pending_perps_exit_that_filled_is_reconciled_even_though_the_venue_is_now_flat(): void
+    {
+        config(['desk.perps.enabled' => true]);
+        $this->venue->price = 10_000.0;
+        $this->venue->timeoutAfterPlacing = true;
+        $this->assertSame('unknown', $this->perps()->sell('BTC-USD', 0.01, 10_000.0)->status);
+
+        // The exit landed and closed the venue position; only our readback was lost.
+        $this->venue->timeoutAfterPlacing = false;
+        $this->venue->positions = [];
+        $second = $this->perps()->sell('BTC-USD', 0.01, 10_000.0);
+
+        $this->assertSame('filled', $second->status, 'the guard must not reject a call that only reconciles a pending exit');
+        $this->assertSame(1, count($this->venue->attempts));
+    }
+
+    public function test_a_failed_position_read_at_resend_time_leaves_the_pending_exit_unresolved(): void
+    {
+        config(['desk.perps.enabled' => true]);
+        $this->venue->price = 10_000.0;
+        $this->venue->timeoutBeforePlacing = true;
+        $this->assertSame('unknown', $this->perps()->sell('BTC-USD', 0.01, 10_000.0)->status);
+
+        // Past the grace window with nothing at the venue: a resend is due, but the positions read dies.
+        $this->travel(3)->minutes();
+        $this->venue->positionsFail = true;
+        $second = $this->perps()->sell('BTC-USD', 0.01, 10_000.0);
+
+        $this->assertSame('unknown', $second->status);
+        $this->assertSame('pending', OrderIntent::sole()->status, 'the intent must stay pending so reconcile can still book the original order');
+        $this->assertSame(0, $this->venue->landedCount());
+
+        // Venue recovers: the same intent is resent (same client_order_id) and booked.
+        $this->venue->positionsFail = false;
+        $this->venue->timeoutBeforePlacing = false;
+        $this->travel(3)->minutes();
+        $third = $this->perps()->sell('BTC-USD', 0.01, 10_000.0);
+
+        $this->assertSame('filled', $third->status);
+        $this->assertSame(1, OrderIntent::count());
+    }
+
     public function test_perps_short_and_long_sells_do_not_share_an_unresolved_order(): void
     {
         config(['desk.perps.enabled' => true]);
@@ -344,7 +490,7 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertSame('filled', $third->status);
         $this->assertSame('v-9', $third->venueOrderId);
         $this->assertCount(1, $client->clientOrderIds);
-        $this->assertSame('resolved', $intent->refresh()->status);
+        $this->assertSame($intent->id, $third->intentId);
     }
 
     public function test_a_ccxt_insufficient_funds_is_still_a_definitive_error(): void
@@ -723,9 +869,10 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertSame('pending', $intent->status);
         $client->stubOrderList = [['id' => 'original-1', 'clientOrderId' => $intent->client_order_id, 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0, 'fee' => ['cost' => 0.0]]];
 
-        $this->assertSame('filled', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+        $found = $executor->buy('BTC-USD', 1000.0, 50_000.0);
+        $this->assertSame('filled', $found->status);
         $this->assertCount(1, $client->clientOrderIds);
-        $this->assertSame('resolved', $intent->fresh()->status);
+        $this->assertSame($intent->id, $found->intentId);
     }
 
     public function test_a_ccxt_resend_after_grace_reuses_the_client_id(): void
@@ -782,5 +929,120 @@ class LiveOrderIdempotencyTest extends TestCase
         $this->assertSame('unknown', $fill->status);
         $this->assertSame('open', $position->fresh()->status);
         $this->assertTrue(DeskEvent::where('level', 'error')->where('message', 'like', 'EXIT BLOCKED%')->exists());
+    }
+
+    public function test_perps_never_get_the_spot_sell_while_a_buy_is_pending_bypass(): void
+    {
+        config(['desk.perps.enabled' => true]);
+        $this->venue->price = 10_000.0;
+        $executor = $this->perps();
+        $position = $this->livePosition(['quantity' => 0.01, 'entry_price' => 10_000.0, 'entry_usd' => 100.0]);
+
+        OrderIntent::create([   // a long entry nobody can see yet
+            'mode' => $executor->mode(), 'venue' => $executor->orderVenue(), 'sent_at' => now(), 'desk_product_id' => 'BTC-USD', 'venue_product_id' => 'BTC-USD',
+            'method' => 'buy', 'side' => 'BUY', 'client_order_id' => str_replace('-', '', (string) Str::uuid()),
+            'requested_usd' => 100.0, 'decision_price' => 10_000.0, 'context' => ['size' => 100.0],
+        ]);
+
+        // A perps sell on top of an unresolved buy could flip the net position short, so it must wait.
+        $blocked = $executor->sell('BTC-USD', 0.01, 10_000.0);
+        $this->assertSame('unknown', $blocked->status);
+        $this->assertStringContainsString('not sending sell', (string) $blocked->note);
+        $this->assertSame(0, count($this->venue->attempts), 'the sell was never sent');
+
+        $fill = app(Desk::class)->close($position, 'stop', 10_000.0, $executor);
+        $this->assertSame('unknown', $fill->status);
+        $this->assertSame('open', $position->fresh()->status);
+        $this->assertTrue(DeskEvent::where('level', 'error')->where('message', 'like', 'EXIT BLOCKED%')->exists());
+    }
+
+    public function test_a_reconcile_lookup_that_returns_after_the_budget_is_discarded(): void
+    {
+        $executor = $this->spot();
+        $this->venue->timeoutAfterPlacing = true;
+        $executor->buy('BTC-USD', 100.0, 100.0);
+        $this->venue->timeoutAfterPlacing = false;
+        $intent = OrderIntent::sole();
+
+        // Control: a prompt lookup finds the filled order and reports it.
+        $this->assertSame('filled', $executor->reconcile($intent)?->status);
+
+        // The same terminal order, but the lookup only answers after the product lock may have expired.
+        $this->venue->lookupTakesSeconds = 70;
+        $this->assertNull($executor->reconcile($intent), 'a late answer is treated as unknown, not acted on');
+    }
+
+    public function test_a_ccxt_reconcile_lookup_that_returns_after_the_budget_is_discarded(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->has['fetchOrders'] = true;
+        $client->createThrows = new RequestTimeout('timed out');
+        $executor = new CcxtExecutor($client, 'stubex');
+        $executor->buy('BTC-USD', 1000.0, 50_000.0);
+        $intent = OrderIntent::sole();
+        $client->stubOrderList = [['id' => 'v-1', 'clientOrderId' => $intent->client_order_id, 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0, 'fee' => ['cost' => 0.0]]];
+
+        $this->assertSame('filled', $executor->reconcile($intent)?->status);
+
+        $client->listTakesSeconds = 70;
+        $this->assertNull($executor->reconcile($intent));
+    }
+
+    public function test_client_order_ids_follow_the_venue_format(): void
+    {
+        $hex = '0123456789abcdef0123456789abcdef';
+
+        $this->assertSame('t-0123456789abcdef0123456789', ClientOrderIds::fromHex('gate', $hex));
+        $this->assertLessThanOrEqual(28, strlen(ClientOrderIds::fromHex('gate', $hex)), 'ccxt checks the whole string, prefix included, against 28');
+        $this->assertSame((string) hexdec('0123456789a'), ClientOrderIds::fromHex('bitfinex', $hex));
+        $this->assertLessThan(2 ** 45, (int) ClientOrderIds::fromHex('bitfinex', 'fffffffffffffffffffffffffffffff0'));
+        foreach (['binance', 'okx', 'bybit', 'kucoin', 'kraken', 'bitget', 'mexc', 'htx', 'gemini', 'bitstamp'] as $id) {
+            $this->assertSame($hex, ClientOrderIds::fromHex($id, $hex), $id);
+        }
+        $this->assertMatchesRegularExpression('/^t-[0-9a-f]{26}$/', ClientOrderIds::generate('gate'));
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', ClientOrderIds::generate('kraken'));
+    }
+
+    public function test_bitfinex_gets_an_integer_cid_on_the_wire_while_the_stored_id_stays_a_string(): void
+    {
+        $client = new StubCcxtClient([]);
+        $client->stubCreate = ['id' => 'o-1', 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0];
+        $executor = new CcxtExecutor($client, 'bitfinex');
+
+        $executor->buy('BTC-USD', 1000.0, 50_000.0);
+        $stored = OrderIntent::sole()->client_order_id;
+
+        $this->assertIsString($stored);
+        $this->assertIsInt($client->rawClientOrderIds[0]);
+        $this->assertSame($stored, (string) $client->rawClientOrderIds[0]);
+        $this->assertSame('{"cid":'.$stored.'}', json_encode(['cid' => $client->rawClientOrderIds[0]]), 'serialized as a JSON number, not a string');
+
+        $gate = new StubCcxtClient([]);
+        $gate->stubCreate = $client->stubCreate;
+        (new CcxtExecutor($gate, 'gate'))->buy('ETH-USD', 1000.0, 2_000.0);
+        $this->assertIsString($gate->rawClientOrderIds[0]);
+    }
+
+    public function test_a_formatted_id_is_stored_sent_and_matched_on_lookup(): void
+    {
+        foreach (['gate' => '/^t-[0-9a-f]{26}$/', 'bitfinex' => '/^\d{1,14}$/'] as $ccxtId => $shape) {
+            OrderIntent::query()->delete();
+            $client = new StubCcxtClient([]);
+            $client->has['fetchOrders'] = true;
+            $client->createThrows = new RequestTimeout('timed out');
+            $executor = new CcxtExecutor($client, $ccxtId);
+
+            $this->assertSame('unknown', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status);
+            $intent = OrderIntent::sole();
+            $this->assertMatchesRegularExpression($shape, $intent->client_order_id, $ccxtId);
+            $this->assertSame($intent->client_order_id, $client->clientOrderIds[0], 'ccxt is handed the stored formatted id');
+
+            // The venue echoes the id back (bitfinex as a bare number), and the lookup finds the original.
+            $echoed = $ccxtId === 'bitfinex' ? (int) $intent->client_order_id : $intent->client_order_id;
+            $client->createThrows = null;
+            $client->stubOrderList = [['id' => 'v-1', 'clientOrderId' => $echoed, 'status' => 'closed', 'filled' => 0.02, 'cost' => 1000.0, 'average' => 50_000.0, 'fee' => ['cost' => 0.0]]];
+            $this->assertSame('filled', $executor->buy('BTC-USD', 1000.0, 50_000.0)->status, $ccxtId);
+            $this->assertCount(1, $client->clientOrderIds, 'no second create');
+        }
     }
 }

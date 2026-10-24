@@ -159,7 +159,7 @@ class DefinitionCheckTest extends TestCase
         $this->assertStringNotContainsString('0.13', $result['warnings'][0]['message']);
     }
 
-    public function test_invalid_utf8_skips_the_advisory_without_throwing(): void
+    public function test_invalid_utf8_is_rejected_and_skips_the_advisory_without_throwing(): void
     {
         $this->connect();
         $fake = $this->fake(new DecisionResponse(['intent_match' => 0.05], 'jev-1.13'));
@@ -167,7 +167,7 @@ class DefinitionCheckTest extends TestCase
 
         $result = app(DefinitionCheck::class)->run($definition);
 
-        $this->assertTrue($result['valid']);
+        $this->assertFalse($result['valid']);
         $this->assertSame([], $result['warnings']);
         $this->assertSame([], $fake->calls);
     }

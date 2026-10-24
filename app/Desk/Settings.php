@@ -8,6 +8,7 @@ use App\Desk\Contracts\Strategy;
 use App\Models\Setting;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -77,6 +78,33 @@ class Settings
         return false;
     }
 
+    /** Keys the desk reads as a string; an array here would break string casts in health checks. */
+    public const STRING_KEYS = ['worldmonitor.base_url'];
+
+    /** Why $value may not be written at $key, or null. Covers the key itself, a parent map and a nested child. */
+    public static function stringKeyViolation(string $key, mixed $value): ?string
+    {
+        $key = strtolower($key);   // utf8mb4_unicode_ci would map worldmonitor.Base_URL onto the same row
+        foreach (self::STRING_KEYS as $stringKey) {
+            if (str_starts_with($key, $stringKey.'.')) {
+                return "{$key}: nothing may be nested under {$stringKey}";
+            }
+            if ($key === $stringKey && ! is_string($value)) {
+                return "{$key} must be a string";
+            }
+            if (str_starts_with($stringKey, $key.'.') && is_array($value)) {
+                $leaf = Arr::get($value, substr($stringKey, strlen($key) + 1));
+                if ($leaf !== null && ! is_string($leaf)) {
+                    return "{$stringKey} must be a string";
+                }
+            } elseif (str_starts_with($stringKey, $key.'.') && ! is_array($value)) {
+                return "{$key} must be a map";
+            }
+        }
+
+        return null;
+    }
+
     public function overrides(): array
     {
         return Cache::remember(self::CACHE_KEY, 30, function () {
@@ -137,7 +165,9 @@ class Settings
     private function storedPasswordHash(): ?string
     {
         try {
-            $stored = Arr::get($this->overrides(), 'master_password');
+            // Authentication must observe the current row, not the generic 30-second settings
+            // cache: a concurrent reader can refill that cache just after a password change.
+            $stored = $this->storedPasswordValue();
 
             return is_string($stored) && $stored !== '' ? $stored : null;
         } catch (\Throwable $e) {
@@ -146,6 +176,13 @@ class Settings
 
             throw new HttpException(503, 'settings unavailable, try again shortly');
         }
+    }
+
+    protected function storedPasswordValue(): mixed
+    {
+        $row = Setting::query()->find('master_password');
+
+        return $row?->key === 'master_password' ? $row->value : null;
     }
 
     /** MASTER_PASSWORD from .env: the EC2 instance ID on AMIs, the generated value from docker/up.sh. */
@@ -182,6 +219,17 @@ class Settings
             return $this->isBootstrapKey($candidate);
         }
 
+        return $this->checkPasswordHash($candidate, $hash);
+    }
+
+    private function checkPasswordHash(string $candidate, string $hash): bool
+    {
+        // bcrypt ignores bytes after 72. Setup enforces this same limit, so accepting a longer
+        // candidate here would let an appended suffix authenticate as an exact-length password.
+        if (strlen($candidate) > 72) {
+            return false;
+        }
+
         try {
             return Hash::check($candidate, $hash);
         } catch (\Throwable) {
@@ -210,15 +258,24 @@ class Settings
      */
     public function verifyToken(string $token): bool
     {
-        if ($this->storedPasswordHash() === null) {
-            return $this->verifyMasterPassword($token);
+        // One fresh snapshot supplies both the verification and its cache identity. Re-reading
+        // the same row here adds queries and can pair a verification with a different credential.
+        $hash = $this->storedPasswordHash();
+        if ($hash === null) {
+            return $this->isBootstrapKey($token);
         }
 
-        $key = 'desk:token-ok:'.hash_hmac('sha256', $token."\0".$this->credentialFingerprintSource(), (string) config('app.key'));
+        // Check before the success cache too: a token accepted by an older build may still have
+        // a cached success during an upgrade.
+        if (strlen($token) > 72) {
+            return false;
+        }
+
+        $key = 'desk:token-ok:'.hash_hmac('sha256', $token."\0".$hash, (string) config('app.key'));
         if (Cache::get($key) === true) {
             return true;
         }
-        if (! $this->verifyMasterPassword($token)) {
+        if (! $this->checkPasswordHash($token, $hash)) {
             return false;
         }
         Cache::put($key, true, 60);
@@ -238,6 +295,48 @@ class Settings
     public function setMasterPassword(string $password): void
     {
         $this->set('master_password', Hash::make($password));
+    }
+
+    /** Commit only if the credential authorized by this request still owns the desk. */
+    public function setMasterPasswordIfUnchanged(string $password, string $expectedCredential): ?string
+    {
+        $newHash = Hash::make($password);
+
+        // Atomic first-owner claim, without a read-then-insert transaction. This avoids both
+        // InnoDB missing-row gap-lock deadlocks and SQLite read-lock upgrade failures.
+        if (hash_equals($expectedCredential, $this->bootstrapKey()) && Setting::query()->insertOrIgnore([
+            'key' => 'master_password', 'value' => json_encode($newHash),
+            'created_at' => now(), 'updated_at' => now(),
+        ]) === 1) {
+            Cache::forget(self::CACHE_KEY);
+
+            return $newHash;
+        }
+
+        // SQLite cannot upgrade both concurrent readers to writers. Retry classified lock/
+        // serialization failures from a fresh transaction, then recheck the winning credential.
+        // Unexpected database failures still propagate; exhausted retries are never success.
+        $changed = DB::transaction(function () use ($newHash, $expectedCredential): bool {
+            $row = Setting::query()->whereKey('master_password')->lockForUpdate()->first();
+            if ($row === null || $row->key !== 'master_password') {
+                return false;
+            }
+            $value = $row->value;
+            $current = is_string($value) && $value !== '' ? $value : $this->bootstrapKey();
+            if (! hash_equals($expectedCredential, $current)) {
+                return false;
+            }
+
+            $row->update(['value' => $newHash]);
+
+            return true;
+        }, 5);
+
+        if ($changed) {
+            Cache::forget(self::CACHE_KEY);
+        }
+
+        return $changed ? $newHash : null;
     }
 
     /** A stored non-scalar value (legacy array rows) falls back to the config default instead of crashing. */

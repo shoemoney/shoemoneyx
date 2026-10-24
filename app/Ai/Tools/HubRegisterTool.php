@@ -16,19 +16,15 @@ final class HubRegisterTool implements Tool
 
     public function description(): string
     {
-        return 'Request a community hub account. Never registers by itself: returns needs_confirmation and the user completes it in the UI.';
+        return 'Show how to create a community hub account in the Hub connect panel. Never ask for credentials in chat or pass them to this tool.';
     }
 
     public function parameters(): array
     {
         return [
             'type' => 'object',
-            'properties' => [
-                'email' => ['type' => 'string', 'description' => 'Account email.'],
-                'handle' => ['type' => 'string', 'description' => 'Unique handle, ^[a-z0-9_]{3,24}$.'],
-                'password' => ['type' => 'string', 'description' => 'Account password, min 8 chars.'],
-            ],
-            'required' => ['email', 'handle', 'password'],
+            'properties' => new \stdClass,
+            'additionalProperties' => false,
         ];
     }
 
@@ -39,7 +35,7 @@ final class HubRegisterTool implements Tool
             'needs_confirmation' => true,
             'action' => 'hub_register',
             'endpoint' => 'POST /api/hub/register',
-            'message' => 'Not registered. Ask the user to create their hub account themselves in the Hub connect panel.',
+            'message' => 'Create your hub account in the Hub connect panel. Enter your email, handle, and password there, never in this chat.',
         ];
     }
 }

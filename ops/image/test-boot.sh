@@ -2,14 +2,21 @@
 # ops/image/test-boot.sh <ami-id>
 #
 # Boots one t3.small from the given AMI in the default VPC behind a temporary
-# security group (22 from the office IP only, 443 from anywhere), then proves
-# the desk image works the way a customer's box must:
+# security group (22 from the office IP only, 443 and 80 from anywhere — 80 only so Let's Encrypt
+# can reach the HTTP-01 challenge; the instance itself keeps it closed), then proves the desk image
+# works the way a customer's box must:
 #   1. HTTPS comes up within 10 minutes
-#   2. GET /api/status returns 200 with "mode":"paper"
-#   3. nmap of the low 1024 ports shows nothing open except 22 and 443
+#   2. the certificate is publicly trusted for the instance's IP (curl WITHOUT -k succeeds, the
+#      issuer is Let's Encrypt, the IP is in the SAN)
+#   3. GET /api/status returns 200 with "mode":"paper"
+#   4. the clock is synchronized to Amazon Time Sync (chrony; outbound UDP 123 to 169.254.169.123)
+#   5. nmap of the low 1024 ports shows nothing open except 22 and 443, and inbound 80 is closed
+#      again (ufw has no rule for it, and a plain http request gets no answer)
 # Terminates the instance and deletes the security group on the way out,
 # success or failure. Exits non-zero on any assertion failure.
 set -euo pipefail
+# Credential configs, payloads and response bodies must never be world-readable.
+umask 077
 
 AMI_ID="${1:-}"
 if [[ -z "$AMI_ID" ]]; then
@@ -35,10 +42,14 @@ ssh_() { ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/de
 INSTANCE_ID=""
 SG_ID=""
 FAILED=0
+AUTH_DIR=""
 
 log() { echo "[test-boot] $*" >&2; }
 
 cleanup() {
+  if [[ -n "$AUTH_DIR" ]]; then
+    rm -rf -- "$AUTH_DIR"
+  fi
   if [[ -n "$INSTANCE_ID" ]]; then
     log "terminating $INSTANCE_ID"
     aws_ ec2 terminate-instances --instance-ids "$INSTANCE_ID" >/dev/null 2>&1 || true
@@ -84,7 +95,8 @@ log "creating temp security group $SG_NAME"
 SG_ID="$(aws_ ec2 create-security-group --group-name "$SG_NAME" --description "shoemoneyx desk image boot test (temporary)" --vpc-id "$VPC_ID" --query 'GroupId' --output text)"
 aws_ ec2 authorize-security-group-ingress --group-id "$SG_ID" --ip-permissions \
   "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=$OFFICE_CIDR,Description='office ssh'}]" \
-  "IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0,Description='https'}]" >/dev/null
+  "IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0,Description='https'}]" \
+  "IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=0.0.0.0/0,Description='acme http-01'}]" >/dev/null
 
 log "launching $INSTANCE_TYPE from $AMI_ID"
 INSTANCE_ID="$(aws_ ec2 run-instances \
@@ -121,8 +133,44 @@ if [[ "$UP" -ne 1 ]]; then
   fail ":443 never answered within ${BOOT_TIMEOUT_SECS}s"
 fi
 
-MASTER_PASSWORD=""
+PUBLIC_TRUST_READY=0
 if [[ "$UP" -eq 1 ]]; then
+  # Issuance runs before the stack starts, so a trusted cert is normally there the moment :443
+  # answers; the retry window only absorbs a slow Let's Encrypt round trip.
+  log "asserting the certificate is publicly trusted for $PUBLIC_IP (curl without -k)"
+  TRUSTED=0
+  TRUST_DEADLINE=$((SECONDS + 180))
+  while (( SECONDS < TRUST_DEADLINE )); do
+    if curl -s -o /dev/null -m 10 --fail "https://$PUBLIC_IP/login" 2>/dev/null; then
+      TRUSTED=1
+      break
+    fi
+    sleep "$POLL_INTERVAL_SECS"
+  done
+  CERT_TEXT="$(openssl s_client -connect "$PUBLIC_IP:443" </dev/null 2>/dev/null | openssl x509 -noout -issuer -text 2>/dev/null || true)"
+  if [[ "$TRUSTED" -ne 1 ]]; then
+    fail "https://$PUBLIC_IP/login without -k never succeeded: the cert is not publicly trusted"
+  elif ! grep -qi "issuer=.*Let's Encrypt" <<<"$CERT_TEXT"; then
+    fail "certificate issuer is not Let's Encrypt: $(grep -i '^issuer=' <<<"$CERT_TEXT")"
+  elif ! grep -Eq "IP Address:${PUBLIC_IP//./\\.}(,|$)" <<<"$CERT_TEXT"; then
+    fail "certificate has no IP Address:$PUBLIC_IP SAN"
+  else
+    log "OK: publicly trusted Let's Encrypt certificate covering $PUBLIC_IP"
+    if ! LOGIN_HTML="$(curl -s --fail -m 10 "https://$PUBLIC_IP/login")"; then
+      fail "GET https://$PUBLIC_IP/login failed while checking for the certificate warning banner"
+    elif ! grep -q 'id="first-login-guide"' <<<"$LOGIN_HTML"; then
+      fail "login page is not in AWS first-login mode (no id=first-login-guide), so the banner check would be vacuous"
+    elif grep -q 'id="tls-warning"' <<<"$LOGIN_HTML"; then
+      fail "login page shows the missing-certificate warning although the certificate is trusted (tls-status volume not read?)"
+    else
+      PUBLIC_TRUST_READY=1
+      log "OK: first-login page shows no certificate warning"
+    fi
+  fi
+fi
+
+MASTER_PASSWORD=""
+if [[ "${PUBLIC_TRUST_READY:-0}" -eq 1 ]]; then
   log "fetching MASTER_PASSWORD via ssh (retrying while cloud-init finishes)"
   for _ in $(seq 1 30); do
     MASTER_PASSWORD="$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
@@ -136,26 +184,48 @@ if [[ "$UP" -eq 1 ]]; then
   fi
 fi
 
+# These credentials belong only to the disposable instance launched above. All authenticated
+# requests use normal curl TLS verification, independently of the earlier certificate checks.
+# Keep secrets in private files, never command arguments or failure response logs.
+verify_auth_lifecycle() {
+  AUTH_DIR="$(mktemp -d)" || return 1
+  local bootstrap_config="$AUTH_DIR/bootstrap.curl" owner_config="$AUTH_DIR/owner.curl"
+  local payload="$AUTH_DIR/claim.json" body="$AUTH_DIR/body" owner_password code
+  # Reject header injection before encoding the bootstrap credential as a curl config value.
+  [[ "$MASTER_PASSWORD" != *$'\r'* && "$MASTER_PASSWORD" != *$'\n'* ]] || return 1
+  printf '%s' "$MASTER_PASSWORD" | jq -Rrs '"header = " + ("X-Desk-Token: " + . | @json)' > "$bootstrap_config" || return 1
+  owner_password="$(openssl rand -hex 24)" || return 1
+  [[ ${#owner_password} -ge 12 && ${#owner_password} -le 72 && "$owner_password" =~ ^[[:alnum:]-]+$ ]] || return 1
+  printf '%s' "$owner_password" | jq -Rrs '"header = " + ("X-Desk-Token: " + . | @json)' > "$owner_config" || return 1
+  printf '%s' "$owner_password" | jq -Rs '{password: ., password_confirmation: .}' > "$payload" || return 1
+  unset owner_password
+
+  log "asserting the bootstrap key is restricted to password setup"
+  code="$(curl --config "$bootstrap_config" -s -m 10 -o "$body" -w '%{http_code}' "https://$PUBLIC_IP/api/status" 2>/dev/null)" || return 1
+  [[ "$code" == "403" ]] && jq -e '.error == "set_password_required"' "$body" >/dev/null 2>&1 || return 1
+  code="$(curl --config "$bootstrap_config" -s -m 10 -o "$body" -w '%{http_code}' "https://$PUBLIC_IP/api/onboarding" 2>/dev/null)" || return 1
+  [[ "$code" == "200" ]] || return 1
+
+  log "claiming a synthetic owner password on this disposable instance"
+  code="$(curl --config "$bootstrap_config" -s -m 10 -o "$body" -w '%{http_code}' \
+    -H 'Content-Type: application/json' --data-binary "@$payload" "https://$PUBLIC_IP/api/onboarding/master-password" 2>/dev/null)" || return 1
+  [[ "$code" == "200" ]] || return 1
+  log "asserting owner authentication returns HTTP 200 with health.mode=paper"
+  code="$(curl --config "$owner_config" -s -m 10 -o "$body" -w '%{http_code}' "https://$PUBLIC_IP/api/status" 2>/dev/null)" || return 1
+  [[ "$code" == "200" ]] && jq -e '.health.mode == "paper"' "$body" >/dev/null 2>&1 || return 1
+  log "asserting the consumed bootstrap key is rejected"
+  code="$(curl --config "$bootstrap_config" -s -m 10 -o "$body" -w '%{http_code}' "https://$PUBLIC_IP/api/onboarding" 2>/dev/null)" || return 1
+  [[ "$code" == "401" || "$code" == "403" ]] || return 1
+  log "OK: owner paper status and one-time bootstrap lifecycle verified"
+}
 if [[ -n "$MASTER_PASSWORD" ]]; then
-  # The first-login key is one-time: as an X-Desk-Token it may only read onboarding and set the
-  # owner's password, so /api/status must refuse it while /api/onboarding answers.
-  log "asserting the bootstrap key is restricted to the set-password screen"
-  BODY_FILE="$(mktemp)"
-  HTTP_CODE="$(curl -k -s -m 10 -o "$BODY_FILE" -w '%{http_code}' \
-    -H "X-Desk-Token: $MASTER_PASSWORD" "https://$PUBLIC_IP/api/status" || echo "000")"
-  BODY="$(cat "$BODY_FILE")"
-  rm -f "$BODY_FILE"
-  if [[ "$HTTP_CODE" != "403" || "$BODY" != *set_password_required* ]]; then
-    fail "GET /api/status with the bootstrap key returned HTTP $HTTP_CODE (expected 403 set_password_required); body: $BODY"
-  else
-    log "OK: /api/status refuses the bootstrap key with set_password_required"
+  if ! verify_auth_lifecycle; then
+    fail "trusted owner/bootstrap authentication lifecycle failed (response body withheld)"
   fi
-  HTTP_CODE="$(curl -k -s -m 10 -o /dev/null -w '%{http_code}' \
-    -H "X-Desk-Token: $MASTER_PASSWORD" "https://$PUBLIC_IP/api/onboarding" || echo "000")"
-  if [[ "$HTTP_CODE" != "200" ]]; then
-    fail "GET /api/onboarding with the bootstrap key returned HTTP $HTTP_CODE (expected 200)"
-  else
-    log "OK: /api/onboarding accepts the bootstrap key"
+  unset MASTER_PASSWORD
+  if [[ -n "$AUTH_DIR" ]]; then
+    rm -rf -- "$AUTH_DIR"
+    AUTH_DIR=""
   fi
 fi
 
@@ -173,6 +243,23 @@ for _ in $(seq 1 24); do
   sleep 5
 done
 [[ "$FIREWALL_READY" -eq 1 ]] || fail "shoemoneyx-firewall.service never reached active state"
+
+log "asserting the clock is synchronized to the Amazon Time Sync Service (JWT expiry and ACME need it)"
+CLOCK_OK=0
+for _ in $(seq 1 12); do
+  SYNCED="$(ssh_ "timedatectl show -p NTPSynchronized --value" 2>/dev/null || true)"
+  TRACKING="$(ssh_ "chronyc tracking" 2>/dev/null || true)"
+  if [[ "$SYNCED" == "yes" && "$TRACKING" == *169.254.169.123* ]]; then
+    CLOCK_OK=1
+    break
+  fi
+  sleep 5
+done
+if [[ "$CLOCK_OK" -ne 1 ]]; then
+  fail "clock not synchronized to 169.254.169.123 (NTPSynchronized='$SYNCED'); chronyc tracking: $TRACKING"
+else
+  log "OK: clock synchronized to the Amazon Time Sync Service"
+fi
 
 log "asserting docker compose ps shows web healthy and nginx up"
 COMPOSE_PS_JSON="$(ssh_ "sudo docker compose -f /opt/shoemoneyx/docker-compose.yml ps --format json" 2>&1 || true)"
@@ -201,6 +288,20 @@ if [[ "$HTTP_RESULT" != *blocked ]]; then
   fail "container egress: plain http://example.com/ was NOT blocked (got '$HTTP_RESULT'); DOCKER-USER egress policy is not holding"
 else
   log "OK: plain http://example.com/ was blocked"
+fi
+
+log "asserting inbound 80 is closed again after the challenge"
+if ! UFW_STATUS="$(ssh_ "sudo ufw status" 2>&1)"; then
+  fail "could not read ufw status over ssh: $UFW_STATUS"
+elif grep -Eq '^80(/tcp)?[[:space:]]' <<<"$UFW_STATUS"; then
+  fail "ufw still has an allow rule for inbound 80"
+else
+  log "OK: ufw has no inbound 80 rule"
+fi
+if curl -s -o /dev/null -m 8 "http://$PUBLIC_IP/" 2>/dev/null; then
+  fail "http://$PUBLIC_IP/ answered: something is listening on, and reachable at, port 80"
+else
+  log "OK: plain http on port 80 gets no answer"
 fi
 
 log "scanning ports 1-1024 with nmap"

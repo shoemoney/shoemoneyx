@@ -37,6 +37,14 @@ final class DeskAuthThrottle
 
     private static function key(Request $request): string
     {
-        return 'desk-auth-failures:'.$request->ip();
+        return 'desk-auth-failures:'.self::bucket((string) $request->ip());
+    }
+
+    /** An IPv6 client owns a whole /64, so rotating the low 64 bits must not reset its failures. */
+    private static function bucket(string $ip): string
+    {
+        $packed = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? inet_pton($ip) : false;
+
+        return $packed === false ? $ip : bin2hex(substr($packed, 0, 8)).'/64';
     }
 }

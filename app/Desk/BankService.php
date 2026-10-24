@@ -70,7 +70,7 @@ class BankService
 
         $positionsValue = $collateral + $unrealisedPnl + $spotValue;
 
-        $realisedToday = (float) Position::mode($executor->mode())->where('status', 'closed')
+        $realisedToday = (float) Position::mode($executor->mode())->seat($arenaSeatId)->where('status', 'closed')
             ->where('closed_at', '>=', now()->startOfDay())->sum('pnl_usd');
 
         $bank = new Bank(

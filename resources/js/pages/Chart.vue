@@ -1,9 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from "vue";
 import { createChart, CandlestickSeries, HistogramSeries, CrosshairMode, createSeriesMarkers } from "lightweight-charts";
-import { deskHeaders } from '../api.js';
 import { useRouter, useRoute } from "vue-router";
-import { api, fmt } from "../api";
+import { api, deskFetch, fmt } from "../api";
 import { mapUdfHistory, mapUdfMarks, mergeOlderHistory, mergeMarks } from "../components/chart/udfMapping";
 import Pnl from "../components/Pnl.vue";
 import SmxPanel from "../components/SmxPanel.vue";
@@ -23,6 +22,8 @@ const position = ref(null);
 const candidates = ref([]);
 const error = ref("");
 const loading = ref(true);
+// Set when the realtime poll fails, so a frozen chart is labelled instead of passing as live.
+const staleSince = ref(null);
 const positionState = ref("loading");
 const decisionState = ref("loading");
 const range = ref(null);
@@ -68,17 +69,18 @@ function selectedSeries() {
 
 async function fetchHistory(sym, resolution, from, to, countback = BAR_WINDOW) {
     const params = new URLSearchParams({ symbol: sym, resolution, from: String(from), to: String(to), countback: String(countback) });
-    const response = await fetch(`/api/udf/history?${params}`, { headers: deskHeaders() });
-    if (!response.ok) throw new Error('Market history is temporarily unavailable.');
-    return response.json();
+    try {
+        return await deskFetch(`/api/udf/history?${params}`);
+    } catch (e) {
+        if (e.status === 419) throw e;
+        throw new Error('Market history is temporarily unavailable.');
+    }
 }
 async function fetchMarks(sym, from, to) {
     const params = new URLSearchParams({ symbol: sym, from: String(from), to: String(to) });
     const backtestId = route.query.backtest;
     if (backtestId) params.set('backtest_id', String(backtestId));
-    const response = await fetch(`/api/udf/marks?${params}`, { headers: deskHeaders() });
-    if (!response.ok) return null;
-    return response.json();
+    return deskFetch(`/api/udf/marks?${params}`);
 }
 
 async function loadMarks(id, sym, from, to) {
@@ -152,6 +154,7 @@ async function loadSeries() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     range.value = null;
     error.value = '';
+    staleSince.value = null;
     loading.value = true;
     paginating = false;
     historyExhausted = false;
@@ -193,9 +196,11 @@ async function refreshLatest(id, requestedSymbol, requestedInterval) {
             candleSeries.update(candles[i]);
             volumeSeries.update(volumes[i]);
         }
+        staleSince.value = null;
         loadMarks(id, requestedSymbol, from, to);
     } catch {
-        // A missed poll tick just waits for the next one; it never surfaces as a page error.
+        // A missed poll tick waits for the next one; meanwhile the chart is badged stale rather than raising a page error.
+        if (alive && id === seriesRequest && staleSince.value === null) staleSince.value = Date.now();
     }
 }
 
@@ -380,7 +385,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="smx-chart-layout">
             <div class="smx-chart-main flex min-w-0 flex-1 flex-col">
-                <div class="cl-stage-label"><span><i></i>{{ symbol }} <b>/ {{ TF_MAP[interval] }}</b></span><span>B / S marks show your fills</span></div>
+                <div class="cl-stage-label"><span><i></i>{{ symbol }} <b>/ {{ TF_MAP[interval] }}</b></span><span v-if="staleSince" class="text-amber-300" role="status">STALE · live updates failing since {{ new Date(staleSince).toLocaleTimeString() }}</span><span v-else>B / S marks show your fills</span></div>
                 <div class="cl-chart-viewport" @pointerleave="guardian?.leave()">
                     <div v-if="loading" class="cl-chart-loading">Loading chart…</div>
                     <div id="tv_chart" ref="chartContainer" class="min-h-0 flex-1"></div>

@@ -55,7 +55,7 @@ class LowSeverityHardeningTest extends TestCase
     {
         $def = ['key' => 'big', 'name' => 'Big', 'version' => 1, 'pad' => str_repeat('a', 70000)];
 
-        $this->postJson('/api/strategy-plugins/validate', ['definition' => $def])->assertUnprocessable();
+        $this->postJson('/api/strategy-plugins/validate', ['definition' => $def])->assertOk()->assertJson(['valid' => false]);
         $this->postJson('/api/strategy-plugins', ['definition' => $def])->assertUnprocessable();
     }
 

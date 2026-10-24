@@ -437,19 +437,28 @@ step_marketplace() {
 
   local release_notes
   release_notes="$(git tag -l --format='%(contents)' "v${version}")"
+  # The catalog API rejects non-ASCII release notes (an em dash failed a change set), so flatten.
+  release_notes="$(printf '%s' "$release_notes" | sed 's/—/-/g; s/–/-/g' | LC_ALL=C tr -cd '\11\12\15\40-\176')"
   [[ -n "$release_notes" ]] || release_notes="$version"
   local notes_json
   notes_json="$(printf '%s' "$release_notes" | jq -Rs .)"
 
   local usage_text
-  usage_text="No SSH is needed. Open https://<instance-ip>/ in a browser. The login page asks for a password: paste the EC2 instance ID (i-...) shown in the AWS console as the bootstrap password. Onboarding then makes you choose your own password before anything else."
+  usage_text="Getting started
+1. Launch the instance and wait about 3 minutes for first boot to finish.
+2. Open https://<your instance's public IP> in your browser. If your browser shows a certificate warning, the server couldn't get its automatic certificate yet: wait a few minutes and reload. If it persists, see the troubleshooting section at https://github.com/shoemoney/shoemoneyx/blob/main/docs/HOSTED_IMAGE.md Do not enter the instance ID while your browser shows a certificate warning.
+3. On the login page, click Open my AWS instances. In the EC2 list, find this server and copy the value in the Instance ID column. It starts with i-.
+4. Paste that ID into the login box. It works only once.
+5. Choose your own password and type it twice (at least 12 characters). From then on, sign in with that password. Your browser stays signed in for about a year.
+The desk starts in paper trading, which uses no real money. Switching to live trading asks for your password again."
   local usage_json
   usage_json="$(printf '%s' "$usage_text" | jq -Rs .)"
 
   local body_file
   body_file="$(mktemp_tracked)"
-  # Port 22 is scoped to the same office IP constant ops/image/test-boot.sh uses for its own
-  # temporary security group.
+  # Buyers need inbound 443 for the desk and 80 for Let's Encrypt's HTTP-01 challenge (the instance
+  # opens its own port 80 only while a certificate is being issued or renewed, then closes it
+  # again); SSH is not part of the getting-started flow.
   cat > "$body_file" <<EOF
 {
   "Catalog": "AWSMarketplace",
@@ -474,7 +483,7 @@ step_marketplace() {
                 "RecommendedInstanceType": "t3.small",
                 "SecurityGroups": [
                   { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "IpRanges": ["0.0.0.0/0"] },
-                  { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "IpRanges": ["${OFFICE_CIDR}"] }
+                  { "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "IpRanges": ["0.0.0.0/0"] }
                 ]
               }
             }

@@ -1,7 +1,14 @@
 <script setup>
 import { publicDemo } from "../demoMode";
 import PageHeading from "../components/PageHeading.vue";
-import { ref, onMounted, inject, computed, watch } from "vue";
+import ConfirmRisk from "../components/ConfirmRisk.vue";
+import {
+    useConfirmRisk,
+    describeSettingChange,
+    describePaperReset,
+    trapTab,
+} from "../riskConfirm";
+import { ref, onMounted, inject, computed, watch, nextTick } from "vue";
 import { api } from "../api";
 import "../../css/research-controls.css";
 
@@ -15,6 +22,34 @@ const PARAMETER_BATCH = 100;
 const visibleLimit = ref(PARAMETER_BATCH);
 const edits = ref({});
 const refreshStatus = inject("refreshStatus");
+const {
+    request: riskRequest,
+    ask: askRisk,
+    confirm: confirmRisk,
+    cancel: cancelRisk,
+} = useConfirmRisk();
+
+function currentValue(key) {
+    if (key === "mode") return s.value?.mode;
+    if (key === "strategy") return s.value?.strategy;
+    return s.value?.params[key];
+}
+// Every save from the UI goes through here; risky keys ask first. Resolves true once the change went ahead.
+async function requestSave(key, value) {
+    const request = describeSettingChange(key, currentValue(key), value);
+    if (request && !(await askRisk(request))) return false;
+    if (key === "mode" && value === "live") {
+        askLivePassword();
+        return true;
+    }
+    await save(key, value);
+    return true;
+}
+async function changeStrategy(event) {
+    if (!(await requestSave("strategy", event.target.value))) {
+        event.target.value = s.value.strategy;
+    }
+}
 
 async function load() {
     loading.value = true;
@@ -33,19 +68,38 @@ const liveModal = ref(false);
 const livePassword = ref("");
 const liveError = ref("");
 const liveBusy = ref(false);
+const liveForm = ref(null);
+const liveInput = ref(null);
+let liveOpener = null;
 function askLivePassword() {
+    liveOpener = document.activeElement;
     livePassword.value = "";
     liveError.value = "";
     liveModal.value = true;
+    nextTick(() => liveInput.value?.focus());
+}
+function closeLive() {
+    liveModal.value = false;
+    liveOpener?.focus?.();
+    liveOpener = null;
+}
+// Keep Tab inside the dialog while it is open; Escape cancels.
+function liveKeydown(event) {
+    if (event.key === "Escape" && !liveBusy.value) {
+        event.preventDefault();
+        closeLive();
+        return;
+    }
+    trapTab(event, liveForm.value);
 }
 async function confirmLive() {
-    if (!livePassword.value) return;
+    if (!livePassword.value || liveBusy.value) return;
     liveBusy.value = true;
     liveError.value = "";
     try {
         await save("mode", "live", { password: livePassword.value }, true);
-        liveModal.value = false;
         livePassword.value = "";
+        closeLive();
     } catch (e) {
         liveError.value = e.message;
     } finally {
@@ -66,6 +120,8 @@ async function save(key, value, extra = {}, rethrow = false) {
     }
 }
 async function reset(key) {
+    const request = describeSettingChange(key, currentValue(key), "default");
+    if (request && !(await askRisk(request))) return;
     try {
         await api.del(`/settings/${key}`);
         msg.value = `reset ${key}`;
@@ -78,14 +134,15 @@ async function reset(key) {
 async function act(action) {
     msg.value = "";
     error.value = "";
-    if (
-        action === "paper-reset" &&
-        !confirm("Wipe all paper positions and the paper ledger?")
-    )
-        return;
+    let body;
+    if (action === "paper-reset") {
+        const answer = await askRisk(describePaperReset());
+        if (!answer) return;
+        body = { scope: answer.choice };
+    }
     try {
-        await api.post(`/desk/${action}`);
-        msg.value = `${action} ok`;
+        await api.post(`/desk/${action}`, body);
+        msg.value = body ? `${action} ok (${body.scope})` : `${action} ok`;
         await refreshStatus();
     } catch (e) {
         error.value = e.message;
@@ -192,6 +249,12 @@ onMounted(load);
             </div></Transition
         >
 
+        <ConfirmRisk
+            :request="riskRequest"
+            @confirm="confirmRisk"
+            @cancel="cancelRisk"
+        />
+
         <template v-if="s">
             <div class="rc-state-rail">
                 <span class="rc-overline">SYSTEM / CONFIGURATION</span>
@@ -225,7 +288,7 @@ onMounted(load);
                             class="btn"
                             :class="s.mode === 'paper' ? 'btn-primary' : ''"
                             :aria-pressed="s.mode === 'paper'"
-                            :disabled="publicDemo" @click="save('mode', 'paper')"
+                            :disabled="publicDemo" @click="requestSave('mode', 'paper')"
                         >
                             <span class="rc-mode-dot"></span
                             ><strong>Paper</strong
@@ -235,7 +298,7 @@ onMounted(load);
                             class="btn rc-live-choice"
                             :class="s.mode === 'live' ? 'btn-danger' : ''"
                             :aria-pressed="s.mode === 'live'"
-                            :disabled="publicDemo" @click="askLivePassword"
+                            :disabled="publicDemo" @click="requestSave('mode', 'live')"
                         >
                             <span class="rc-mode-dot"></span
                             ><strong>Live</strong
@@ -244,26 +307,30 @@ onMounted(load);
                     </div>
                     <form
                         v-if="liveModal"
+                        ref="liveForm"
                         class="rc-live-modal"
                         role="dialog"
+                        aria-modal="true"
                         aria-label="Confirm live mode"
                         @submit.prevent="confirmLive"
+                        @keydown="liveKeydown"
                     >
                         <p class="rc-inline-danger">
                             Live mode sends real orders. Enter the master password to continue.
                         </p>
                         <input
+                            ref="liveInput"
                             v-model="livePassword"
                             type="password"
                             autocomplete="current-password"
                             placeholder="master password"
-                            :disabled="liveBusy"
-                            autofocus
+                            aria-label="Master password"
+                            :readonly="liveBusy"
                         />
                         <p v-if="liveError" class="rc-inline-danger" role="alert">{{ liveError }}</p>
                         <div class="flex gap-2">
-                            <button class="btn btn-danger" type="submit" :disabled="liveBusy || !livePassword">Go live</button>
-                            <button class="btn" type="button" :disabled="liveBusy" @click="liveModal = false">Cancel</button>
+                            <button class="btn btn-danger" type="submit" :aria-disabled="liveBusy" :disabled="!livePassword">Go live</button>
+                            <button class="btn" type="button" :aria-disabled="liveBusy" @click="!liveBusy && closeLive()">Cancel</button>
                         </div>
                     </form>
                     <p
@@ -289,7 +356,7 @@ onMounted(load);
                     <label class="rc-field"
                         >Active strategy<select
                             :value="s.strategy"
-                            :disabled="publicDemo" @change="save('strategy', $event.target.value)"
+                            :disabled="publicDemo" @change="changeStrategy"
                         >
                             <option
                                 v-for="st in s.strategies"
@@ -468,7 +535,7 @@ onMounted(load);
                                             edits[it.key] = $event.target.value
                                         "
                                         @keyup.enter="
-                                            save(
+                                            requestSave(
                                                 it.key,
                                                 edits[it.key] ?? it.value,
                                             )
@@ -484,7 +551,7 @@ onMounted(load);
                                                 !publicDemo && edits[it.key] !== undefined &&
                                                 edits[it.key] != it.value
                                             "
-                                            @click="save(it.key, edits[it.key])"
+                                            @click="requestSave(it.key, edits[it.key])"
                                             :aria-label="'Save ' + it.key"
                                         >
                                             Save</button

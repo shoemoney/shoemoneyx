@@ -66,9 +66,17 @@ class UntrustedToolInputTest extends TestCase
     {
         Http::fake();
 
-        $result = (new HubRegisterTool)->run(['email' => 'a@b.co', 'handle' => 'abc', 'password' => 'secret123'], new AgentContext(1));
+        $tool = new HubRegisterTool;
+        $schema = json_decode(json_encode($tool->parameters()), true);
+        $this->assertSame([], $schema['properties']);
+        $this->assertFalse($schema['additionalProperties']);
+        $this->assertArrayNotHasKey('required', $schema);
+
+        $result = $tool->run([], new AgentContext(1));
 
         $this->assertTrue($result['needs_confirmation']);
+        $this->assertStringContainsString('Hub connect panel', $result['message']);
+        $this->assertStringContainsString('never in this chat', $result['message']);
         $this->assertDatabaseCount('hub_connections', 0);
         Http::assertNothingSent();
     }

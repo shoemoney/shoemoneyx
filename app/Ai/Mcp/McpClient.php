@@ -23,27 +23,63 @@ final class McpClient
 
     private string $outBuffer = '';
 
-    /** @param  list<string>  $args @param array<string,string> $env */
+    /** Parent env vars a child may inherit; everything else (APP_KEY, DB_*, API keys) is withheld. */
+    private const BASE_ENV = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'];
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string,string>  $env  explicit vars handed to the child
+     * @param  list<string>  $inheritEnv  extra parent var names the child may inherit
+     */
     public function __construct(
         string $command,
         array $args = [],
         array $env = [],
         private readonly float $timeoutSeconds = 10.0,
+        array $inheritEnv = [],
     ) {
         $this->stdin = new InputStream;
-        $this->process = new Process([$command, ...$args], null, $env ?: null);
+        $this->process = new Process([$command, ...$args], null, self::childEnv($env, $inheritEnv));
         $this->process->setInput($this->stdin);
         $this->process->start();
+    }
+
+    /**
+     * Symfony Process merges the parent env under whatever it is given, and only
+     * drops a variable when it is explicitly set to false — so every inherited
+     * name outside the allowlist is passed as false.
+     *
+     * @param  array<string,string>  $env
+     * @param  list<string>  $inheritEnv
+     * @return array<string,string|false>
+     */
+    private static function childEnv(array $env, array $inheritEnv): array
+    {
+        $allowed = array_merge(self::BASE_ENV, $inheritEnv);
+        $child = $env;
+        foreach (array_keys(getenv() + $_ENV + $_SERVER) as $name) {
+            $name = (string) $name;
+            if (! array_key_exists($name, $child) && ! in_array($name, $allowed, true)) {
+                $child[$name] = false;
+            }
+        }
+
+        return $child;
     }
 
     /** @return array<string,mixed> */
     public function initialize(): array
     {
-        return $this->call('initialize', [
+        $result = $this->call('initialize', [
             'protocolVersion' => '2026-06-18',
             'capabilities' => new \stdClass,
             'clientInfo' => ['name' => 'shoemoneyx-strategy-agent', 'version' => '1.0.0'],
         ]);
+        // MCP enters its operational phase only after this client notification.
+        // Notifications have no id and receive no response.
+        $this->stdin->write(json_encode(['jsonrpc' => '2.0', 'method' => 'notifications/initialized'])."\n");
+
+        return $result;
     }
 
     /** @return list<array{name: string, description?: string, inputSchema?: array}> */

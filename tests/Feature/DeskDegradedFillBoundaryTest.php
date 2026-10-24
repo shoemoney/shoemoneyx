@@ -13,6 +13,7 @@ use App\Desk\Desk;
 use App\Desk\DeskContext;
 use App\Desk\Execution\Executor;
 use App\Desk\Execution\OrderResult;
+use App\Exchange\Contracts\MarketData;
 use App\Models\Candidate;
 use App\Models\DeskRun;
 use App\Models\Fill;
@@ -34,6 +35,7 @@ class DeskDegradedFillBoundaryTest extends TestCase
     {
         parent::setUp();
         config(['cache.default' => 'array', 'desk.mode' => 'paper']);
+        $this->mock(MarketData::class, fn ($m) => $m->shouldReceive('price')->andReturn(100.0));
     }
 
     /** A degraded fill: the venue reports the order as filled with real quantity but no derivable price. */
@@ -75,7 +77,7 @@ class DeskDegradedFillBoundaryTest extends TestCase
 
             public function cash(): float
             {
-                return 0.0;
+                return 10000.0;
             }
         };
     }
@@ -156,7 +158,7 @@ class DeskDegradedFillBoundaryTest extends TestCase
 
             public function cash(): float
             {
-                return 0.0;
+                return 10000.0;
             }
         };
     }

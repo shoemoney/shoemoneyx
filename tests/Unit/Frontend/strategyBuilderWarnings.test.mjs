@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const component = await readFile(new URL('../../../resources/js/pages/StrategyBuilder.vue', import.meta.url), 'utf8');
 const source = component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, '');
-const create = new Function('ref', 'onMounted', 'api', 'localStorage', 'FileReader', `${source}
+const create = new Function('ref', 'onMounted', 'api', 'readStored', 'writeStored', 'removeStored', 'FileReader', `${source}
     return { doc, warnings, currentId, validate, loadOne, importFile, useJsonFromChat, restoreVersion };
 `);
 const oldWarning = { code: 'intent_drift', message: 'Warning for the previous definition' };
@@ -31,7 +31,7 @@ function setup(overrides = {}) {
         }
     }
     // Execute the real setup functions with only their browser/API boundaries stubbed.
-    return create(value => ({ value }), () => {}, api, { getItem: () => null }, FileReader);
+    return create(value => ({ value }), () => {}, api, () => null, () => {}, () => {}, FileReader);
 }
 
 async function previouslyValidated(overrides) {

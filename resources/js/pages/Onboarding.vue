@@ -1,8 +1,8 @@
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, nextTick, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import PageHeading from "../components/PageHeading.vue";
-import { deskHeaders } from "../api.js";
+import { deskFetch } from "../api.js";
 
 const router = useRouter();
 
@@ -20,30 +20,9 @@ const steps = ref([]);
 const currentStep = ref(null);
 const busy = ref(false);
 
-// Its own fetch wrapper (not the shared `api` helper) because failures carry step data
-// in the JSON body. Setting the master password marks this browser's session as logged in.
-async function call(method, url, body) {
-    const headers = deskHeaders({ Accept: "application/json" });
-    if (body !== undefined) headers["Content-Type"] = "application/json";
-    const res = await fetch("/api" + url, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const text = await res.text();
-    let data = null;
-    try {
-        data = text ? JSON.parse(text) : null;
-    } catch {
-        data = text;
-    }
-    if (!res.ok) {
-        const err = new Error((data && (data.error || data.message)) || res.statusText);
-        err.data = data;
-        throw err;
-    }
-    return data;
-}
+// Failures carry step data in the JSON body (ApiError.data). Setting the master password marks this
+// browser's session as logged in.
+const call = (method, url, body) => deskFetch("/api" + url, { method, body });
 
 const bootstrapPassword = ref(false);
 const currentPasswordRequired = ref(false);
@@ -77,13 +56,17 @@ const password = ref("");
 const passwordConfirmation = ref("");
 const currentPassword = ref("");
 const MIN_PASSWORD = 12;
+const MAX_PASSWORD_BYTES = 72;
+const passwordBytes = computed(() => new TextEncoder().encode(password.value).length);
 const passwordMismatch = computed(
     () => passwordConfirmation.value !== "" && password.value !== passwordConfirmation.value,
 );
 const passwordTooShort = computed(() => password.value !== "" && password.value.length < MIN_PASSWORD);
+const passwordTooLong = computed(() => passwordBytes.value > MAX_PASSWORD_BYTES);
 const canSubmitPassword = computed(
     () =>
         password.value.length >= MIN_PASSWORD &&
+        !passwordTooLong.value &&
         password.value === passwordConfirmation.value &&
         (!currentPasswordRequired.value || currentPassword.value !== ""),
 );
@@ -228,7 +211,14 @@ function onStepChange(step) {
     if (step === "strategy-import" && !syncLoaded.value) loadSync();
 }
 
-watch(currentStep, onStepChange);
+const stepPanel = ref(null);
+// The panel swaps in place, so move focus to its heading or keyboard and screen-reader users stay on a removed button.
+watch(currentStep, async (step, previous) => {
+    onStepChange(step);
+    if (!previous) return;
+    await nextTick();
+    stepPanel.value?.querySelector("h2")?.focus();
+});
 
 onMounted(async () => {
     await load();
@@ -251,7 +241,7 @@ onMounted(async () => {
         <template v-else>
             <div class="card onboarding-steps">
                 <ol class="onboarding-stepper">
-                    <li v-for="(s, i) in steps" :key="s.key" :class="{ done: s.status !== 'pending', current: i === stepIndex }">
+                    <li v-for="(s, i) in steps" :key="s.key" :class="{ done: s.status !== 'pending', current: i === stepIndex }" :aria-current="i === stepIndex ? 'step' : undefined">
                         <span class="badge" :class="s.status === 'pending' ? 'bg-zinc-800 text-zinc-400' : 'bg-emerald-500/20 text-emerald-300'">{{ i + 1 }}</span>
                         {{ STEP_LABELS[s.key] }}
                         <span v-if="s.status === 'skipped'" class="text-xs text-zinc-500">(skipped)</span>
@@ -259,16 +249,17 @@ onMounted(async () => {
                 </ol>
             </div>
 
-            <div v-if="currentStep === 'master-password'" class="card space-y-3">
+            <div v-if="currentStep === 'master-password'" :ref="(el) => (stepPanel = el)" class="card space-y-3">
                 <div class="mw-section-title">
                     <div>
                         <span class="mw-eyebrow">STEP 1 OF 5</span>
-                        <h2>Set a master password</h2>
+                        <h2 tabindex="-1">Set a master password</h2>
                     </div>
                 </div>
                 <p class="text-sm text-zinc-400">
                     Choose the password that protects this desk. You'll type it once to sign in, and this
-                    browser stays signed in for about a year. At least {{ MIN_PASSWORD }} characters.
+                    browser stays signed in for about a year. At least {{ MIN_PASSWORD }} characters,
+                    up to {{ MAX_PASSWORD_BYTES }} bytes. Some characters use more than one byte.
                 </p>
                 <p v-if="bootstrapPassword" class="text-sm text-zinc-400">
                     Your first-login key only works once: after you set a password it stops opening anything.
@@ -279,23 +270,31 @@ onMounted(async () => {
                     type="password"
                     autocomplete="current-password"
                     placeholder="current password"
+                    aria-label="Current password"
                     :disabled="busy"
+                    @keyup.enter="submitPassword"
                 />
                 <input
                     v-model="password"
                     type="password"
                     autocomplete="new-password"
                     :placeholder="`new password (${MIN_PASSWORD}+ characters)`"
+                    aria-label="New password"
                     :disabled="busy"
+                    @keyup.enter="submitPassword"
                 />
                 <p v-if="passwordTooShort" class="text-sm text-red-400" role="alert">
                     Use at least {{ MIN_PASSWORD }} characters.
+                </p>
+                <p v-if="passwordTooLong" class="text-sm text-red-400" role="alert">
+                    Use at most {{ MAX_PASSWORD_BYTES }} bytes. This password uses {{ passwordBytes }} bytes.
                 </p>
                 <input
                     v-model="passwordConfirmation"
                     type="password"
                     autocomplete="new-password"
                     placeholder="confirm new password"
+                    aria-label="Confirm new password"
                     :disabled="busy"
                     @keyup.enter="submitPassword"
                 />
@@ -305,11 +304,11 @@ onMounted(async () => {
                 <button class="btn btn-primary" :disabled="busy || !canSubmitPassword" @click="submitPassword">Continue</button>
             </div>
 
-            <div v-else-if="currentStep === 'openrouter'" class="card space-y-3">
+            <div v-else-if="currentStep === 'openrouter'" :ref="(el) => (stepPanel = el)" class="card space-y-3">
                 <div class="mw-section-title">
                     <div>
                         <span class="mw-eyebrow">STEP 2 OF 5</span>
-                        <h2>Connect an AI model</h2>
+                        <h2 tabindex="-1">Connect an AI model</h2>
                     </div>
                 </div>
                 <p class="text-sm text-zinc-400">
@@ -317,15 +316,15 @@ onMounted(async () => {
                     <a href="/ai/openrouter/connect">connect via OpenRouter's own sign-in</a> (that path lands you
                     on the strategy builder afterward instead of back here).
                 </p>
-                <input v-model="apiKey" type="password" placeholder="sk-or-v1-…" :disabled="busy" />
+                <input v-model="apiKey" type="password" placeholder="sk-or-v1-…" aria-label="OpenRouter API key" :disabled="busy" @keyup.enter="apiKey && submitOpenRouter()" />
                 <button class="btn btn-primary" :disabled="busy || !apiKey" @click="submitOpenRouter">Continue</button>
             </div>
 
-            <div v-else-if="currentStep === 'exchange'" class="card space-y-3">
+            <div v-else-if="currentStep === 'exchange'" :ref="(el) => (stepPanel = el)" class="card space-y-3">
                 <div class="mw-section-title">
                     <div>
                         <span class="mw-eyebrow">STEP 3 OF 5</span>
-                        <h2>Pick an exchange</h2>
+                        <h2 tabindex="-1">Pick an exchange</h2>
                     </div>
                 </div>
                 <p class="text-sm text-zinc-400">Coinbase, paper mode, is the default — good for a first run.</p>
@@ -340,11 +339,11 @@ onMounted(async () => {
                 <button class="btn btn-primary" :disabled="busy || !selectedExchange" @click="submitExchange">Continue with {{ selectedExchange }}, paper</button>
             </div>
 
-            <div v-else-if="currentStep === 'strategy-import'" class="card space-y-3">
+            <div v-else-if="currentStep === 'strategy-import'" :ref="(el) => (stepPanel = el)" class="card space-y-3">
                 <div class="mw-section-title">
                     <div>
                         <span class="mw-eyebrow">STEP 4 OF 5 · OPTIONAL</span>
-                        <h2>Import a community strategy</h2>
+                        <h2 tabindex="-1">Import a community strategy</h2>
                     </div>
                 </div>
                 <div v-if="!syncLoaded">Checking the community archive…</div>
@@ -366,11 +365,11 @@ onMounted(async () => {
                 </template>
             </div>
 
-            <div v-else-if="currentStep === 'launch'" class="card space-y-3">
+            <div v-else-if="currentStep === 'launch'" :ref="(el) => (stepPanel = el)" class="card space-y-3">
                 <div class="mw-section-title">
                     <div>
                         <span class="mw-eyebrow">STEP 5 OF 5</span>
-                        <h2>Launch, in paper mode</h2>
+                        <h2 tabindex="-1">Launch, in paper mode</h2>
                     </div>
                 </div>
 
@@ -380,9 +379,9 @@ onMounted(async () => {
                         Register with the community hub (optional — leaderboards, contests, shared archive)
                     </label>
                     <template v-if="wantsHub && !hubConnected">
-                        <input v-model="hub.email" placeholder="email" :disabled="busy" />
-                        <input v-model="hub.handle" placeholder="handle" :disabled="busy" />
-                        <input v-model="hub.password" type="password" placeholder="password (min 8 characters)" :disabled="busy" />
+                        <input v-model="hub.email" placeholder="email" aria-label="Hub email" :disabled="busy" />
+                        <input v-model="hub.handle" placeholder="handle" aria-label="Hub handle" :disabled="busy" />
+                        <input v-model="hub.password" type="password" placeholder="password (min 8 characters)" aria-label="Hub password" :disabled="busy" @keyup.enter="registerHub" />
                         <button class="btn" :disabled="busy" @click="registerHub">Register</button>
                     </template>
                     <p v-if="hubConnected" class="text-sm text-emerald-300">Hub account connected.</p>
@@ -395,6 +394,117 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.onboarding-page {
+    color-scheme: dark;
+    color: #e4f4ff;
+    background: #02080d;
+    font-size: 20px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+.onboarding-page .card {
+    color: #e4f4ff;
+    background: #07111b;
+    border-color: #365772;
+}
+.onboarding-page :is(.text-zinc-400, .text-zinc-500, .text-zinc-600) {
+    color: #b5cbdc;
+}
+.onboarding-page a {
+    color: #9dddff;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.onboarding-page p,
+.onboarding-page label,
+.onboarding-page .btn {
+    font-size: 20px;
+    line-height: 1.6;
+}
+.onboarding-page :is(input, select, textarea) {
+    /* Keep the form readable despite the shared workspace's smaller mobile controls. */
+    font-size: 20px !important;
+    line-height: 1.5;
+    color: #f3f8ff;
+    caret-color: #f3f8ff;
+    background: #02080d;
+    border: 1px solid #52728b;
+}
+.onboarding-page :is(input:not([type="radio"]):not([type="checkbox"]), select, textarea) {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+}
+.onboarding-page input::placeholder,
+.onboarding-page textarea::placeholder {
+    color: #c2d2df;
+    opacity: 1;
+}
+.onboarding-page :is(input, select, textarea):disabled {
+    color: #b9cad8;
+    background: #122332;
+    opacity: 1;
+}
+.onboarding-page .btn {
+    color: #e9f6ff;
+    background: #153f5b;
+    border-color: #4c99c8;
+}
+.onboarding-page .btn-ok {
+    color: #d0f6e7;
+    background: #10372c;
+    border-color: #4b9d83;
+}
+.onboarding-page .btn:disabled {
+    color: #b9cad8;
+    background: #1a2937;
+    border-color: #486174;
+    opacity: 1;
+}
+.onboarding-page :is(.btn, input, select, textarea):focus-visible {
+    outline: 2px solid #9dddff;
+    outline-offset: 3px;
+}
+.onboarding-page :is(.badge, .text-xs, .mw-eyebrow, .mw-error) {
+    font-size: 18px;
+    line-height: 1.5;
+    letter-spacing: normal;
+}
+.onboarding-page .mw-section-title h2 {
+    color: #f3f8ff;
+    font-size: clamp(26px, 3vw, 34px);
+    line-height: 1.3;
+}
+.onboarding-page .mw-eyebrow {
+    color: #9dddff;
+}
+.onboarding-page .badge {
+    color: #e7f4ff;
+    background: #243c4e;
+}
+.onboarding-page .text-red-400,
+.onboarding-page .mw-error {
+    color: #ffb1bd;
+}
+.onboarding-page :deep(.smx-experience.smx-page-heading) {
+    padding-bottom: 80px;
+}
+.onboarding-page :deep(.smx-experience .smx-experience__description) {
+    font-size: 20px;
+    line-height: 1.6;
+}
+.onboarding-page :deep(.smx-experience__eyebrow),
+.onboarding-page :deep(.smx-experience__signature),
+.onboarding-page :deep(.smx-experience__signals),
+.onboarding-page :deep(.smx-experience__motion) {
+    font-size: 18px;
+    line-height: 1.5;
+    letter-spacing: normal;
+}
+.onboarding-page :deep(.smx-experience__chapter) {
+    white-space: normal;
+}
 .onboarding-stepper {
     display: flex;
     flex-wrap: wrap;
@@ -406,9 +516,10 @@ onMounted(async () => {
 .onboarding-stepper li {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.4rem;
-    color: var(--zinc-500, #71717a);
-    font-size: 0.875rem;
+    color: #bdd0e0;
+    font-size: 18px;
 }
 .onboarding-stepper li.done,
 .onboarding-stepper li.current {
@@ -424,5 +535,21 @@ onMounted(async () => {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+}
+@media (max-width: 700px) {
+    .onboarding-page :deep(.smx-experience__copy) {
+        max-width: 100%;
+    }
+    .onboarding-page :deep(.smx-chapter-scene) {
+        opacity: 0.18;
+    }
+    .onboarding-radio {
+        flex-wrap: wrap;
+    }
+    .onboarding-page .btn {
+        max-width: 100%;
+        white-space: normal;
+        text-align: center;
+    }
 }
 </style>

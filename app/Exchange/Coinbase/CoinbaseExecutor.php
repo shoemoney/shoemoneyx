@@ -6,6 +6,7 @@ namespace App\Exchange\Coinbase;
 
 use App\Desk\Execution\Executor;
 use App\Desk\Execution\OrderResult;
+use App\Desk\Execution\Quantize;
 use App\Desk\Execution\ReconcilesOrders;
 use App\Exchange\Coinbase\Api\CoinbaseService;
 use App\Exchange\Coinbase\Concerns\SubmitsCoinbaseOrders;
@@ -66,11 +67,23 @@ class CoinbaseExecutor implements Executor, ReconcilesOrders
     public function sell(string $productId, float $qty, float $decisionPrice, float $entryUsdShare = 0.0, bool $maker = false): OrderResult
     {
         $precision = $this->basePrecision($productId);
-        $qty = floor($qty * 10 ** $precision) / 10 ** $precision;
+        $requested = $qty;
+        $qty = Quantize::floorTo($requested, $precision);
+        $min = Product::where('product_id', $productId)->value('base_min_size');
+        if ($qty <= 0 || ($min !== null && $qty < (float) $min)) {
+            return (new OrderResult('filled', $requested * $decisionPrice, 0, 0, $decisionPrice, null, 0, false, null,
+                ['dust' => true, 'requested_qty' => $requested], 'below the venue minimum order size, nothing sent'))->withDust($requested);
+        }
         $account = $this->account();
 
-        return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['size' => $qty],
+        $result = $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['size' => $qty],
             fn (string $clientOrderId) => $this->coinbase->marketSell($account, $productId, $qty, $precision, $clientOrderId));
+
+        $tail = $requested - $qty;
+
+        return $result->status === 'filled' && ! $result->partial && $tail > $requested * 4 * PHP_FLOAT_EPSILON
+            ? $result->withDust($tail)
+            : $result;
     }
 
     public function openShort(string $productId, float $usd, float $decisionPrice): OrderResult

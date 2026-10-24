@@ -167,7 +167,12 @@ class CandleStoreCacheTest extends TestCase
 
     public function test_the_timeframe_candle_start_index_migration_ran(): void
     {
-        $indexes = array_column(DB::select("PRAGMA index_list('candles')"), 'name');
+        $indexes = DB::connection()->getDriverName() === 'sqlite'
+            ? array_column(DB::select("PRAGMA index_list('candles')"), 'name')
+            : array_column(DB::select(
+                'select distinct index_name as name from information_schema.statistics where table_schema = database() and table_name = ?',
+                ['candles'],
+            ), 'name');
 
         $this->assertContains('candles_timeframe_candle_start_index', $indexes);
     }

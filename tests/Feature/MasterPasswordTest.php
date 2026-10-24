@@ -285,7 +285,7 @@ class MasterPasswordTest extends TestCase
         $this->bootstrapKey();
         $this->app->instance(Settings::class, new class extends Settings
         {
-            public function overrides(): array
+            protected function storedPasswordValue(): mixed
             {
                 throw new \RuntimeException('settings store down');
             }
@@ -350,9 +350,10 @@ class MasterPasswordTest extends TestCase
     public function test_aws_login_guide_links_to_the_regional_console_and_never_shows_the_instance_id(): void
     {
         config(['desk.master_password' => self::BOOTSTRAP, 'desk.first_login_guide' => 'aws', 'desk.aws_region' => 'eu-west-2',
-            'desk.master_password_hint' => 'generic hint that the guide replaces']);
+            'desk.master_password_hint' => 'generic hint that the guide replaces',
+            'desk.tls_status_path' => $this->tlsStatusFile("trusted ip:203.0.113.7 2026-10-01T00:00:00Z\n")]);
 
-        $page = $this->get('/login')->assertOk()
+        $page = $this->get('https://203.0.113.7/login')->assertOk()
             ->assertSee('id="first-login-guide"', false)
             ->assertSee('Open my AWS instances')
             ->assertSee('Instance ID')
@@ -381,6 +382,66 @@ class MasterPasswordTest extends TestCase
         $this->get('/login')->assertOk()
             ->assertSee('href="https://console.aws.amazon.com/ec2/home#Instances:"', false)
             ->assertDontSee('evil.example', false);
+    }
+
+    private function tlsStatusFile(?string $contents): string
+    {
+        $path = sys_get_temp_dir().'/tls-status-'.uniqid('', true);
+        if ($contents !== null) {
+            file_put_contents($path, $contents);
+            $this->beforeApplicationDestroyed(fn () => @unlink($path));
+        }
+
+        return $path;
+    }
+
+    public function test_aws_login_warns_when_the_tls_status_file_is_missing(): void
+    {
+        config(['desk.master_password' => self::BOOTSTRAP, 'desk.first_login_guide' => 'aws',
+            'desk.tls_status_path' => $this->tlsStatusFile(null)]);
+
+        $this->get('/login')->assertOk()
+            ->assertSee('id="tls-warning"', false)
+            ->assertSee("Don't enter your instance ID", false)
+            ->assertSee('reboot the instance from the EC2 console', false);
+    }
+
+    public function test_aws_login_warns_while_the_certificate_is_the_self_signed_fallback(): void
+    {
+        config(['desk.master_password' => self::BOOTSTRAP, 'desk.first_login_guide' => 'aws',
+            'desk.tls_status_path' => $this->tlsStatusFile("fallback ip:203.0.113.7 2026-10-01T00:00:00Z\n")]);
+
+        $this->get('/login')->assertOk()->assertSee('id="tls-warning"', false);
+    }
+
+    public function test_aws_login_has_no_tls_warning_once_the_certificate_is_trusted(): void
+    {
+        config(['desk.master_password' => self::BOOTSTRAP, 'desk.first_login_guide' => 'aws',
+            'desk.tls_status_path' => $this->tlsStatusFile("trusted ip:203.0.113.7 2026-10-01T00:00:00Z\n")]);
+
+        $this->get('https://203.0.113.7/login')->assertOk()
+            ->assertSee('id="first-login-guide"', false)
+            ->assertDontSee('id="tls-warning"', false);
+    }
+
+    public function test_the_tls_warning_never_shows_outside_aws_first_login_mode(): void
+    {
+        config(['desk.master_password' => self::BOOTSTRAP, 'desk.first_login_guide' => null,
+            'desk.tls_status_path' => $this->tlsStatusFile(null)]);
+
+        $this->get('/login')->assertOk()->assertDontSee('id="tls-warning"', false);
+    }
+
+    public function test_the_tls_warning_refuses_bootstrap_login_until_trusted_https_is_available(): void
+    {
+        config(['desk.master_password' => self::BOOTSTRAP, 'desk.first_login_guide' => 'aws',
+            'desk.tls_status_path' => $this->tlsStatusFile(null)]);
+
+        $this->post('/login', ['password' => self::BOOTSTRAP])
+            ->assertStatus(503);
+        $this->assertFalse(DeskLogin::check(app('session.store')));
+        $this->get('/onboarding')->assertRedirect('/login');
+        $this->get('/login')->assertOk()->assertDontSee('name="password"', false);
     }
 
     public function test_aws_login_guide_disappears_once_the_owner_has_a_password(): void

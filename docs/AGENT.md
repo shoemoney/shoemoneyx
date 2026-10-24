@@ -6,6 +6,28 @@ time, backed by `App\Ai\StrategyAgent` and the system prompt in
 (`StrategyPluginController::assist()` / `App\Desk\Assist\SmxPrompt`), which is
 untouched and still the free-form chatbox in the builder UI.
 
+## LangChain / LangGraph runtime
+
+`StrategyAgent::turn()` invokes `LangGraph\Agents\Agent::create()` from
+`shoemoney/langchain-php`, pinned to revision
+`8a588b040d943fe8d7d42fef8fad05d7a0624340` in Composer. Installation uses the
+public HTTPS Git repository; it does not depend on a local SDK checkout.
+
+`App\Ai\LangChain\ChatClientModel` adapts graph messages and tool schemas to the
+existing `ChatClient` contract. It never opens a provider connection itself, so
+OpenRouter credential selection, authorization, usage auditing and retries remain
+in the application transport. Registered application and MCP tools execute through
+the graph's tool node, sequentially within each model response.
+
+`StrategyGraph` middleware enforces the six-call budget, one retry for an empty
+initial reply, complete tool-result batches, and a tools-disabled conclusion.
+The conversation table remains the source of history; this integration does not
+enable a second checkpoint store or change the conversation API. A per-turn journal
+retains successful tool effects and their results when a later provider call fails.
+Community/MCP result fencing remains in force. Obsolete `hub_register` credential
+arguments are discarded before graph state, tool events and transcript persistence;
+registration credentials belong in the Hub panel.
+
 ## The seven phases
 
 | # | Phase | Decides | Schema section |
@@ -35,10 +57,16 @@ All tools live in `App\Ai\Tools\*`, registered via `App\Ai\Tools\ToolRegistry`.
 | `list_versions` | List every saved version of a plugin, newest first | `plugin_id` (required) | "What versions do I have?" |
 | `suggest_share` | Surface the one-time "publish to the community archive?" UI prompt | `plugin_id?`, `version?` | Called once, right after a successful `run_backtest` |
 | `set_phase` | Advance (or set) the current phase, 1-7 | `phase` (required, 1-7) | Called whenever the model moves to a new phase |
+| `hub_register` | Show registration guidance; the user creates the account in the Hub connect panel. Never request credentials in chat. | None | Open the Hub connect panel to register a community account |
+| `hub_status` | Check whether this desk is connected to the community hub. | (none) | Am I connected to the hub? |
+| `publish_strategy` | Request publishing a saved plugin version to the community hub archive. Never publishes by itself: returns needs_confirmation and the user must confirm in the UI. The confirmed publish (App\Hub\Publisher) requires an active hub connection. | `plugin_id?`, `version?`, `changelog?` | Request to publish v1.2.0 |
+| `sync_strategies` | Check the community strategies repo for new or updated strategies, read-only. Importing needs the user's confirmation in the UI. | `import?` | Check for new community strategies to import |
+| `start_arena_seat` | Start a live arena seat running a saved strategy plugin version in paper, on its own account, against the current champion. | `version_id?`, `label?`, `cash?` | Start a new arena seat with my latest strategy |
+| `arena_scoreboard` | Get the current live arena scoreboard: every seat's equity, PnL, drawdown, win rate, trade count and delta against the champion. | (none) | Show me the current arena scores |
 
-Every tool's `run()` returns a JSON-serializable array and never throws — a missing
-plugin, backtest or version comes back as `{"error": "..."}` so a bad lookup degrades
-the conversation instead of ending the agent's turn.
+Every tool's `run()` returns a JSON-serializable array; a missing plugin, backtest,
+or version comes back as `{"error": "..."}`. Unexpected tool exceptions are also
+converted to tool error results, so the rest of the batch can continue.
 
 ## `agent_conversations` schema and routes
 
@@ -49,7 +77,7 @@ Table `agent_conversations` (migration
 |---|---|---|
 | `user_id` | nullable FK → `users`, null on delete | |
 | `plugin_id` | nullable FK → `strategy_plugins`, null on delete | the plugin this conversation is building/editing |
-| `messages` | json | OpenAI-shape message list, capped at 40 entries per `App\Ai\StrategyAgent` |
+| `messages` | json | OpenAI-shape message list; newest complete turns within a 40-message target |
 | `phase` | tinyint, default 1 | current phase, 1-7 |
 
 Routes (`routes/api.php`, inside the existing `DeskToken` group):
@@ -61,8 +89,11 @@ GET  /api/agent/conversations/{conversation}          # read the conversation ro
 ```
 
 `StrategyAgent::turn()` caps tool execution at 6 per turn (not 6 rounds — 6 total tool
-*calls* across however many rounds it takes) and caps stored history at the newest 40
-messages.
+*calls* across however many rounds it takes). Excess calls in a batch receive skipped
+results, and the concluding model request has no tools. Every assistant tool call
+receives a result, including failed calls. History retains whole user turns within
+a 40-message target; the newest turn is always kept intact even if one unusually
+large tool batch exceeds that target.
 
 ## MCP client support
 
@@ -71,7 +102,7 @@ long-lived MCP server child process. `App\Ai\Mcp\McpToolLoader::extend()` reads
 `config('mcp.servers')`, spawns each enabled server, and registers every tool it
 reports as a native `App\Ai\Tools\Tool` (named `mcp.{server}.{tool}`) — wired into
 `ToolRegistry::withDefaults()`, so every MCP tool a configured server exposes shows up
-alongside the seven built-in tools automatically.
+alongside the built-in tools automatically.
 
 Configure servers via the `MCP_SERVERS` env var — a JSON object, decoded into
 `config/mcp.php`'s `servers` key:

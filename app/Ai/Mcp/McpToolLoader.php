@@ -16,7 +16,7 @@ final class McpToolLoader
                 continue;
             }
             try {
-                $client = new McpClient($server['command'], $server['args'] ?? [], $server['env'] ?? []);
+                $client = new McpClient($server['command'], $server['args'] ?? [], $server['env'] ?? [], inheritEnv: (array) ($server['inherit_env'] ?? []));
                 $client->initialize();
                 foreach ($client->listTools() as $tool) {
                     $registry->register(new McpToolAdapter($client, (string) $name, $tool['name'], $tool['description'] ?? '', $tool['inputSchema'] ?? []));

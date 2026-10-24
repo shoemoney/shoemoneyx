@@ -111,9 +111,16 @@ class Chief
             }));
         }
 
-        $wm = (string) $this->settings->get('worldmonitor.base_url', '');
+        $wmSetting = $this->settings->get('worldmonitor.base_url', '');
+        $wm = is_string($wmSetting) ? $wmSetting : '';
         if ($wm !== '') {
-            $checks['worldmonitor'] = $this->try(fn () => self::safeWorldMonitorUrl($wm) && Http::timeout(5)->withoutRedirecting()->get(rtrim($wm, '/').'/api/market/v1/get-fear-greed-index')->ok());
+            $checks['worldmonitor'] = $this->try(function () use ($wm) {
+                $target = self::worldMonitorTarget($wm);
+
+                return $target !== null && Http::timeout(5)->withoutRedirecting()
+                    ->withOptions($target['curl'] === [] ? [] : ['curl' => $target['curl']])
+                    ->get(rtrim($wm, '/').'/api/market/v1/get-fear-greed-index')->ok();
+            });
         }
 
         $green = count(array_filter($checks));
@@ -141,22 +148,41 @@ class Chief
      */
     public static function safeWorldMonitorUrl(string $url): bool
     {
+        return self::worldMonitorTarget($url) !== null;
+    }
+
+    /**
+     * The validated addresses behind $url plus the curl options that pin the request to them, so the
+     * connection cannot re-resolve to a different (rebound) address between this check and the call.
+     * Null when the URL is refused.
+     *
+     * @return array{ips: string[], curl: array<int, string[]>}|null
+     */
+    public static function worldMonitorTarget(string $url): ?array
+    {
         $parts = parse_url($url);
         if (! in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) || empty($parts['host'])) {
-            return false;
+            return null;
         }
         $host = trim($parts['host'], '[]');
-        $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : self::resolve($host);
+        $literal = filter_var($host, FILTER_VALIDATE_IP) !== false;
+        $ips = $literal ? [$host] : self::resolve($host);
         if ($ips === []) {
-            return false;
+            return null;
         }
         foreach ($ips as $ip) {
             if (self::isMetadataAddress($ip)) {
-                return false;
+                return null;
             }
         }
+        if ($literal) {
+            return ['ips' => $ips, 'curl' => []];
+        }
 
-        return true;
+        $port = $parts['port'] ?? (strtolower($parts['scheme']) === 'https' ? 443 : 80);
+        $addresses = implode(',', array_map(fn (string $ip) => str_contains($ip, ':') ? "[{$ip}]" : $ip, $ips));
+
+        return ['ips' => $ips, 'curl' => [CURLOPT_RESOLVE => ["{$host}:{$port}:{$addresses}"]]];
     }
 
     /** @return string[] every A and AAAA address (plus the system resolver's view, for hosts-file names) */

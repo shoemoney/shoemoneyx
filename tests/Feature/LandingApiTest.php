@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\ArenaSeat;
 use App\Models\BankSnapshot;
 use App\Models\Candidate;
 use App\Models\DeskEvent;
@@ -183,5 +184,40 @@ class LandingApiTest extends TestCase
         }
         $this->getJson('/api/landing')->assertOk()->assertJsonCount(30, 'fills')
             ->assertJsonCount(12, 'optimizer_rounds')->assertJsonPath('optimizer_rounds.0.candidates', 14);
+    }
+
+    public function test_arena_activity_does_not_change_main_snapshot_metrics_guidance_or_history(): void
+    {
+        $this->freezeTime();
+        $main = $this->position();
+        $mainRun = DeskRun::create(['mode' => 'paper', 'strategy' => 'mr', 'started_at' => now()->subMinute()]);
+        Candidate::create(['desk_run_id' => $mainRun->id, 'product_id' => 'BTC-USD', 'rank' => 1,
+            'rank_reason' => 'main guidance', 'metrics' => [], 'verdict' => 'PASS']);
+        Fill::create(['mode' => 'paper', 'product_id' => 'BTC-USD', 'side' => 'BUY', 'requested_usd' => 100, 'decision_price' => 100]);
+        BankSnapshot::create(['mode' => 'paper', 'cash' => 1000, 'equity' => 1200, 'positions_value' => 200,
+            'locked' => 0, 'free_cash' => 800, 'taken_at' => now()->subMinute()]);
+        DeskEvent::create(['desk_run_id' => $mainRun->id, 'agent' => 'SCAN', 'message' => 'main run event']);
+        DeskEvent::create(['agent' => 'RISK', 'message' => 'main position event', 'payload' => ['position_id' => $main->id]]);
+        $before = $this->getJson('/api/landing')->assertOk()->json();
+
+        $seat = ArenaSeat::create(['label' => 'Challenger', 'strategy_key' => 'mr', 'starting_cash' => 1000,
+            'status' => 'active', 'started_at' => now()]);
+        $position = $this->position(['arena_seat_id' => $seat->id, 'quantity' => 900, 'realised_usd' => 6000]);
+        $this->position(['arena_seat_id' => $seat->id, 'status' => 'closed', 'pnl_usd' => 8000, 'closed_at' => now()]);
+        $run = DeskRun::create(['arena_seat_id' => $seat->id, 'mode' => 'paper', 'strategy' => 'mr', 'started_at' => now()]);
+        Candidate::create(['desk_run_id' => $run->id, 'product_id' => 'BTC-USD', 'rank' => 1,
+            'rank_reason' => 'seat guidance', 'metrics' => [], 'verdict' => 'REJECT']);
+        Fill::create(['arena_seat_id' => $seat->id, 'mode' => 'paper', 'product_id' => 'BTC-USD',
+            'side' => 'BUY', 'requested_usd' => 999, 'decision_price' => 100]);
+        BankSnapshot::create(['arena_seat_id' => $seat->id, 'mode' => 'paper', 'cash' => 9999, 'equity' => 9999,
+            'positions_value' => 0, 'locked' => 0, 'free_cash' => 9999, 'taken_at' => now()]);
+        DeskEvent::create(['desk_run_id' => $run->id, 'agent' => 'SCAN', 'message' => 'seat run event']);
+        DeskEvent::create(['agent' => 'RISK', 'message' => 'seat position event', 'payload' => ['position_id' => $position->id]]);
+
+        $after = $this->getJson('/api/landing')->assertOk()->json();
+        foreach (['metrics', 'latest_run', 'pairs', 'fills', 'bank', 'events'] as $section) {
+            $this->assertSame($before[$section], $after[$section], $section.' must reflect only the main account');
+        }
+        Http::assertNothingSent();
     }
 }

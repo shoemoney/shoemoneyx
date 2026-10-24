@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\Http\Middleware;
 
+use App\Desk\BootstrapTls;
 use App\Desk\DeskAuthThrottle;
 use App\Desk\DeskLogin;
 use App\Desk\Settings;
 use Closure;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Exception\SuspiciousOperationException;
 use Symfony\Component\HttpFoundation\IpUtils;
 
 /**
@@ -28,6 +30,9 @@ class DeskToken
     public function handle(Request $request, Closure $next)
     {
         $settings = app(Settings::class);
+        if (BootstrapTls::blocked($request)) {
+            return response()->json(['error' => 'trusted_tls_required'], 503);
+        }
         if (! $settings->hasMasterPassword()) {
             return $this->setupOnly($request, $next);
         }
@@ -86,13 +91,16 @@ class DeskToken
         return $next($request);
     }
 
-    private const FORWARDING_HEADERS = ['Forwarded', 'X-Forwarded-For', 'X-Real-IP', 'X-Forwarded-Host', 'CF-Connecting-IP'];
+    private const FORWARDING_HEADERS = ['Forwarded', 'X-Forwarded-For', 'X-Real-IP', 'X-Forwarded-Host', 'CF-Connecting-IP', 'Via'];
 
     /**
      * With no key to prove ownership, the first caller claims the desk, so the client address has to be
      * trustworthy: a direct loopback or private-network connection. Behind a reverse proxy or inside a
      * container (Docker's userland proxy re-originates connections from a private address) a public
      * visitor would look private, so keyless setup is refused there; those installs always have a key.
+     * A stock same-host proxy_pass adds no forwarding header and shows every visitor as 127.0.0.1, and
+     * DNS rebinding reaches a local desk by a public name, so the Host must also be a loopback or
+     * private literal (or localhost): a public hostname means the request came through a name, refuse.
      */
     private function isDirectLocalClient(Request $request): bool
     {
@@ -102,7 +110,21 @@ class DeskToken
             }
         }
 
-        return ! $this->inContainer() && IpUtils::checkIp((string) $request->ip(), self::PRIVATE_RANGES);
+        return ! $this->inContainer()
+            && IpUtils::checkIp((string) $request->ip(), self::PRIVATE_RANGES)
+            && $this->hostIsLocalLiteral($request);
+    }
+
+    private function hostIsLocalLiteral(Request $request): bool
+    {
+        try {
+            $host = strtolower(trim($request->getHost(), '[]'));
+        } catch (SuspiciousOperationException) {
+            return false;
+        }
+
+        return $host === 'localhost'
+            || (filter_var($host, FILTER_VALIDATE_IP) !== false && IpUtils::checkIp($host, self::PRIVATE_RANGES));
     }
 
     private function inContainer(): bool

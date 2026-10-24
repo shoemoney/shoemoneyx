@@ -58,8 +58,8 @@ class CcxtExecutor implements Executor, ReconcilesOrders
 
         return $this->submitOrder('buy', $productId, $productId, 'BUY', $usd, $decisionPrice, ['requested' => $usd, 'size' => $usd],
             fn (string $clientOrderId) => $byCost
-                ? $this->client->create_market_buy_order_with_cost($symbol, $usd, ['clientOrderId' => $clientOrderId])
-                : $this->client->create_order($symbol, 'market', 'buy', $usd / $decisionPrice, null, ['clientOrderId' => $clientOrderId]));
+                ? $this->client->create_market_buy_order_with_cost($symbol, $usd, $this->orderParams($clientOrderId))
+                : $this->client->create_order($symbol, 'market', 'buy', $usd / $decisionPrice, null, $this->orderParams($clientOrderId)));
     }
 
     public function sell(string $productId, float $qty, float $decisionPrice, float $entryUsdShare = 0.0, bool $maker = false): OrderResult
@@ -67,7 +67,7 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         $symbol = Symbols::toCcxt($productId);
 
         return $this->submitOrder('sell', $productId, $productId, 'SELL', $qty * $decisionPrice, $decisionPrice, ['requested' => $qty, 'size' => $qty],
-            fn (string $clientOrderId) => $this->client->create_order($symbol, 'market', 'sell', $qty, null, ['clientOrderId' => $clientOrderId]));
+            fn (string $clientOrderId) => $this->client->create_order($symbol, 'market', 'sell', $qty, null, $this->orderParams($clientOrderId)));
     }
 
     public function openShort(string $productId, float $usd, float $decisionPrice): OrderResult
@@ -118,6 +118,17 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         return ($this->client->has['fetchOrder'] ?? false) ? 6 : 0;
     }
 
+    /** @return array{clientOrderId: int|string} */
+    private function orderParams(string $clientOrderId): array
+    {
+        return ['clientOrderId' => ClientOrderIds::forRequest($this->ccxtId, $clientOrderId)];
+    }
+
+    protected function newClientOrderId(): string
+    {
+        return ClientOrderIds::generate($this->ccxtId);
+    }
+
     protected function exitsBypassPendingEntries(): bool
     {
         return true;
@@ -158,7 +169,7 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         foreach ($lists as $method) {
             $coversClosed = $coversClosed || $method !== 'fetch_open_orders';
             foreach ($this->client->{$method}($symbol, $since) as $order) {
-                if (($order['clientOrderId'] ?? null) === $intent->client_order_id
+                if ((string) ($order['clientOrderId'] ?? '') === $intent->client_order_id
                     || ($intent->venue_order_id && (string) ($order['id'] ?? '') === $intent->venue_order_id)) {
                     return $order;
                 }
@@ -193,9 +204,9 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         $requested = (float) ($intent->context['requested'] ?? $requestedUsd);
         $orderId = $intent->venue_order_id ?? (isset($order['id']) ? (string) $order['id'] : null);
 
+        $raw = [];
         $filledQty = (float) ($order['filled'] ?? 0);
         $cost = (float) ($order['cost'] ?? 0);
-        $fee = $this->feeOf($order);
         $avg = (float) ($order['average'] ?? 0) ?: ($filledQty > 0 ? $cost / $filledQty : null);
         // Same degraded-poll shape CoinbaseExecutor defends against: a real fill with no usable
         // average (round-5 review — this venue never got round 4's fix at all, so OrderResult::ok()
@@ -204,37 +215,97 @@ class CcxtExecutor implements Executor, ReconcilesOrders
         [$avg, $cost, $basisRecovered] = OrderResult::recoverFillBasis($filledQty, $avg, $cost, $decisionPrice, "{$this->ccxtId} (ccxt)", $orderId, [
             'average' => $order['average'] ?? null,
         ]);
+        // A fee charged in the base asset (Binance buys) leaves the account holding less than `filled`;
+        // booking the gross qty makes the later close sell coins that are not there.
+        ['usd' => $fee, 'cashUsd' => $cashFee, 'baseQty' => $baseFee, 'unconverted' => $unconverted] = $this->feesOf($order, $intent->desk_product_id, (float) $avg);
+        // Fees may be negative (rebates). The fill price above keeps the gross qty; a sell's base fee is
+        // extra inventory the account lost beyond `filled`.
+        if ($baseFee !== 0.0) {
+            $filledQty = max(0.0, $side === 'BUY' ? $filledQty - $baseFee : $filledQty + $baseFee);
+        }
+        if ($unconverted !== []) {
+            $raw['unconverted_fees'] = $unconverted;
+        }
         $status = $filledQty > 0 ? 'filled' : 'rejected';
         $partial = $side === 'BUY'
-            ? $cost + $fee < $requested * 0.98
+            ? $cost + $cashFee < $requested * 0.98
             : $filledQty < $requested * 0.98;
 
         return new OrderResult(
             status: $status,
             requestedUsd: $requestedUsd,
-            filledUsd: $side === 'BUY' ? $cost + $fee : $cost - $fee,
+            filledUsd: $side === 'BUY' ? $cost + $cashFee : $cost - $cashFee,
             filledQty: $filledQty,
             decisionPrice: $decisionPrice,
             fillPrice: $avg,
             feeUsd: $fee,
             partial: $partial,
             venueOrderId: $orderId,
-            raw: ['create' => $create, 'order' => $order, 'client_order_id' => $intent->client_order_id],
-            note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : null,
+            raw: ['create' => $create, 'order' => $order, 'client_order_id' => $intent->client_order_id] + $raw,
+            note: $status === 'rejected' ? ('order '.($order['status'] ?? 'unknown')) : $this->unconvertedNote($unconverted),
             basisRecovered: $basisRecovered,
         );
     }
 
     /**
      * ccxt fills either 'fee' (one fee) or 'fees' (a list), and venues that fill both put the
-     * same charge in each — so the list wins outright rather than being added to the single fee.
+     * same charge in each, so the list wins outright rather than being added to the single fee.
+     * A fee with no currency is a quote-currency fee, which is what this adapter always assumed.
+     *
+     * usd: every fee valued in USD (informational). cashUsd: the part that came out of quote cash.
+     * baseQty: the part charged in the base asset. unconverted: fees in a third currency with no price.
+     *
+     * @return array{usd: float, cashUsd: float, baseQty: float, unconverted: array<int, array{currency: string, cost: float}>}
      */
-    private function feeOf(array $order): float
+    private function feesOf(array $order, string $productId, float $price): array
     {
-        if (! empty($order['fees'])) {
-            return array_sum(array_map(fn ($f) => (float) ($f['cost'] ?? 0), $order['fees']));
+        $fees = ! empty($order['fees']) ? $order['fees'] : (isset($order['fee']['cost']) ? [$order['fee']] : []);
+        [$base, $quote] = array_pad(explode('-', $productId, 2), 2, '');
+        $out = ['usd' => 0.0, 'cashUsd' => 0.0, 'baseQty' => 0.0, 'unconverted' => []];
+
+        foreach ($fees as $f) {
+            $cost = (float) ($f['cost'] ?? 0);
+            $ccy = strtoupper((string) ($f['currency'] ?? ''));
+            if ($cost === 0.0) {
+                continue;
+            }
+            if ($ccy === '' || $ccy === strtoupper($quote)) {
+                $out['usd'] += $cost;
+                $out['cashUsd'] += $cost;
+            } elseif ($ccy === strtoupper($base)) {
+                $out['baseQty'] += $cost;
+                $out['usd'] += $cost * $price;
+            } elseif (($rate = $this->rateIn($ccy, $quote)) !== null) {
+                $out['usd'] += $cost * $rate;
+                $out['cashUsd'] += $cost * $rate;
+            } else {
+                $out['unconverted'][] = ['currency' => $ccy, 'cost' => $cost];
+            }
         }
 
-        return (float) ($order['fee']['cost'] ?? 0);
+        return $out;
+    }
+
+    private function rateIn(string $currency, string $quote): ?float
+    {
+        if ($quote === '' || ! ($this->client->has['fetchTicker'] ?? true)) {
+            return null;
+        }
+        try {
+            $last = (float) ($this->client->fetch_ticker("{$currency}/{$quote}")['last'] ?? 0);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $last > 0 ? $last : null;
+    }
+
+    private function unconvertedNote(array $unconverted): ?string
+    {
+        if ($unconverted === []) {
+            return null;
+        }
+
+        return "{$this->ccxtId}: fee charged in ".implode(', ', array_column($unconverted, 'currency')).' could not be priced; not booked as USD';
     }
 }

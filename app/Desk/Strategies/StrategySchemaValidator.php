@@ -26,6 +26,11 @@ use App\Models\Candle;
  */
 final class StrategySchemaValidator
 {
+    /** An add is at most 100% of the position's initial cost; adds + re-entries per position are capped at 5 (Desk::MAX_ADDS_PER_POSITION). */
+    private const MAX_ADD_SIZE_PCT = 100;
+
+    private const MAX_ADDS_PER_POSITION = 5;
+
     private const BASES = ['custom'];
 
     private const SIDES = ['long', 'short'];
@@ -255,6 +260,9 @@ final class StrategySchemaValidator
                     }
                     if (! isset($rung['size_pct']) || ! is_numeric($rung['size_pct']) || $rung['size_pct'] <= 0) {
                         $errors[] = ['path' => "{$path}.size_pct", 'message' => 'size_pct must be a positive number (percent of initial cost)'];
+                    }
+                    if (isset($rung['size_pct']) && is_numeric($rung['size_pct']) && $rung['size_pct'] > self::MAX_ADD_SIZE_PCT) {
+                        $errors[] = ['path' => "{$path}.size_pct", 'message' => 'size_pct may not exceed '.self::MAX_ADD_SIZE_PCT.' (an add is at most 100% of the initial cost)'];
                     }
                 }
             }
@@ -551,7 +559,7 @@ final class StrategySchemaValidator
     /**
      * @param  array<int, array{path: string, message: string}>  $errors
      * @param  array<string, array<string, mixed>>  $groups  output: name => raw {all, any} group, for
-     *                                                        checkNoPositionFieldsInScanSignals()
+     *                                                       checkNoPositionFieldsInScanSignals()
      * @return array<int, string> every declared signal name, for entry.when / reentry.when existence checks
      */
     private static function checkSignals(mixed $signals, array &$errors, array &$groups = []): array
@@ -698,6 +706,8 @@ final class StrategySchemaValidator
                     $errors[] = ['path' => "{$path}.size_pct", 'message' => "unknown parameter reference \${$name}"];
                 } elseif (! is_numeric($rung['size_pct']) || $rung['size_pct'] <= 0) {
                     $errors[] = ['path' => "{$path}.size_pct", 'message' => 'size_pct must be a positive number (percent of initial cost)'];
+                } elseif ($rung['size_pct'] > self::MAX_ADD_SIZE_PCT) {
+                    $errors[] = ['path' => "{$path}.size_pct", 'message' => 'size_pct may not exceed '.self::MAX_ADD_SIZE_PCT.' (an add is at most 100% of the initial cost)'];
                 }
             }
             if ($hasSize) {
@@ -849,6 +859,9 @@ final class StrategySchemaValidator
         }
         if (isset($reentry['max_per_position']) && ! self::isPositiveInt($reentry['max_per_position'])) {
             $errors[] = ['path' => 'reentry.max_per_position', 'message' => 'max_per_position must be a positive integer'];
+        }
+        if (self::isPositiveInt($reentry['max_per_position'] ?? null) && $reentry['max_per_position'] > self::MAX_ADDS_PER_POSITION) {
+            $errors[] = ['path' => 'reentry.max_per_position', 'message' => 'max_per_position may not exceed '.self::MAX_ADDS_PER_POSITION];
         }
     }
 

@@ -5,6 +5,9 @@
 // requests from stdin, replies on stdout. Implements initialize, tools/list, and
 // tools/call for one fixture tool ("echo").
 
+$initializeRequested = false;
+$initialized = false;
+
 while (($line = fgets(STDIN)) !== false) {
     $line = trim($line);
     if ($line === '') {
@@ -16,6 +19,25 @@ while (($line = fgets(STDIN)) !== false) {
     }
     $id = $req['id'] ?? null;
     $method = $req['method'] ?? '';
+
+    if ($method === 'notifications/initialized') {
+        // A request with an id is not the notification required by the handshake.
+        $initialized = $initializeRequested && ! array_key_exists('id', $req);
+
+        continue;
+    }
+    if (in_array($method, ['tools/list', 'tools/call'], true) && ! $initialized) {
+        fwrite(STDOUT, json_encode(['jsonrpc' => '2.0', 'id' => $id, 'error' => [
+            'code' => -32000, 'message' => 'notifications/initialized required before tool requests',
+        ]])."\n");
+        fflush(STDOUT);
+
+        continue;
+    }
+    if ($method === 'initialize') {
+        $initializeRequested = true;
+        $initialized = false;
+    }
 
     $result = match ($method) {
         'initialize' => [
@@ -30,6 +52,9 @@ while (($line = fgets(STDIN)) !== false) {
         ]]],
         'tools/call' => (function () use ($req) {
             $args = $req['params']['arguments'] ?? [];
+            if (($req['params']['name'] ?? '') === 'env') {
+                return ['content' => [['type' => 'text', 'text' => json_encode(array_map(fn ($k) => getenv($k), $args['keys'] ?? []))]]];
+            }
 
             return ['content' => [['type' => 'text', 'text' => (string) ($args['text'] ?? '')]]];
         })(),

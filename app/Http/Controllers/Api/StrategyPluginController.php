@@ -28,7 +28,6 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Validation\ValidationException;
 
 class StrategyPluginController extends Controller
 {
@@ -44,19 +43,9 @@ class StrategyPluginController extends Controller
         return response()->json($plugin);
     }
 
-    private const MAX_DEFINITION_BYTES = 65536;
-
-    private function assertDefinitionSize(array $definition): void
-    {
-        if (($json = json_encode($definition)) === false || strlen($json) > self::MAX_DEFINITION_BYTES) {
-            throw ValidationException::withMessages(['definition' => 'definition must be valid UTF-8 JSON of at most 64KB']);
-        }
-    }
-
     public function validate(Request $request, DefinitionCheck $check): JsonResponse
     {
         $data = $request->validate(['definition' => 'required|array']);
-        $this->assertDefinitionSize($data['definition']);
 
         return response()->json($check->run($data['definition']));
     }
@@ -76,7 +65,6 @@ class StrategyPluginController extends Controller
         ]);
 
         $def = $data['definition'];
-        $this->assertDefinitionSize($def);
         $result = $check->run($def);
         if (! $result['valid']) {
             return response()->json($result, 422);

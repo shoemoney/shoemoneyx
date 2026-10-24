@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
-import { api, deskHeaders } from '../api';
+import { api, deskFetch } from '../api';
+import { readStored, writeStored, removeStored } from '../storage';
 
 const DEFAULT_JSON = `{
   "key": "my-first-strategy",
@@ -124,7 +125,7 @@ const btResult = ref(null);
 
 // SMX assist chatbox. The key lives on the server against the operator's connected
 // OpenRouter account — the browser never holds one, only the model preference.
-const orModel = ref(localStorage.getItem('smx_or_model') || 'openrouter/free');
+const orModel = ref(readStored('smx_or_model') || 'openrouter/free');
 const freeModels = ref([]);
 const recommendedModels = ref([]);
 const customModel = ref('');
@@ -167,7 +168,7 @@ const draft = ref('');
 const chatBusy = ref(false);
 
 function savePrefs() {
-    localStorage.setItem('smx_or_model', orModel.value);
+    writeStored('smx_or_model', orModel.value);
 }
 
 function parsed() {
@@ -229,9 +230,8 @@ async function ensureSaved() {
 async function exportFmt(fmt) {
     if (!await ensureSaved()) return;
     const url = `/api/strategy-plugins/${currentId.value}/export/${fmt}`;
-    const res = await fetch(url, { headers: deskHeaders() });
-    if (!res.ok) { errors.value = [`export failed: ${res.status}`]; return; }
-    const blob = await res.blob();
+    let blob;
+    try { blob = await deskFetch(url, { as: 'blob' }); } catch (e) { errors.value = [`export failed: ${e.message}`]; return; }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     const ext = fmt === 'json' ? 'strategy.json' : fmt;
@@ -275,7 +275,7 @@ async function sendChat() {
     if (!aiStatus.value.connected) { chat.value.push({ role: 'assistant', content: 'Connect your OpenRouter account first — the button above starts the sign-in.' }); return; }
     const model = orModel.value === '__custom__' ? customModel.value.trim() : orModel.value.trim();
     if (!model) { chat.value.push({ role: 'assistant', content: 'Pick a model or paste a custom model id first.' }); return; }
-    localStorage.setItem('smx_or_model', model);
+    writeStored('smx_or_model', model);
     chat.value.push({ role: 'user', content: text });
     draft.value = '';
     chatBusy.value = true;
@@ -298,7 +298,7 @@ function useJsonFromChat(content) {
 
 onMounted(() => {
     // Keys are no longer pasted anywhere; drop any one an older build left behind.
-    localStorage.removeItem('smx_or_key');
+    removeStored('smx_or_key');
     loadSaved();
     loadModels();
     loadAiStatus();

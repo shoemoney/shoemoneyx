@@ -14,6 +14,7 @@ use App\Models\StrategyPlugin;
 use App\Models\StrategyReview;
 use App\Services\Market\CandleStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
@@ -122,6 +123,44 @@ class AgentBacktestLoopJobTest extends TestCase
 
         $this->assertSame(2, StrategyReview::count());
         $this->assertSame('keep', StrategyReview::orderByDesc('id')->first()->verdict);
+    }
+
+    public function test_an_edit_after_the_interval_check_cannot_change_the_backtest_or_review_version(): void
+    {
+        $plugin = $this->plugin();
+        $originalVersion = $plugin->versions()->sole();
+        $this->fakeReview('{"verdict": "keep", "notes": "Original version.", "suggested_param_changes": {}}');
+        $edited = false;
+
+        // This query runs after handle() chooses its version but before the backtest
+        // is created. Simulate the builder publishing a new version at that boundary.
+        DB::listen(function ($query) use ($plugin, &$edited) {
+            if ($edited || ! str_starts_with(strtolower($query->sql), 'select') || ! str_contains($query->sql, 'backtests')) {
+                return;
+            }
+            $edited = true;
+            $definition = $plugin->definition;
+            $definition['suggest'] = ['products' => ['ETH-USD'], 'days' => 30, 'cash' => 9000];
+            $plugin->versions()->create(['version' => '2.0.0', 'definition' => $definition]);
+            $plugin->update(['current_version' => '2.0.0', 'definition' => $definition]);
+        });
+
+        $store = Mockery::mock(CandleStore::class);
+        $store->shouldReceive('fresh')->once()->with('BTC-USD', '1H', 300)->andReturn(true);
+        $backtester = Mockery::mock(Backtester::class);
+        $backtester->shouldReceive('runInto')->once()->with(Mockery::on(fn ($row) => $row->strategy_plugin_version_id === $originalVersion->id
+            && $row->params['json.plugin_version_id'] === $originalVersion->id));
+
+        $this->runOnce($plugin, $backtester, $store);
+
+        $this->assertTrue($edited, 'The concurrent edit must actually run.');
+        $this->assertSame('2.0.0', $plugin->fresh()->current_version);
+        $backtest = Backtest::sole();
+        $this->assertSame($originalVersion->id, $backtest->strategy_plugin_version_id);
+        $this->assertSame(['BTC-USD'], $backtest->products);
+        $this->assertSame(500.0, $backtest->starting_cash);
+        $this->assertSame($originalVersion->id, StrategyReview::sole()->version_id);
+        Http::assertSent(fn ($request) => str_contains($request['messages'][1]['content'], 'Strategy: rsi-dip v1.0.0'));
     }
 
     public function test_a_plugin_without_auto_backtest_is_a_no_op(): void

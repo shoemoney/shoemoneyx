@@ -130,12 +130,60 @@ class DeskAuthHardeningTest extends TestCase
         $this->assertFalse(app(Settings::class)->hasMasterPassword());
     }
 
-    public function test_a_public_address_with_the_key_in_env_is_unaffected(): void
+    public function test_keyless_setup_is_refused_when_the_host_is_a_public_name_or_a_via_header_is_present(): void
     {
-        config(['desk.master_password' => 'i-0123456789abcdef0']);
+        config(['desk.master_password' => '']);
+        $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
+        $message = 'Set MASTER_PASSWORD in .env to claim this desk from outside its own network.';
+
+        foreach (['desk.example.com', 'desk.example.com:8080', '8.8.8.8', 'localhost.evil.com'] as $host) {
+            $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+                ->postJson('http://'.$host.'/api/onboarding/master-password', $body)
+                ->assertForbidden()->assertJsonPath('message', $message);
+        }
+
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+            ->postJson('/api/onboarding/master-password', $body, ['Via' => '1.1 proxy'])
+            ->assertForbidden()->assertJsonPath('message', $message);
+
+        $this->assertFalse(app(Settings::class)->hasMasterPassword());
+    }
+
+    public function test_keyless_setup_is_allowed_for_loopback_and_private_host_literals(): void
+    {
+        config(['desk.master_password' => '']);
         $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
 
-        $this->withServerVariables(['REMOTE_ADDR' => '8.8.8.8'])->postJson('/api/onboarding/master-password', $body, ['X-Desk-Token' => 'i-0123456789abcdef0'])->assertOk();
+        foreach (['localhost', 'localhost:8000', '127.0.0.1:8000', '[::1]:8000', '192.168.1.20', '10.1.2.3', '[fd12:3456::1]'] as $host) {
+            Setting::where('key', 'master_password')->delete();
+            Cache::forget('desk:settings');
+            $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+                ->postJson('http://'.$host.'/api/onboarding/master-password', $body)->assertOk();
+        }
+    }
+
+    public function test_the_failure_throttle_buckets_an_ipv6_client_by_its_64(): void
+    {
+        $this->ownerPassword();
+
+        for ($i = 0; $i < 10; $i++) {
+            $this->withServerVariables(['REMOTE_ADDR' => '2001:db8:1:2:'.dechex($i + 1).'::'.dechex($i + 1)])
+                ->getJson('/api/status', ['X-Desk-Token' => 'guess'.$i])->assertUnauthorized();
+        }
+
+        $this->withServerVariables(['REMOTE_ADDR' => '2001:db8:1:2:ffff::1'])
+            ->getJson('/api/status', ['X-Desk-Token' => 'guess'])->assertStatus(429);
+        $this->withServerVariables(['REMOTE_ADDR' => '2001:db8:1:3::1'])
+            ->getJson('/api/status', ['X-Desk-Token' => 'guess'])->assertUnauthorized();
+    }
+
+    public function test_a_public_address_with_the_key_in_env_is_unaffected(): void
+    {
+        $bootstrapKey = 'i-'.str_repeat('0', 17);
+        config(['desk.master_password' => $bootstrapKey]);
+        $body = ['password' => 'a-long-enough-password', 'password_confirmation' => 'a-long-enough-password'];
+
+        $this->withServerVariables(['REMOTE_ADDR' => '8.8.8.8'])->postJson('/api/onboarding/master-password', $body, ['X-Desk-Token' => $bootstrapKey])->assertOk();
     }
 
     public function test_cors_gives_no_cross_origin_access_to_the_api(): void

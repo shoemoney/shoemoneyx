@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { ref, reactive, computed, watch, nextTick, effectScope } from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import { cursorTarget } from '../../../resources/js/components/chart/marketLens.js';
-import { deskHeaders } from '../../../resources/js/api.js';
+import { deskFetch } from '../../../resources/js/api.js';
 import { mapUdfHistory, mapUdfMarks, mergeOlderHistory, mergeMarks } from '../../../resources/js/components/chart/udfMapping.js';
 const base = new URL('../../../', import.meta.url);
 const requests = [];
@@ -25,13 +25,13 @@ async function instance(file, initialProps, exposed) {
     const mounted = [], unmounted = [], scope = effectScope(), props = reactive(initialProps);
     const create = new Function(
         'ref', 'computed', 'watch', 'onMounted', 'onBeforeUnmount', 'onUnmounted', 'defineProps', 'useRouter', 'useRoute',
-        'api', 'cursorTarget', 'deskHeaders', 'createChart', 'CandlestickSeries', 'HistogramSeries', 'CrosshairMode',
+        'api', 'cursorTarget', 'deskFetch', 'createChart', 'CandlestickSeries', 'HistogramSeries', 'CrosshairMode',
         'createSeriesMarkers', 'mapUdfHistory', 'mapUdfMarks', 'mergeOlderHistory', 'mergeMarks',
         `${source}\nreturn {${exposed}}`,
     );
     const result = scope.run(() => create(
         ref, computed, watch, (fn) => mounted.push(fn), (fn) => unmounted.push(fn), (fn) => unmounted.push(fn),
-        () => props, () => ({ replace() {} }), () => ({ query: {} }), api, cursorTarget, deskHeaders,
+        () => props, () => ({ replace() {} }), () => ({ query: {} }), api, cursorTarget, deskFetch,
         createChart, CandlestickSeries, HistogramSeries, CrosshairMode, createSeriesMarkers, mapUdfHistory, mapUdfMarks,
         mergeOlderHistory, mergeMarks,
     ));
@@ -86,13 +86,13 @@ function createSeriesMarkers(series, initial) { const m = { series, markers: ini
 const fetches = [];
 globalThis.fetch = (url, init) => new Promise((resolve, reject) => fetches.push({ url, init, resolve, reject }));
 function nextFetch() { const f = fetches.shift(); if (!f) throw new Error('expected a queued fetch'); return f; }
-function respondJson(entry, body, ok = true) { entry.resolve({ ok, json: async () => body }); }
+function respondJson(entry, body, ok = true) { entry.resolve({ ok, status: ok ? 200 : 503, statusText: ok ? 'OK' : 'Service Unavailable', text: async () => JSON.stringify(body) }); }
 async function settle() { for (let i = 0; i < 6; i++) await Promise.resolve(); await nextTick(); }
 function history(times, opens = times.map(() => 100)) {
     return { s: 'ok', t: times, o: opens, h: opens.map((o) => o + 2), l: opens.map((o) => o - 1), c: opens.map((o) => o + 1), v: times.map(() => 10) };
 }
 
-const page = await instance('resources/js/pages/Chart.vue', { symbol: 'BTC-USD' }, 'symbol,interval,range,products,error,guardian,effects,loading,chartContainer');
+const page = await instance('resources/js/pages/Chart.vue', { symbol: 'BTC-USD' }, 'symbol,interval,range,products,error,guardian,effects,loading,chartContainer,staleSince');
 const aims = []; page.result.guardian.value = { aim: (t) => aims.push(t), leave() {} };
 const mountedPromise = page.mounted[0]();
 assert.equal(charts.length, 1, 'mount() creates exactly one chart');
@@ -127,6 +127,20 @@ respondJson(nextFetch(), { id: [], time: [], label: [] }); // this poll tick has
 await settle();
 assert.deepEqual(markersApis.at(-1).markers.map((m) => m.id), ['seed-1'], 'an empty poll response must never wipe markers already on the chart');
 console.log('PASS: the realtime poll re-fetches only the tail and merges markers instead of replacing them');
+
+assert.equal(page.result.staleSince.value, null, 'a healthy poll leaves the chart unbadged');
+pollCallback();
+respondJson(nextFetch(), {}, false);
+await settle();
+assert.ok(page.result.staleSince.value, 'a failed poll badges the chart stale instead of letting it pass as live');
+assert.equal(page.result.error.value, '', 'a failed poll does not raise a page error');
+pollCallback();
+respondJson(nextFetch(), history([220, 280]));
+await settle();
+respondJson(nextFetch(), { id: [], time: [], label: [] });
+await settle();
+assert.equal(page.result.staleSince.value, null, 'the next good poll clears the stale badge');
+console.log('PASS: failed polls badge the chart stale and recover');
 
 lwChart.timeScale().emit({ from: 10, to: 20 }); // matches the currently rendered BTC-USD:1 series
 assert.deepEqual(page.result.range.value, { from: 10, to: 20 });

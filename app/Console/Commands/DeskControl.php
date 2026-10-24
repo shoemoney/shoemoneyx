@@ -14,7 +14,7 @@ use Illuminate\Console\Command;
 
 class DeskControl extends Command
 {
-    protected $signature = 'desk:ctl {action : status|halt|resume|stop|close|paper-reset|set|get} {arg?} {value?} {--reason=manual}';
+    protected $signature = 'desk:ctl {action : status|halt|resume|stop|close|paper-reset|set|get} {arg?} {value?} {--reason=manual} {--scope=main : paper-reset scope, main or all (all also wipes every arena seat)}';
 
     protected $description = 'Desk controls: status, halt/resume, stop, close <product|all>, paper-reset, set <key> <value>, get <key>';
 
@@ -59,8 +59,14 @@ class DeskControl extends Command
                 }
                 break;
             case 'paper-reset':
-                PaperBook::reset();
-                $this->info('paper book reset; starting cash will be re-deposited on next use');
+                $scope = (string) $this->option('scope');
+                if (! in_array($scope, PaperBook::SCOPES, true)) {
+                    $this->error('--scope must be main or all');
+
+                    return self::FAILURE;
+                }
+                PaperBook::reset($scope);
+                $this->info("paper book reset ({$scope}); starting cash will be re-deposited on next use");
                 break;
             case 'set':
                 $key = (string) $this->argument('arg');
@@ -73,6 +79,11 @@ class DeskControl extends Command
                 }
                 $v = $this->argument('value');
                 $v = is_numeric($v) ? $v + 0 : (in_array($v, ['true', 'false'], true) ? $v === 'true' : $v);
+                if (Settings::stringKeyViolation($key, $v) !== null) {
+                    $this->error(Settings::stringKeyViolation($key, $v));
+
+                    return self::FAILURE;
+                }
                 if ($this->argument('arg') === 'mode' && strtolower(trim((string) $v)) === 'live') {
                     $password = $this->secret('Master password (required to go live)');
                     if (! is_string($password) || $password === '' || ! $settings->verifyMasterPassword($password)) {
@@ -85,7 +96,13 @@ class DeskControl extends Command
                 $this->info('set '.$this->argument('arg').' = '.json_encode($v));
                 break;
             case 'get':
-                $this->line(json_encode($settings->get((string) $this->argument('arg'))));
+                $key = (string) $this->argument('arg');
+                if (! Settings::isCanonicalKey($key) || Settings::isSecret($key) || ! Settings::isStorableKey($key)) {
+                    $this->error('invalid or protected setting key');
+
+                    return self::FAILURE;
+                }
+                $this->line(json_encode($settings->get($key)));
                 break;
             default:
                 $this->error('unknown action');

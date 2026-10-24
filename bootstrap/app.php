@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AuthorizeDeskBroadcast;
+use App\Http\Middleware\ContentSecurityPolicy;
 use App\Http\Middleware\PublicDemo;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -17,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withBroadcasting(__DIR__.'/../routes/channels.php', ['middleware' => ['web', AuthorizeDeskBroadcast::class]])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->prepend(PublicDemo::class);
+        $middleware->web(append: [ContentSecurityPolicy::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

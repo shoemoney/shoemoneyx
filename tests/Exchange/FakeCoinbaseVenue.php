@@ -52,6 +52,9 @@ class FakeCoinbaseVenue extends CoinbaseService
 
     public float $price = 100.0;
 
+    /** @var array<int, array<string, mixed>>|null what /cfm/positions returns; null = a deep position on both sides so exits are never capped */
+    public ?array $positions = null;
+
     public function __construct() {}
 
     public function marketBuy(CoinbaseAccount $account, string $productId, float $quoteUsd, ?string $clientOrderId = null): array
@@ -67,6 +70,20 @@ class FakeCoinbaseVenue extends CoinbaseService
     public function marketContracts(CoinbaseAccount $account, string $productId, string $side, int $contracts, ?string $clientOrderId = null): array
     {
         return $this->place($productId, $side, (float) $contracts, $clientOrderId, $this->price);
+    }
+
+    public bool $positionsFail = false;
+
+    public function futuresPositions(CoinbaseAccount $account): array
+    {
+        if ($this->positionsFail) {
+            throw new ConnectionException('positions read timed out');
+        }
+
+        return $this->positions ?? [
+            ['product_id' => 'BIP-20DEC30-CDE', 'side' => 'LONG', 'number_of_contracts' => '1000'],
+            ['product_id' => 'BIP-20DEC30-CDE', 'side' => 'SHORT', 'number_of_contracts' => '1000'],
+        ];
     }
 
     public function getOrder(CoinbaseAccount $account, string $orderId): array

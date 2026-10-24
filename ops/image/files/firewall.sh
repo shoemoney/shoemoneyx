@@ -5,7 +5,9 @@
 # anyway, so the whole policy has to be reapplied every boot — both halves of it, in one file,
 # so "outbound 443+53 only" can't drift between the host and the containers:
 #
-#   1. ufw: the host-level policy (inbound 22+443, outbound 443+53, the IMDS exception).
+#   1. ufw: the host-level policy (inbound 22+443, outbound 443+53, the IMDS and Time Sync exceptions). Inbound 80
+#      is never part of it: acme.sh opens it only for the length of an HTTP-01 challenge, and the
+#      `ufw --force reset` below on every boot is one of the things that guarantees it is shut.
 #   2. DOCKER-USER: container-originated traffic is forwarded, not routed through ufw's own
 #      OUTPUT chain, and Docker's own rules in FORWARD accept it before ufw ever sees it — so
 #      without this, "outbound 443+53 only" silently stops applying the moment the app runs in
@@ -27,6 +29,9 @@ ufw allow out 53
 # SSH host key material and boots with sshd unreachable, and first-boot.sh can't read the
 # instance's public IP / DOMAIN tag. Scoped to this one address only.
 ufw allow out to 169.254.169.254 port 80 proto tcp
+# Amazon Time Sync Service: link-local NTP over UDP 123. chrony needs it: a drifting clock breaks
+# Coinbase JWTs (120 s expiry) and ACME validation. Host-only; containers use the host's clock.
+ufw allow out to 169.254.169.123 port 123 proto udp
 ufw logging off
 ufw --force enable
 

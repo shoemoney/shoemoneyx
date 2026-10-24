@@ -52,6 +52,7 @@ class OnboardingController extends Controller
     private function masterPassword(Request $request, OnboardingWizard $wizard): JsonResponse
     {
         $settings = app(Settings::class);
+        $expectedCredential = $settings->credentialFingerprintSource();
 
         if (DeskAuthThrottle::tooManyFailures($request)) {
             DeskAuthThrottle::lockout($request);
@@ -82,8 +83,11 @@ class OnboardingController extends Controller
             throw ValidationException::withMessages(['password' => 'Choose a password different from the first-login key.']);
         }
 
-        $settings->setMasterPassword($data['password']);
-        DeskLogin::grant($request->session());
+        $credential = $settings->setMasterPasswordIfUnchanged($data['password'], $expectedCredential);
+        if ($credential === null) {
+            return response()->json(['ok' => false, 'error' => 'credential_changed'], 409);
+        }
+        DeskLogin::grant($request->session(), $credential);
         $wizard->markDone('master-password', ['password_set' => true]);
 
         return response()->json(['ok' => true, 'step' => 'master-password', 'status' => 'done', 'master_password_set' => true, 'csrf_token' => $request->session()->token()]);

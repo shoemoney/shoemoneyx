@@ -164,4 +164,29 @@ class FormulaTest extends TestCase
             }
         }
     }
+
+    #[Test]
+    public function length_limit_boundary_is_512_characters(): void
+    {
+        $atLimit = str_repeat('1+', 255).'1';          // 511 chars
+        $atLimit .= '1';                                // 512 chars
+        $this->assertSame(512, strlen($atLimit));
+        $this->assertIsArray(Formula::parse($atLimit));
+
+        $this->expectException(FormulaParseError::class);
+        $this->expectExceptionMessage('too long');
+        Formula::parse($atLimit.'1');
+    }
+
+    #[Test]
+    public function depth_limit_boundary_is_32_levels(): void
+    {
+        $nested = fn (int $parens) => str_repeat('(', $parens).'1'.str_repeat(')', $parens);
+
+        $this->assertIsArray(Formula::parse($nested(31)));   // depth 32
+
+        $this->expectException(FormulaParseError::class);
+        $this->expectExceptionMessage('nested too deeply');
+        Formula::parse($nested(32));                          // depth 33
+    }
 }

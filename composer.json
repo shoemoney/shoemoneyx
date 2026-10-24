@@ -13,7 +13,8 @@
         "laravel/reverb": "^1.11",
         "laravel/tinker": "^3.0",
         "predis/predis": "^3.6",
-        "pusher/pusher-php-server": "^7.3"
+        "pusher/pusher-php-server": "^7.3",
+        "shoemoney/langchain-php": "dev-main#8a588b040d943fe8d7d42fef8fad05d7a0624340"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
@@ -88,5 +89,11 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "repositories": [
+        {
+            "type": "git",
+            "url": "https://github.com/shoemoney/langchain-php.git"
+        }
+    ]
 }

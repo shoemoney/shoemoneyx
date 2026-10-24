@@ -35,6 +35,7 @@ class CoinbasePerpsExecutorSettleTest extends TestCase
     public function test_sell_falls_back_to_the_decision_price_when_the_venue_gives_no_usable_average(): void
     {
         $coinbase = \Mockery::mock(CoinbaseService::class);
+        $coinbase->shouldReceive('futuresPositions')->andReturn([['product_id' => 'BIP-20DEC30-CDE', 'side' => 'LONG', 'number_of_contracts' => '5']]);
         $coinbase->shouldReceive('marketContracts')->once()->andReturn([
             'success' => true,
             'success_response' => ['order_id' => 'order-1'],
@@ -63,6 +64,7 @@ class CoinbasePerpsExecutorSettleTest extends TestCase
     public function test_sell_uses_the_reported_average_when_the_venue_gives_one(): void
     {
         $coinbase = \Mockery::mock(CoinbaseService::class);
+        $coinbase->shouldReceive('futuresPositions')->andReturn([['product_id' => 'BIP-20DEC30-CDE', 'side' => 'LONG', 'number_of_contracts' => '5']]);
         $coinbase->shouldReceive('marketContracts')->once()->andReturn([
             'success' => true,
             'success_response' => ['order_id' => 'order-2'],

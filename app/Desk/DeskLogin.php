@@ -14,10 +14,12 @@ use Illuminate\Contracts\Session\Session;
  */
 final class DeskLogin
 {
-    public static function grant(Session $session): void
+    public static function grant(Session $session, ?string $credential = null): void
     {
         $session->regenerate();
-        $session->put('desk_authed', self::fingerprint());
+        // A login/password update may be displaced just before this call. Bind the grant to the
+        // credential that request actually authorized, never a newer credential read afterward.
+        $session->put('desk_authed', self::fingerprint($credential));
     }
 
     public static function check(Session $session): bool
@@ -27,9 +29,9 @@ final class DeskLogin
         return $fingerprint !== '' && hash_equals($fingerprint, (string) $session->get('desk_authed', ''));
     }
 
-    public static function fingerprint(): string
+    public static function fingerprint(?string $source = null): string
     {
-        $source = app(Settings::class)->credentialFingerprintSource();
+        $source ??= app(Settings::class)->credentialFingerprintSource();
 
         return $source === '' ? '' : hash_hmac('sha256', $source, (string) config('app.key'));
     }

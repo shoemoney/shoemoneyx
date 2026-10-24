@@ -14,6 +14,14 @@ env:
   NGINX_IMAGE: ghcr.io/${{ github.repository_owner }}/shoemoneyx-nginx
 
 jobs:
+  # Tag and manual builds only: the full suite must pass before anything is pushed to ghcr.
+  # (PRs already run test.yml directly.)
+  tests:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
   # Fails fast on a broken Dockerfile before anything gets tagged: single-arch, build only, no push.
   # Runs for every PR including forks — Font Awesome is the free set, so no secret gates this.
   verify:
@@ -37,6 +45,7 @@ jobs:
   # and composer segfaulted (exit 139) under emulation, so cross-building is out. Each build pushes
   # by digest only; `publish` below stitches the per-arch digests into one tagged manifest list.
   build:
+    needs: tests
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false

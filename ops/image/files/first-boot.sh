@@ -2,8 +2,8 @@
 # /opt/shoemoneyx-first-boot.sh — runs once via shoemoneyx-first-boot.service.
 # Secret generation and the DB migration are no longer this script's job: they belong to
 # docker/up.sh (identical to what a self-hoster runs by hand) and to the compose file's own
-# one-shot `migrate` service. This script pins the image version, hands off to up.sh, swaps in a
-# real cert when a DOMAIN tag is present, and writes the credentials file the same way the desk
+# one-shot `migrate` service. This script pins the image version, hands off to up.sh, gets a trusted
+# cert via acme.sh (before the stack starts), and writes the credentials file the same way the desk
 # always has. It deliberately never recreates web/queue/schedule/reverb/desk after up.sh brings
 # them up: nginx resolves the `web`/`reverb` hostnames once at its own startup and never again
 # (no `resolver` directive), so recreating one of those containers behind an nginx that's still
@@ -51,6 +51,18 @@ INSTANCE_ID="$(imds instance-id)"
 # is never put in a URL or rendered anywhere but the buyer's own AWS console.
 AWS_REGION="$(imds placement/region)"
 [[ "$AWS_REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]+$ ]] || AWS_REGION=""
+# Browser-trusted cert BEFORE the stack (and so nginx) comes up: acme.sh opens inbound 80 for the
+# HTTP-01 challenge, closes it again no matter how it exits, and seeds the compose tls-data volume
+# so nginx's first start already serves it. Any failure (no public IP, rate limit, network, the
+# security group not allowing 80) leaves nginx generating its per-install self-signed cert.
+log "requesting a browser-trusted certificate (Let's Encrypt, IP address or DOMAIN tag)"
+# renew, not issue: a retried first boot (up.sh failing) must not burn a second issuance against
+# the rate limit; renew is a no-op once a good cert is installed.
+if /opt/shoemoneyx-acme.sh renew; then
+  log "trusted certificate installed"
+else
+  log "certificate issuance failed — nginx will serve its per-install self-signed cert; shoemoneyx-acme.timer keeps retrying (see docs/HOSTED_IMAGE.md troubleshooting)"
+fi
 log "handing off to docker/up.sh — generates .env, runs the migrate gate, brings up the stack, and blocks until /api/status answers"
 SHOEMONEYX_VERSION="$VERSION" \
 MASTER_PASSWORD="${INSTANCE_ID:-}" \
@@ -68,27 +80,6 @@ if grep -q '^SHOEMONEYX_VERSION=' .env; then
   sed -i "s/^SHOEMONEYX_VERSION=.*/SHOEMONEYX_VERSION=$VERSION/" .env
 else
   echo "SHOEMONEYX_VERSION=$VERSION" >> .env
-fi
-
-if [[ -n "$DOMAIN" ]]; then
-  log "DOMAIN tag present ($DOMAIN): requesting a real cert via certbot (standalone, port 80 briefly)"
-  ufw allow in 80/tcp
-  if certbot certonly --standalone --non-interactive --agree-tos -m "admin@$DOMAIN" -d "$DOMAIN"; then
-    cat > docker-compose.override.yml <<YAML
-services:
-  nginx:
-    volumes:
-      - /etc/letsencrypt/live/$DOMAIN/fullchain.pem:/etc/ssl/shoemoneyx/selfsigned.crt:ro
-      - /etc/letsencrypt/live/$DOMAIN/privkey.pem:/etc/ssl/shoemoneyx/selfsigned.key:ro
-YAML
-    docker compose up -d nginx
-    log "certbot succeeded for $DOMAIN, nginx now serving the real cert"
-  else
-    log "certbot failed for $DOMAIN (port 80 must be reachable in the SG for HTTP-01), staying on the self-signed cert"
-  fi
-  ufw delete allow in 80/tcp
-else
-  log "no DOMAIN tag, staying on the per-install self-signed cert nginx generates on first start"
 fi
 
 log "writing credentials to $CREDS_FILE"

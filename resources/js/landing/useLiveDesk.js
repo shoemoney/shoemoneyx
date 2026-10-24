@@ -1,5 +1,5 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
-import { deskHeaders } from "../api.js";
+import { deskFetch } from "../api.js";
 import { demoSnapshot, demoEvent } from "./demo";
 import { mergeEvents } from "./format";
 import { createEventLedger, roundEvent, snapshotEvents } from "./liveEvents";
@@ -126,16 +126,17 @@ export function useLiveDesk(
         requestController = new AbortController();
         const timeout = setTimeout(() => requestController?.abort(), 8000);
         try {
-            const response = await fetch("/api/landing", {
-                headers: deskHeaders({ Accept: "application/json" }),
-                signal: requestController.signal,
-            });
-            if (!response.ok) {
+            let data;
+            try {
+                data = await deskFetch("/api/landing", {
+                    signal: requestController.signal,
+                });
+            } catch (e) {
+                if (e.status === undefined || e.status === 419) throw e;
                 throw new Error(
-                    `Snapshot unavailable (${response.status}). Retrying automatically.`,
+                    `Snapshot unavailable (${e.status}). Retrying automatically.`,
                 );
             }
-            const data = await response.json();
             if (!Array.isArray(data.pairs) || !data.metrics)
                 throw new Error("The desk returned an incomplete snapshot.");
             applySnapshot(data);

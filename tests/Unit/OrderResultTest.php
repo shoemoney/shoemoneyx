@@ -137,4 +137,14 @@ class OrderResultTest extends TestCase
         // slippageBps() reports that as positive.
         $this->assertEqualsWithDelta(300.0, $r->slippageBps('SELL'), 1e-9);
     }
+
+    public function test_slippage_bps_is_clamped_to_the_decimal_10_2_column(): void
+    {
+        // A placeholder decision price against a real fill overflows decimal(10,2); strict MariaDB would
+        // abort the fills insert for an order that already executed.
+        $r = new OrderResult('filled', 2400.0, 2400.0, 0.03, 1.0, 80000.0, 2.4);
+
+        $this->assertSame(99_999_999.99, $r->slippageBps('BUY'));
+        $this->assertSame(-99_999_999.99, $r->slippageBps('SELL'));
+    }
 }

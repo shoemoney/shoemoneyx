@@ -34,7 +34,7 @@ final class Perps
         return (int) floor($usd / ($spec['contract_size'] * $price));
     }
 
-    /** Whole contracts for a base-unit quantity (rounded, never below one when qty > 0). */
+    /** Whole contracts for a base-unit quantity: floored like Lot::forQty (1e-9 absorbs float noise), 0 when under one contract. */
     public static function contractsForQty(string $spotProductId, float $qty): int
     {
         $spec = self::spec($spotProductId);
@@ -42,7 +42,7 @@ final class Perps
             return 0;
         }
 
-        return max(1, (int) round($qty / $spec['contract_size']));
+        return (int) floor($qty / $spec['contract_size'] + 1e-9);
     }
 
     /** Base units for a number of contracts. */

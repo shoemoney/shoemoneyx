@@ -21,6 +21,7 @@ use App\Support\ParamNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class DeskController extends Controller
@@ -34,9 +35,17 @@ class DeskController extends Controller
             'resume' => tap(response()->json(['ok' => true]), fn () => $chief->resume()),
             'start' => tap(response()->json(['ok' => true]), fn () => $chief->setRunning(true)),
             'stop' => tap(response()->json(['ok' => true]), fn () => $chief->setRunning(false)),
-            'paper-reset' => tap(response()->json(['ok' => true]), fn () => PaperBook::reset()),
+            'paper-reset' => $this->paperReset($request),
             default => abort(404, 'unknown action'),
         };
+    }
+
+    private function paperReset(Request $request): JsonResponse
+    {
+        $scope = $request->validate(['scope' => ['sometimes', 'string', Rule::in(PaperBook::SCOPES)]])['scope'] ?? 'main';
+        PaperBook::reset($scope);
+
+        return response()->json(['ok' => true, 'scope' => $scope]);
     }
 
     private function cycle(Desk $desk): JsonResponse
@@ -70,6 +79,7 @@ class DeskController extends Controller
         abort_if(Settings::isUnderScalarKey($data['key']), 422, "{$data['key']}: nothing may be nested under a single-value setting");
         abort_if(Settings::isScalarKey($data['key']) && is_array($data['value']), 422, "{$data['key']} must be a single value");
         $v = ParamNormalizer::normalize($data['key'], $data['value']);
+        abort_if(($why = Settings::stringKeyViolation($data['key'], $v)) !== null, 422, (string) $why);
         $this->assertSaneRiskValue($data['key'], $v);
         if ($data['key'] === 'mode' && ! in_array($v, ['paper', 'live'], true)) {
             abort(422, 'mode must be paper or live');

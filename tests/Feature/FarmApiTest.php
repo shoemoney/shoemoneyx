@@ -8,6 +8,7 @@ use App\Models\Backtest;
 use App\Models\OptimizerRound;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use Mockery;
@@ -48,13 +49,13 @@ class FarmApiTest extends TestCase
         return $rows;
     }
 
-    private function mockRedis(): void
+    private function mockRedis(int $snapshotCount = 1): void
     {
         $retryAfter = (int) config('queue.connections.redis.retry_after', 4000);
         $now = now()->getTimestamp();
 
         $mock = Mockery::mock();
-        $mock->shouldReceive('command')->with('client', ['list'])->once()->andReturn($this->clientListRows());
+        $mock->shouldReceive('command')->with('client', ['list'])->times($snapshotCount)->andReturn($this->clientListRows());
         $mock->shouldReceive('llen')->andReturnUsing(fn ($key) => $key === 'queues:backtests' ? 0 : 5);
         $mock->shouldReceive('zcard')->andReturnUsing(fn ($key) => match ($key) {
             'queues:backtests:reserved' => 68,
@@ -88,6 +89,7 @@ class FarmApiTest extends TestCase
             $hosts["192.168.1.{$i}"] = ['label' => "pi-{$i}", 'role' => 'pi'];
         }
         config(['farm.hosts' => $hosts, 'farm.expected_workers' => ['192.168.1.5' => 24, '192.168.1.4' => 16, '192.168.1.3' => 24, 'default' => 4]]);
+        $this->freezeTime();
         $this->mockRedis();
 
         Backtest::create(['strategy' => 'mr', 'status' => 'done', 'products' => ['BTC-USD'], 'from' => now()->subDay(), 'to' => now(), 'starting_cash' => 10000, 'stats' => ['under_one_contract' => 3], 'under_one_contract' => 3, 'updated_at' => now(), 'completed_at' => now()]);
@@ -219,6 +221,7 @@ class FarmApiTest extends TestCase
         Backtest::create($this->backtestAttrs(['under_one_contract' => 100, 'completed_at' => now()->subMinutes(10)]));
 
         $expected = Backtest::where('status', 'done')->where('completed_at', '>=', now()->subMinutes(5))->sum('under_one_contract');
+        $expected = (int) $expected;   // MariaDB SUM() of an int column is DECIMAL, returned as '12'; SQLite returns 12
         $this->assertSame(12, $expected, 'sanity: the scalar column itself sums to 12 for the in-window rows');
 
         $data = $this->getJson('/api/farm')->assertOk()->json();
@@ -267,22 +270,51 @@ class FarmApiTest extends TestCase
 
     public function test_snapshot_db_query_count_is_bounded_regardless_of_optimizer_group_count(): void
     {
-        $this->mockRedis();
+        $this->mockRedis(2);
 
         $base = ['strategy' => 'mr', 'product_id' => 'BTC-USD', 'train_from' => now()->subDays(30), 'train_to' => now()->subDays(7), 'test_from' => now()->subDays(7), 'test_to' => now(), 'candidates' => 97, 'champion_params' => []];
-        for ($i = 0; $i < 12; $i++) {
+        $createGroup = function (int $i) use ($base): void {
             OptimizerRound::create($base + [
                 'side' => $i % 2 === 0 ? 'long' : 'short', 'cash' => 10000, 'tag' => "tag{$i}",
                 'promoted' => false, 'created_at' => now()->subMinutes($i),
             ]);
-        }
+        };
+        $createGroup(0);
         Backtest::create($this->backtestAttrs(['under_one_contract' => 1, 'completed_at' => now()]));
 
-        DB::enableQueryLog();
-        $this->getJson('/api/farm')->assertOk();
-        $queries = DB::getQueryLog();
-        DB::disableQueryLog();
+        $measure = function (int $groups): array {
+            Cache::forget('farm:snapshot');
+            Cache::forget('desk:settings');
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            try {
+                $this->getJson('/api/farm')->assertOk()->assertJsonCount($groups, 'optimizers');
 
-        $this->assertLessThanOrEqual(6, count($queries), 'the snapshot must stay O(1) DB queries regardless of how many optimizer groups exist: '.json_encode(array_column($queries, 'query')));
+                return DB::getQueryLog();
+            } finally {
+                DB::disableQueryLog();
+            }
+        };
+        $small = $measure(1);
+        for ($i = 1; $i < 12; $i++) {
+            $createGroup($i);
+        }
+        $large = $measure(12);
+
+        // Credential checks deliberately bypass the shared settings cache so a password change
+        // immediately revokes displaced sessions/tokens. Budget those fixed primary-key reads
+        // separately from the snapshot's original business-query ceiling.
+        $credentialQuery = fn (array $query): bool => $query['bindings'] === ['master_password']
+            && preg_match('/\bselect\s+\*\s+from\s+[`"]?settings[`"]?\s+where\b/i', $query['query']) === 1;
+        foreach ([$small, $large] as $queries) {
+            $auth = array_filter($queries, $credentialQuery);
+            $snapshot = array_filter($queries, fn (array $query): bool => ! $credentialQuery($query));
+            $this->assertNotEmpty($auth, 'the request must actually authenticate against current credentials');
+            $this->assertCount(1, array_filter($snapshot, fn (array $query): bool => str_contains($query['query'], 'optimizer_rounds')), 'each uncached snapshot must actually query optimizer groups');
+            $this->assertLessThanOrEqual(3, count($auth), 'credential reads must stay bounded independently of optimizer groups');
+            $this->assertLessThanOrEqual(6, count($snapshot), 'the snapshot must retain its business-query budget: '.json_encode(array_column($snapshot, 'query')));
+        }
+
+        $this->assertLessThanOrEqual(count($small), count($large), 'increasing optimizer groups from one to twelve must not add request queries');
     }
 }

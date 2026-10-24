@@ -11,6 +11,7 @@ use App\Desk\Data\RiskDecision;
 use App\Desk\Data\SizeDecision;
 use App\Desk\Data\Verdict;
 use App\Desk\DeskContext;
+use App\Desk\Execution\Quantize;
 use App\Models\Candle;
 use App\Models\Position;
 
@@ -194,7 +195,7 @@ class MeanReversionStrategy extends BaseDeskStrategy
         $want = min($equity * $pct * $lev, $equity * $maxPos * $lev);
         $why = sprintf('%.0f%% of equity x %.1fx leverage, capped at %.0f%% of equity', $pct * 100, $lev, $maxPos * 100);
 
-        $dollars = floor(min($want, $free) * 100) / 100;
+        $dollars = Quantize::floorTo(min($want, $free), 2);
         if ($dollars < $minTicket) {
             return new SizeDecision($v, 0, 0, 0, true, false, $why.sprintf('; $%.2f under minimum ticket (free $%.2f)', max($dollars, 0), $free));
         }
@@ -371,6 +372,7 @@ class MeanReversionStrategy extends BaseDeskStrategy
 
         $last = Position::query()
             ->where('mode', $ctx->mode)
+            ->seat($ctx->arenaSeatId)
             ->where('strategy', $this->key())
             ->where('product_id', $pid)
             ->where('status', 'closed')

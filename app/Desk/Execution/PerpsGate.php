@@ -33,11 +33,13 @@ final readonly class PerpsGate
         $rateWindow = $s->window === MarginWindow::Intraday ? MarginWindow::Overnight : $s->window;
         $rate = $rateWindow->marginRate();
         $needed = $notional * $rate;
-        $cap = $s->futuresBuyingPower * $cfg['max_margin_use_pct'] / 100;
+        // futuresBuyingPower is notional headroom (free margin / rate), not dollars of margin: convert it
+        // back before applying the use cap, or the cushion is never enforced.
+        $cap = $s->futuresBuyingPower * $rate * $cfg['max_margin_use_pct'] / 100;
         if ($needed > $cap) {
             return new self(false, sprintf(
-                'margin: $%.0f notional needs ~$%.0f at %s margin (%.0f%%), buying power $%.2f (cap %.0f%%)',
-                $notional, $needed, $rateWindow->value, $rate * 100, $s->futuresBuyingPower, $cfg['max_margin_use_pct']
+                'margin: $%.0f notional needs ~$%.0f at %s margin (%.0f%%), only $%.2f of margin usable (%.0f%% of free margin)',
+                $notional, $needed, $rateWindow->value, $rate * 100, $cap, $cfg['max_margin_use_pct']
             ));
         }
 

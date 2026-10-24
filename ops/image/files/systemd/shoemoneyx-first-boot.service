@@ -10,6 +10,8 @@ StartLimitBurst=5
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/shoemoneyx-first-boot.sh
+# Belt and braces: whatever way first boot dies (kill, timeout), inbound 80 is closed again.
+ExecStopPost=/opt/shoemoneyx-acme.sh close-port
 # Idempotent: docker/up.sh no-ops on an existing .env, and the ConditionPathExists above skips
 # this unit entirely once .env exists, so a retry on failure (DB/registry not quite up yet) is
 # safe and a reboot never repeats secret generation. The containers themselves come back on

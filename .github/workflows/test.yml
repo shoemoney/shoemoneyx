@@ -2,7 +2,10 @@ name: test
 
 on:
   push:
+    branches: ['**']
   pull_request:
+  # image.yml calls this so a tag build cannot publish unless the suite is green.
+  workflow_call:
 
 permissions:
   contents: read
@@ -16,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       redis:
-        image: redis:8-alpine
+        image: redis:8-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
         ports:
           - 6379:6379
         options: >-
@@ -28,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: '8.5'
           extensions: bcmath, gmp
           coverage: none
       - name: Copy .env
@@ -38,6 +41,57 @@ jobs:
       - name: Generate key
         run: php artisan key:generate
       - run: php artisan test
+
+  # Same suite on the production engine. The default job above is sqlite :memory:, which hides
+  # column widths, collation, timezone and engine behaviour. Fresh MariaDB 13 (utf8mb4_unicode_ci,
+  # strict), migrations run for real. The complete unfiltered suite is a hard gate.
+  php-mariadb:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:13@sha256:0e4bb0f339feba125d1154fbacd36c16ec8518f52e44e1f82ecec7d6771caf39
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: shoemoneyx_test
+          MARIADB_AUTO_UPGRADE: "1"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DB_CONNECTION: mariadb
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: shoemoneyx_test
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      DB_URL: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.5'
+          extensions: bcmath, gmp, pdo_mysql
+          coverage: none
+      - run: cp .env.example .env
+      - run: composer install --no-interaction --prefer-dist
+      - run: php artisan key:generate
+      - name: Migrate fresh (every migration on MariaDB)
+        run: php artisan migrate:fresh --force
+      - name: Test (complete MariaDB suite)
+        run: php artisan test
 
   # node --test over the resources/js module graph — resources/js and
   # tests/Unit/Frontend import vue and @vue/compiler-sfc, so node_modules must
@@ -72,3 +126,15 @@ jobs:
           node-version: 24
       - run: npm ci
       - run: npm run test:feeder
+
+  # Exercise the AMI acceptance script without creating cloud resources or making network calls.
+  image-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check image script syntax
+        run: bash -n ops/image/test-boot.sh ops/image/files/acme.sh
+      - name: Test certificate lifecycle with local stubs
+        run: bash ops/image/test-acme.sh
+      - name: Test boot acceptance with local stubs
+        run: python3 -B ops/image/test-test-boot.py

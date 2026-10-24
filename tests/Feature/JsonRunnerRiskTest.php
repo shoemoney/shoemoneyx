@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Desk\Data\Bank;
+use App\Desk\Data\Candidate;
 use App\Desk\Data\ProductStats;
 use App\Desk\Data\Verdict;
 use App\Desk\DeskContext;
@@ -72,7 +73,7 @@ class JsonRunnerRiskTest extends TestCase
     private function verdictFor(string $pid, float $price): Verdict
     {
         $stats = $this->stats($pid, $price);
-        $candidate = new \App\Desk\Data\Candidate(stats: $stats, score: 1.0, rankReason: 'test', edgeProbability: 0.55, payoffRatio: 1.5);
+        $candidate = new Candidate(stats: $stats, score: 1.0, rankReason: 'test', edgeProbability: 0.55, payoffRatio: 1.5);
 
         return Verdict::pass($candidate, ['test'], [], 'ok');
     }
@@ -257,5 +258,20 @@ class JsonRunnerRiskTest extends TestCase
         $d = (new JsonPluginStrategy)->size($v, $bank, $ctx);
 
         $this->assertTrue($d->zero());
+    }
+
+    public function test_a_plugin_leverage_cap_above_the_desk_ceiling_cannot_loosen_it(): void
+    {
+        $this->plugin('cap-lev-4', ['leverage_cap' => 5.0]);   // desk size.max_leverage defaults to 3.0
+        $ctx = $this->ctx('cap-lev-4', []);
+
+        $v = $this->verdictFor('CCC-USD', 10.0);
+        // 3x of $1000 equity = $3000 room under the desk ceiling; $2970 is spoken for, leaving $30.
+        // A plugin cap of 5x must not win: its own room would be $2030, so the $60 Kelly ticket would pass.
+        $bank = new Bank(1000, 0, 0.2, 0, 1, exposure: 2970);
+        $d = (new JsonPluginStrategy)->size($v, $bank, $ctx);
+
+        $this->assertEqualsWithDelta(30.0, $d->dollars, 0.01);
+        $this->assertTrue($d->ceilingApplied);
     }
 }
