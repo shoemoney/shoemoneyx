@@ -1,10 +1,40 @@
-# Per-customer desk image (AWS AMI)
+# Per-customer desk image: build, boot and acceptance
 
-A reproducible, firewalled shoemoneyx desk that boots to paper mode with zero manual setup.
-Built with [Packer](https://developer.hashicorp.com/packer) from `ops/image/desk.pkr.hcl`. Ubuntu
-24.04 running Docker, pinned to a released `ghcr.io/shoemoney/shoemoneyx(-nginx)` image version —
-the app is no longer built on the box, it runs the same published images every self-hoster runs;
-everything secret is still generated on first boot.
+This guide describes the implemented Packer, boot, certificate and release tooling
+for a per-customer paper desk. The pending 0.3.0 source contains additional fixes;
+merging that source does not itself publish containers, register an AMI or establish
+browser-trusted TLS on a newly built candidate.
+
+| Artifact or evidence | Meaning |
+| --- | --- |
+| Source on `main` | Reviewed implementation; install from source explicitly when published images do not yet contain it |
+| Public GitHub release/tag | A versioned source release; the last documented GitHub release is v0.2.4 |
+| App and nginx registry tags/digests | The exact container artifacts a desk or AMI runs; both must exist for a version |
+| `ops/image/releases.json` | Historical release records, not proof that a newer source commit was booted |
+| Candidate AMI acceptance | Evidence for the candidate's recorded source and container digests, including live certificate and password checks |
+| Marketplace delivery | A separate submission/state transition; source promotion does not complete it |
+
+The [validation snapshot](../CHANGELOG.md#validation-snapshot) records the local and
+hosted checks already performed, and their limits. For source builds or an existing
+installation upgrade, start with [UPGRADING.md](UPGRADING.md).
+
+The build uses [Packer](https://developer.hashicorp.com/packer) and
+[`ops/image/desk.pkr.hcl`](../ops/image/desk.pkr.hcl). It provisions Ubuntu 24.04,
+Docker and a released version of both `ghcr.io/shoemoney/shoemoneyx` and
+`ghcr.io/shoemoney/shoemoneyx-nginx`. Application source is not compiled on the
+customer's first boot. `docker/up.sh` generates a random `APP_KEY` and database
+password there; AMI first boot supplies the EC2 instance ID as the one-time bootstrap
+`MASTER_PASSWORD`.
+
+```mermaid
+%%{init: {'themeVariables': {'fontSize': '20px'}}}%%
+flowchart TB
+    Source[Reviewed source] --> Images[Published app and nginx]
+    Images --> Candidate[Build candidate AMI]
+    Candidate --> Boot[Scripted live boot checks]
+    Boot --> Browser[Browser and lifecycle acceptance]
+    Browser --> Delivery[Release and delivery decision]
+```
 
 ## What's in the image
 
@@ -13,7 +43,7 @@ everything secret is still generated on first boot.
   `v<version>` — just the compose file, `docker/up.sh`, and `.env.example`; the app itself runs
   from the pinned `ghcr.io/shoemoney/shoemoneyx:<version>` / `shoemoneyx-nginx:<version>` images,
   pulled at build time (`docker compose pull`) so first boot needs no registry round trip
-- systemd units: `shoemoneyx-first-boot` (runs once — gets the TLS certificate, pins the version,
+- systemd units: `shoemoneyx-first-boot` (runs once — attempts TLS activation, pins the version,
   hands off to `docker/up.sh`, writes credentials), `shoemoneyx-firewall` (runs at every boot,
   after `docker.service`), and `shoemoneyx-acme.service` + `.timer` (certificate renewal, below)
 - `certbot` >= 5.4 in `/opt/certbot` (from PyPI: Ubuntu 24.04's apt package predates IP-address
@@ -24,9 +54,20 @@ everything secret is still generated on first boot.
   `ops/image/files/firewall.sh`, applied once at the end of provisioning and reapplied on every
   boot, because Docker rewrites iptables on every `dockerd` start and none of it survives a reboot
 
-No secrets are baked in. `APP_KEY`, the 24-char `MASTER_PASSWORD`, and the local MariaDB password
-are all generated on the box the first time it boots — by `docker/up.sh`, the same script a
-self-hoster runs by hand, not by anything AMI-specific.
+No secrets are baked in. On first boot,
+[`docker/up.sh`](../docker/up.sh) generates a random `APP_KEY` and local MariaDB
+password. The AMI's
+[`first-boot.sh`](../ops/image/files/first-boot.sh) reads the EC2 instance ID from
+IMDS and supplies it to that helper as `MASTER_PASSWORD`, the one-time first-login
+key. The helper generates a random 24-character `MASTER_PASSWORD` only when its
+override is unset or empty; that fallback is not the normal AMI bootstrap key.
+
+**The instance ID is an identifier, not a strong bootstrap secret.** Anyone who learns it
+and can reach the claim endpoint may set the first owner password. Restrict claim access to
+the intended owner (for example, limit inbound HTTPS to the owner's trusted source address)
+until that owner has chosen a password. The setup-only restriction and single-use lifecycle
+do not make the instance ID secret. The normal AMI flow does not ship a separate random
+bootstrap secret delivered through an authenticated channel.
 
 ## Build
 
@@ -34,13 +75,21 @@ self-hoster runs by hand, not by anything AMI-specific.
 the packer build, the boot test, and the release bookkeeping that used to be three separate manual
 steps.
 
+Inspect the sequence without creating resources:
+
 ```bash
-bash ops/image/release.sh 0.2.0
+bash ops/image/release.sh --dry-run 0.3.0
 ```
 
-`bash ops/image/release.sh --dry-run 0.2.0` prints every command the script would run and executes
-nothing, so it works with no network and no AWS credentials. `bash ops/image/release.sh --status
-0.2.0` prints that version's record from `ops/image/releases.json` and, if a Marketplace change
+`0.3.0` in this dry-run is a proposed version, not a claim that its tag or images
+already exist. An actual release requires separate authorization, a real public
+`v<version>` tag and both matching published container images. After verifying those
+prerequisites, set `RELEASE_VERSION` to the intended published version and invoke
+`bash ops/image/release.sh "$RELEASE_VERSION"` as an explicitly approved release operation.
+
+`--dry-run` prints the planned sequence without executing it, so it works without
+network access or AWS credentials. `bash ops/image/release.sh --status "$RELEASE_VERSION"`
+prints that version's record from `ops/image/releases.json` and, if a Marketplace change
 set has been submitted for it, the change set's current status. Set `RELEASE_NO_PUSH=1` to skip
 the `git push origin main` the script runs after committing the release record.
 
@@ -55,13 +104,14 @@ file / `up.sh` clone) and a published `<version>` tag on both ghcr.io images.
 1. Preflight checks everything at once and reports every failure rather than stopping at the
    first. `version` has to look like `X.Y.Z`, the `v<version>` tag has to exist on origin, the
    working tree has to be clean, and both `ghcr.io/shoemoney/shoemoneyx:<version>` and
-   `ghcr.io/shoemoney/shoemoneyx-nginx:<version>` have to be pullable anonymously. That last check
-   is what proves the `.github/workflows/image.yml` run triggered by `git push --tags` finished
-   publishing both multi-arch manifests.
+   `ghcr.io/shoemoney/shoemoneyx-nginx:<version>` have to be pullable anonymously. That
+   registry check establishes anonymous manifest availability. Separately inspect the
+   intended platform manifests, digests and image-workflow result; HTTP availability
+   alone does not establish a complete multi-architecture release.
 2. Build runs, under the hood, the same command as before:
 
    ```bash
-   packer build -color=false -var version=0.2.0 ops/image/desk.pkr.hcl
+   packer build -color=false -var version="$RELEASE_VERSION" ops/image/desk.pkr.hcl
    ```
 
    This step is convergent. It first asks EC2 for an AMI owned by this account tagged
@@ -70,7 +120,7 @@ file / `up.sh` clone) and a published `<version>` tag on both ghcr.io images.
    default VPC on a temporary keypair/security group that Packer manages and tears down itself, and
    takes a few minutes: OS packages, Docker Engine, cloning the release tag, pulling the two pinned
    images, then the firewall script.
-3. Boot test runs `ops/image/test-boot.sh` against the new AMI. See `## Boot test` below for what
+3. Boot test runs `ops/image/test-boot.sh` against the new AMI. See [Boot test](#boot-test) below for what
    it checks.
 4. Record upserts the release into `ops/image/releases.json`, commits it, pushes to origin unless
    `RELEASE_NO_PUSH=1` is set, and tags the AMI `BootTested=true`.
@@ -83,14 +133,14 @@ file / `up.sh` clone) and a published `<version>` tag on both ghcr.io images.
 
 `ops/image/releases.json` replaces the old single-line AMI pointer file. It's a committed JSON
 array with one object per released version, upserted in place as a release advances through
-`built -> tested -> recorded -> published`. Each record looks like:
+`built`, `tested`, `recorded` and `published`. An illustrative record shape is:
 
 ```json
 {
-  "version": "0.1.2",
-  "commit": "<full 40-char git sha of the v0.1.2 tag's commit>",
+  "version": "0.2.4",
+  "commit": "<full 40-char git sha of the v0.2.4 tag's commit>",
   "ami_id": "ami-...",
-  "ami_name": "shoemoneyx-desk-0.1.2-<packer-timestamp>",
+  "ami_name": "shoemoneyx-desk-0.2.4-<packer-timestamp>",
   "built_at": "<ISO8601 UTC>",
   "boot_test": { "passed": true, "at": "<ISO8601 UTC>" },
   "marketplace": { "change_set_id": "...", "status": "...", "at": "<ISO8601 UTC>" }
@@ -98,12 +148,15 @@ array with one object per released version, upserted in place as a release advan
 ```
 
 `marketplace` is `null` until a change set has been submitted for that version.
+The script's computed `published` label means a Marketplace `change_set_id` was
+recorded. It does not mean AWS finished or accepted that change set. Inspect its
+actual status and delivery metadata before claiming Marketplace availability.
 
 ## Boot test
 
-`ops/image/test-boot.sh` is the source of truth for "does this image actually work." `release.sh`
-runs it automatically as stage 3, and it launches a real `t3.small` from the AMI, in the default
-VPC, behind a temporary security group (22 from the office IP only, 443 and 80 from anywhere; 80 is only there so Let's Encrypt can reach
+`ops/image/test-boot.sh` is the scripted acceptance gate for the public-IP flow.
+`release.sh` runs it automatically as stage 3. The current script launches a real
+`t3.small` from the AMI, in the default VPC, behind a temporary security group (22 from the script's configured SSH CIDR, 443 and 80 from anywhere; 80 is only there so Let's Encrypt can reach
 the HTTP-01 challenge), and asserts:
 
 1. HTTPS answers within 10 minutes; normal TLS verification of `/login` succeeds, the issuer is
@@ -125,6 +178,13 @@ the HTTP-01 challenge), and asserts:
 7. the clock is synchronized (`timedatectl` reports `NTPSynchronized=yes` and `chronyc tracking`
    names `169.254.169.123`): Coinbase JWTs expire after 120 s and ACME validation needs a sane
    clock, and the firewall only lets NTP reach Amazon Time Sync, which chrony is pointed at
+
+The script does not configure a `DOMAIN` tag and always targets `PUBLIC_IP`, including its
+certificate SAN and authenticated requests. A domain-only certificate can therefore fail this
+IP-only test even when valid for the configured domain. `DOMAIN` mode needs additional
+acceptance against the actual hostname: DNS, normal certificate chain/hostname verification,
+the matching first-login marker, and bootstrap/owner authentication lifecycle at that hostname.
+The existing boot test is not proof of those domain-specific checks.
 
 Then it terminates the instance and deletes the temporary security group, success or failure.
 
@@ -200,22 +260,30 @@ evidence.
 1. cloud-init brings up the box; `docker.service` starts.
 2. `shoemoneyx-first-boot.service` runs `/opt/shoemoneyx-first-boot.sh` once (`ConditionPathExists=
    !/opt/shoemoneyx/.env` skips it on every later boot):
-   - reads the version baked in at build time and reads the instance's `DOMAIN` tag over IMDS (no
-     IAM role needed; launch with `--metadata-options InstanceMetadataTags=enabled` for this to
-     work)
-   - gets a browser-trusted certificate **before the stack starts** (see [Trusted TLS
+   - reads the version baked in at build time and obtains the public IPv4 address
+     (falling back to local IPv4), instance ID, region and optional `DOMAIN` tag over
+     IMDS. Tag access needs `--metadata-options InstanceMetadataTags=enabled`, but
+     does not need an IAM role. The credentials file's host is the domain when set,
+     otherwise the address
+   - attempts certificate activation **before the stack starts** (see [Trusted TLS
      certificate](#trusted-tls-certificate)): `/opt/shoemoneyx-acme.sh renew`
-   - runs `docker/up.sh` with `SHOEMONEYX_VERSION` pinned — this generates `.env` (APP_KEY, the
-     24-char `MASTER_PASSWORD`, the local MariaDB password, `DESK_MODE=paper`,
-     `EXCHANGE=coinbase`, `HUB_URL=https://hub.shoemoneyx.com`, `QUEUE_CONNECTION=redis`,
-     `CACHE_STORE=redis`), brings up the compose stack (`migrate` runs first, then
-     `web`/`nginx`/`queue`/`schedule`/`reverb`/`desk`/`feeder`/`mariadb`/`redis`), and blocks until
-     `/api/status` answers
-   - corrects `APP_URL` in `.env` from `up.sh`'s `https://localhost` default to the instance's
-     real public IP or `DOMAIN`, and pins `SHOEMONEYX_VERSION=` in `.env` so a later manual
-     `docker compose pull` on the box stays on this release by default; recreates the affected
-     containers with `docker compose up -d`
-   - writes `/root/shoemoneyx-credentials.txt` (`0600`, root-only)
+   - runs `docker/up.sh` with `SHOEMONEYX_VERSION` pinned and the instance ID passed
+     as `MASTER_PASSWORD`, along with the AWS first-login guide, password hint and
+     validated region. The helper generates `.env` with a random `APP_KEY` and
+     local MariaDB password, the supplied bootstrap key, `APP_URL=https://localhost`,
+     `DESK_MODE=paper`, `EXCHANGE=coinbase`, `HUB_URL=https://hub.shoemoneyx.com`,
+     `QUEUE_CONNECTION=redis` and `CACHE_STORE=redis`. It brings up the Compose stack:
+     `mariadb` and `redis` become healthy before `migrate`, and application services
+     depend on the migration gate completing successfully. The helper then
+     waits for `/api/status` to answer HTTP 200 or 401
+   - persists only `SHOEMONEYX_VERSION=` in `.env` for future manual compose runs.
+     `APP_URL` remains `https://localhost`. First boot deliberately does not recreate
+     containers after the helper starts them: nginx resolves `web` and `reverb` at
+     startup, so replacing those containers behind a running nginx can leave stale
+     upstream IP addresses and produce HTTP 502
+   - writes the real `https://<domain-or-address>` URL, bootstrap key and local
+     MariaDB password to `/root/shoemoneyx-credentials.txt` (`0600`, root-only).
+     Reporting that URL does not change `APP_URL` or restart the stack
 3. `shoemoneyx-firewall.service` runs (`After=docker.service shoemoneyx-first-boot.service`),
    applying `ufw` and the `DOCKER-USER` egress policy. It also runs on every subsequent boot, since
    neither policy survives a reboot on its own.
@@ -223,20 +291,22 @@ evidence.
 ## Trusted TLS certificate
 
 The login page asks for the one-time bootstrap key, so the page must not make the buyer click
-through a certificate warning first. Every instance therefore gets its own browser-trusted
-certificate from [Let's Encrypt](https://letsencrypt.org/), at first boot, for its public IPv4
-address (or for its `DOMAIN` tag, if set). Nothing certificate-related is in the AMI; the
-ACME account and the key are created on the instance.
+through a certificate warning first. The boot tooling therefore attempts to issue and activate its own certificate
+from [Let's Encrypt](https://letsencrypt.org/) for the public IPv4 address or the
+`DOMAIN` tag. Issuance can fail and fall back, as described below. No instance
+certificate or ACME account key is baked into the AMI; those are created on the
+instance. Actual CA issuance and ordinary browser trust still require candidate
+acceptance evidence.
 
-- **IP addresses** are supported by Let's Encrypt since
-  [2026-01-15](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability), only on the
-  `shortlived` [profile](https://letsencrypt.org/docs/profiles/) (160 hours, about 6.7 days), and
-  only through the [HTTP-01 or TLS-ALPN-01](https://letsencrypt.org/docs/challenge-types/)
-  challenges (DNS-01 cannot validate an IP). `certbot` 5.3+ has `--ip-address`, 5.4+ supports it
-  with `--standalone`/`--webroot` ([EFF post](https://www.eff.org/deeplinks/2026/03/certbot-and-lets-encrypt-now-support-ip-address-certificates));
-  certbot has no TLS-ALPN-01, so HTTP-01 on port 80 it is. The command, per instance:
-  `certbot certonly --standalone --preferred-profile shortlived --ip-address <ip>
-  --register-unsafely-without-email --agree-tos --non-interactive`.
+- **Requested certificate profile:** the source selects the `shortlived` profile
+  for an IP target and uses Certbot's standalone HTTP-01 flow on port 80. The pinned
+  Certbot environment is defined in
+  [`certbot-requirements.txt`](../ops/image/files/certbot-requirements.txt). Its command
+  includes `--preferred-profile shortlived --ip-address <ip>` for an IP target.
+  Consult the CA's [profiles](https://letsencrypt.org/docs/profiles/) and
+  [challenge documentation](https://letsencrypt.org/docs/challenge-types/) for
+  external service requirements; a supported command shape is not evidence that a
+  particular candidate obtained a certificate.
 - **The security group must allow inbound tcp/80** from the internet (the Marketplace
   recommended group does). The instance itself keeps port 80 shut except for the seconds a
   challenge runs: `/opt/shoemoneyx-acme.sh` opens `ufw` 80, runs certbot, and closes it in an
@@ -269,7 +339,7 @@ ACME account and the key are created on the instance.
   setup does not depend on an AMI status file.
 - **Retry:** `shoemoneyx-acme.service` has `Restart=on-failure` with `RestartSec=15min` and a
   start limit of 4 per hour, so a failed issuance is retried within 15 minutes while staying
-  under Let's Encrypt's 5 failed validations per hour.
+  within a bounded local retry policy. CA-side limits still apply; inspect the actual failure rather than forcing repeated requests.
 - **No wasted issuances:** if a previous run got a certificate but could not install it, the next
   run installs the lineage certbot already holds (when it covers the target and is not near expiry)
   instead of asking Let's Encrypt for another.
@@ -313,8 +383,12 @@ renewal; `sudo /opt/shoemoneyx-acme.sh close-port` removes a leftover rule.
 No SSH needed for a normal launch: the first-login key is the **EC2 instance ID**
 (`i-…`, shown in the AWS console). Open `https://<ip>/`, the login page says "First login uses your
 instance ID once; you'll be asked to choose your own password", paste the ID, and you land on the
-set-password screen (new password plus confirmation, 12+ characters). The ID opens nothing else,
-neither in the browser nor as an `X-Desk-Token`, and stops working the moment you set your password.
+set-password screen (new password plus confirmation, 12+ characters). Before owner setup,
+the ID permits reading onboarding state and claiming the owner password, including through
+`X-Desk-Token`; other protected functions remain blocked. It stops authenticating once the
+owner password is set. Restrict claim access until then: knowledge of the ID plus endpoint
+access is enough to attempt that first claim, and its single-use behavior does not make it a
+strong secret. Use the configured hostname when `DOMAIN` is set.
 
 After onboarding, open **Settings**, then **Master password** to change it. Enter the current
 password, a new password of at least 12 characters and no more than 72 UTF-8 bytes, and matching
@@ -344,33 +418,58 @@ interface. Inbound to the published `443` still works: Docker's DNAT happens bef
 
 ## Update procedure
 
-The image is immutable — there's no in-place app update path baked in. To ship a new release:
+### Publishing a new image release
 
-```bash
-bash ops/image/release.sh 0.2.0
-```
+Building a release and updating an existing installation are distinct operations.
+`release.sh` can create charged EC2/AMI resources, commit and push the release
+ledger, and submit a Marketplace change set when configured. Its normal execution
+is not an inspection command. Use the dry-run described in [Build](#build) while
+planning; perform the actual operation only for a deliberately selected released
+version and a candidate with the required acceptance evidence.
 
-That runs preflight, builds or adopts the AMI, boot-tests it, and commits the result to
-`ops/image/releases.json`, pushing it to origin unless `RELEASE_NO_PUSH=1` is set. See `## Build`
-above for what each stage does, and run `bash ops/image/release.sh --status 0.2.0` afterward to
-check on it, including any Marketplace change set.
+The tooling can adopt an existing tagged AMI. Confirm its source provenance and
+container digests rather than treating the fact that adoption succeeded as proof it
+contains the newly merged fixes.
 
-An existing customer instance can also update itself in place, the same way any self-hoster does:
+### Updating an existing instance
 
-```bash
-ssh -i ~/.ssh/smx.pem ubuntu@<ip>
-cd /opt/shoemoneyx
-sudo sed -i 's/^SHOEMONEYX_VERSION=.*/SHOEMONEYX_VERSION=0.2.0/' .env
-sudo SHOEMONEYX_VERSION=0.2.0 docker compose pull
-sudo SHOEMONEYX_VERSION=0.2.0 docker compose up -d
-```
+Follow [UPGRADING.md](UPGRADING.md) for backups, retained `APP_KEY` and volumes,
+migrations, stopped writers and post-upgrade checks. On an AMI, the compose checkout
+lives at `/opt/shoemoneyx` and first boot persists `SHOEMONEYX_VERSION` in `.env`.
+Select a release published for **both** container images and obtain the immutable
+`@sha256:` app and nginx digests recorded in its acceptance evidence. Verify the intended
+platform manifests and those exact digests before pulling or restarting. `docker compose
+config --images` lists resolved image references only; it does not verify registry content
+or prove that a mutable tag still names the tested images.
 
-Nothing does this automatically — an instance stays on the version it was launched with, or the
-version an operator manually bumps it to, until either happens. Re-launching a customer onto a
-fresh AMI is a brand-new instance (new first-boot, new credentials, new `MASTER_PASSWORD`);
-migrating their paper-trading history means restoring the `shoemoneyx` database from the old
-instance before decommissioning it. There is no blue/green swap wired up yet — that's for the
-billing/onboarding pipeline (TODO.md Phase 5), not this image.
+The checked-in Compose file uses one shared `SHOEMONEYX_VERSION` as a **tag** for both
+repositories; it cannot express two independent digests. Create and retain a persistent
+Compose override that sets each service's full `image:` reference as follows:
+
+| Services in the checked-in Compose file | Required override `image:` |
+| --- | --- |
+| `worker`, `feeder`, `migrate`, `web`, `desk`, `queue`, `schedule`, `reverb` | `ghcr.io/shoemoney/shoemoneyx@sha256:<accepted-app-digest>` |
+| `nginx` | `ghcr.io/shoemoney/shoemoneyx-nginx@sha256:<accepted-nginx-digest>` |
+
+Cover **all** app roles, including migration and feeder services, even if a profile is not
+currently active. Keep the base file plus that same override selected for every Compose
+inspection, pull, migration, stop/start and later maintenance command; dropping the override
+reverts to the shared tag selection. Review the merged configuration, compare its references
+to the accepted release digests, and verify pulled/running image identity against those
+digests for the intended platform. Do not build replacement content during this registry
+upgrade. Retain the override with the installation's configuration for future operations.
+
+`docker compose pull` retrieves the selected registry images. It does not build the
+current Git checkout and cannot install an unreleased source fix by itself. For a
+current-source build, use the separate app/nginx build recipe and explicit version
+selection in the upgrade guide. Preserve the selected value for later commands;
+`docker/up.sh` alone does not save a caller-supplied version into an existing `.env`.
+
+Nothing in this workflow automatically upgrades existing customer instances. A new
+AMI launch is a new installation with new first-boot credentials; retaining an old
+instance's history and encrypted keys requires a deliberate database/configuration
+migration before decommissioning it. `release.sh` does not implement an automated
+blue/green customer replacement workflow.
 
 ## Memory, logs, health
 
@@ -404,9 +503,13 @@ Two layers, because they cover different failures:
    `--single-transaction`, so it does not lock the desk. The dump holds positions, intents and the
    encrypted exchange keys, so treat it like the DB. It guards against a bad migration or a dropped
    table; it lives on the same EBS volume, so it does **not** survive losing the volume.
+   Before restoring, halt entries, let in-flight work finish, and stop every remote
+   farm worker and manual/process-manager writer sharing this database. This host's
+   Compose command cannot stop other hosts. Use the same retained image overrides
+   and a schema-compatible application version throughout; see [Upgrading](UPGRADING.md).
    Restore (MariaDB's root password is random, so load as the app user):
    ```bash
-   cd /opt/shoemoneyx && docker compose stop web desk queue schedule reverb feeder backup \
+   cd /opt/shoemoneyx && docker compose stop web desk queue schedule reverb feeder backup worker \
      && docker compose run --rm --no-deps -T \
        --entrypoint sh backup -c 'gzip -t /backups/shoemoneyx-XXXX.sql.gz && zcat /backups/shoemoneyx-XXXX.sql.gz | MYSQL_PWD="$DB_PASSWORD" mariadb -h mariadb -u shoemoneyx shoemoneyx' \
      && docker compose up -d \
@@ -414,6 +517,8 @@ Two layers, because they cover different failures:
    ```
    The password never appears on a host command line: the container already has `DB_PASSWORD` from
    compose, and the dumps themselves are written `0600` (umask 077) by the unprivileged backup user.
+   Keep optional local and remote farm workers stopped until the restored application
+   and data are verified, then restore only the intended compatible workers.
 2. **EBS snapshots (off the instance).** Tag the **instance** (the policy below targets `INSTANCE`, so
    tagging only its volumes would match nothing) and let Data Lifecycle Manager snapshot its attached
    volumes daily, keeping 7:
@@ -429,8 +534,11 @@ Two layers, because they cover different failures:
    Restore by creating a volume from the snapshot and swapping it in, or launching an instance from a
    snapshot-derived AMI. Snapshots are crash-consistent; MariaDB recovers from its redo log on start.
 
-## Cost
+## Cost planning
 
-`t3.small` in `us-east-1`, on-demand: **~$15/month** (730 hrs × $0.0208/hr ≈ $15.18), plus a 20 GB
-gp3 root volume (~$1.60/month) and negligible data transfer for a single paper-trading desk. Call
-it **~$17/month per customer instance** before any Reserved/Savings Plan discount.
+EC2 instances, EBS volumes/snapshots, public IPv4 addresses, traffic and retained test
+resources can incur separate charges. Instance shape and storage settings in the
+Packer template are implementation defaults, not a current monthly price quote.
+Use the target region and your account's purchasing terms in the
+[AWS pricing calculator](https://calculator.aws/) before a build or retained live
+acceptance test. Verify termination and removal of temporary resources afterward.
