@@ -1,17 +1,42 @@
-# E2E journeys
+# E2E journeys and acceptance boundaries
 
-Eight scripts in `tests/e2e/*.mjs` cover browser and API journeys. Five provider-backed
-Playwright scripts drive a real, running desk through a browser: onboarding, login, the Strategy
-Builder, the agent, the chart, and the support chat. They assert outcomes read back through the
-app's API and DOM. Each is a standalone Node ESM file (`node tests/e2e/<name>.mjs`) that prints
-checks, writes `results.json` and screenshots to `E2E_OUT` (default `storage/e2e`), and exits
-non-zero on failed checks. Two more scripts exercise a disposable browser profile; the eighth,
-`password-concurrency.mjs`, uses Playwright's request API without a browser.
+The checked-in scripts in `tests/e2e/*.mjs` exercise a running desk through
+Playwright browser pages or request contexts. They are standalone Node ESM files;
+run `node tests/e2e/<name>.mjs` against the explicitly prepared disposable profile.
+The sections below describe their implemented assertions and setup, not a claim
+that every journey was rerun for every release.
 
-**None of these touch a shared database.** The five provider journeys use isolated SQLite
-files on throwaway desks, with a fresh onboarding wizard for each run. The newer security and
-application journeys use separate disposable profiles; the concurrency profile may use its own
-SQLite file or dedicated disposable MariaDB database. See the recipes below.
+The dated [validation snapshot](../CHANGELOG.md#validation-snapshot) records which
+paths were actually checked for the pending 0.3.0 source. Its provider fixtures,
+self-signed local HTTPS and fake venue results do not establish live provider,
+exchange, public-CA or AMI acceptance. The older provider-backed journeys remain
+available but were not the basis of that fixture-backed authentication evidence.
+
+## Choose the right proof
+
+| Journey family | Authentication and dependencies | What a successful run establishes | What it does not establish |
+| --- | --- | --- | --- |
+| Provider-backed browser journeys | Running browser/application, live OpenRouter access and market-data preparation; older API helpers can attach a default `X-Desk-Token` | The selected provider-backed feature assertions and rendered UI outcomes | Independent cookie/CSRF security coverage, a free provider call, or live order execution |
+| `password-security.mjs` | Cookie-only browser requests and separately tested header clients; local/AWS-style loopback profiles, opt-in outbound HTTP fixture | First-owner setup, byte boundaries, rotation/revocation, CSRF behavior and first-login marker checks | Public CA trust or proof that an AWS instance was launched |
+| `password-concurrency.mjs` | Independent header-authenticated request contexts, a fresh database and concurrent PHP workers | Exactly one claim/rotation winner and rejection of displaced credentials | A real overlap if the server serializes requests, or all database engines from one run |
+| `application-smoke.mjs` | Actual browser cookie/CSRF requests, actual SDK, server-side HTTP fixtures and synthetic candles | Onboarding, saved immutable versions, backtest execution and persisted SDK tool results | Trading performance, a live market feed or a paid provider round trip |
+
+**Database isolation is a setup requirement, not a universal script guarantee.**
+Use a separate checkout/profile, database, session store, cache namespace and output
+folder for each journey. The newer security/concurrency/application scripts reject
+non-loopback hosts; that host check cannot determine whether the server points at
+a shared database. Never aim any journey or reset command at a shared development
+or production database.
+
+```mermaid
+%%{init: {'themeVariables': {'fontSize': '20px'}}}%%
+flowchart TB
+    Prepare[Disposable profile] --> Verify[Verify database and stores]
+    Verify --> Run[Run selected journey]
+    Run --> Read[Read results and rendered UI]
+    Read --> Scope[Record exact proof scope]
+    Scope --> Cleanup[Remove owned test resources]
+```
 
 ## Five provider-backed journeys
 
@@ -169,13 +194,13 @@ explicitly enabled outbound HTTP fixture; the concurrency request script does no
 [password-security.md](../tests/e2e/password-security.md) for the full setup,
 including separate databases, sessions, caches, nginx/PHP-FPM configuration, and fixture opt-in.
 They exercise real application routes, browser behavior, and request races without paid model calls or a live
-market feed. The local TLS certificate is accepted by the test browser, so these runs do not
+market feed when the documented server-side fixture is enabled for the browser profiles. The local TLS certificate is accepted by the test browser, so these runs do not
 prove public certificate trust or an AMI launch.
 
 | Script | Profile and check | Invocation after profile setup |
 | --- | --- | --- |
 | `password-security.mjs` | Fresh `local` and `aws` profiles; first-owner claim, password confirmation and rotation, cookie and token authentication, first-login trust gate, and rendered readability | `E2E_PROFILE=local E2E_BASE=https://127.0.0.1:18444 E2E_HTTP_BASE=http://127.0.0.1:18132 node tests/e2e/password-security.mjs`, then `E2E_PROFILE=aws E2E_BASE=https://127.0.0.1:18443 E2E_HTTP_BASE=http://127.0.0.1:18131 E2E_TLS_STATUS_PATH=/absolute/disposable/tls-status node tests/e2e/password-security.mjs` |
-| `password-concurrency.mjs` | Its own fresh non-AWS bootstrap profile, at least two PHP-FPM workers; overlapping owner claims and rotations yield exactly one winner | `E2E_BASE=https://127.0.0.1:18445 node tests/e2e/password-concurrency.mjs` |
+| `password-concurrency.mjs` | Its own fresh non-AWS bootstrap profile, at least two PHP-FPM workers; overlapping owner claims and rotations yield exactly one winner; the losing request may return 401, 409 or 422 depending on when it observes the changed credential | `E2E_BASE=https://127.0.0.1:18445 node tests/e2e/password-concurrency.mjs` |
 | `application-smoke.mjs` | After the local password journey; seeded synthetic market tape, UI strategy validation, save/version and backtest | `E2E_BASE=https://127.0.0.1:18444 E2E_PASSWORD="$DISPOSABLE_OWNER_PASSWORD" node tests/e2e/application-smoke.mjs` |
 
 Set `PLAYWRIGHT_PATH` if Playwright is installed outside this checkout. Set
@@ -187,7 +212,41 @@ verify execution paths; they are not trading-performance evidence. Each script w
 under `output/playwright/` by default or to `E2E_OUT`. Set `DISPOSABLE_OWNER_PASSWORD` to the
 final synthetic owner password from the local password journey before running application smoke.
 
+## Checking the Settings password form
+
+The form is available under **Settings**, then **Master password**, after onboarding.
+Use a disposable browser profile and an independent second browser session to check
+it. The tracked frontend assertions live in
+[settingsPassword.test.mjs](../tests/Unit/Frontend/settingsPassword.test.mjs);
+[MasterPasswordTest.php](../tests/Feature/MasterPasswordTest.php) and
+[PasswordSecurityTest.php](../tests/Feature/PasswordSecurityTest.php) cover the
+backend boundaries. The dated changelog records the separate retained browser
+acceptance for the Settings form; there is no additional checked-in Settings
+browser script implied by that record.
+
+1. Sign in to the same disposable desk in both browser sessions and finish onboarding.
+2. Open the form; verify short, mismatched and over-72-byte replacements cannot submit.
+3. Submit a valid replacement with a wrong current password. Verify the field error,
+   unchanged owner credential and continued authentication in both sessions.
+4. Submit the exact current password plus matching new password/confirmation. Verify
+   success and cleared password inputs.
+5. Make another Settings write from the first browser. It must work with the refreshed
+   CSRF token; other Settings writes must not overlap the password change.
+6. Verify the second browser and an independent old-password header client lose access,
+   while a fresh browser can sign in using the new password.
+7. Review the form at desktop and mobile widths, including keyboard access, validation
+   messages, readable input text and wrapping.
+
+Do not use a live trading desk or publish the passwords, cookies or request headers
+collected while reproducing these checks.
+
 ## Provider-backed fresh-desk recipe
+
+Start from a separate checkout with its own environment and no cached production
+configuration. Do not copy an operator's `.env` or its application/database keys.
+Install the dependencies and prepare a fresh test `APP_KEY` in that new checkout
+using the [manual-install guidance](UPGRADING.md). Never regenerate an existing
+operator installation's key to run a journey.
 
 These journeys use live OpenRouter calls and may incur provider charges; run them only with
 authorization for those calls. Run each journey against its own throwaway sqlite desk — **never
@@ -201,12 +260,16 @@ reset between journeys (below).
 # 1. Supply an authorized OpenRouter key to this shell without printing it.
 # These journeys make live provider calls; support-chat-deepseek may incur paid charges.
 # 2. Isolated sqlite desk (repeat per journey with its own $S / port, or reset between journeys — see below)
-S=/tmp/e2e-desk; mkdir -p "$S"; : > "$S/e2e.sqlite"
+S=$(mktemp -d "${TMPDIR:-/tmp}/shoemoneyx-e2e.XXXXXX")
+: > "$S/e2e.sqlite"
 export APP_URL=http://127.0.0.1:8010 DB_CONNECTION=sqlite DB_DATABASE="$S/e2e.sqlite" DB_URL= \
        SESSION_DRIVER=file CACHE_STORE=file QUEUE_CONNECTION=sync BROADCAST_CONNECTION=log
 # journey 3 (agent-apply-and-backtest.mjs) needs a model pinned that reliably calls both tools
 # in one turn — export this before `php artisan serve`, not in the test's own env:
 export OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free   # only needed for journey 3
+
+# Confirm these resolve to this throwaway SQLite file before any schema/reset write.
+php artisan tinker --execute="dump(config('database.default'), config('database.connections.sqlite.database'));"
 
 # 2. Schema + market data (BTC-USD 1H for backtests, 1m for the fill-marker fixture's candle)
 php artisan migrate --force
@@ -249,12 +312,15 @@ php artisan tinker --execute="
 php artisan cache:clear
 ```
 
+Confirm the resolved database is still the owned disposable SQLite file before
+these truncation commands. Clearing a completed operator desk is not a test reset.
+
 Candle data (from `market:sync-products` / `market:backfill`) is left in place across resets —
 only the onboarding/auth/settings state needs to go back to zero for the wizard to run again.
 
 ### Rule
 
-**E2E never touches a shared database.** Provider journeys use `DB_CONNECTION=sqlite`
+**Require an isolated database for every E2E run.** Provider journeys use `DB_CONNECTION=sqlite`
 against a throwaway file under `/tmp` (or another scratch directory). The concurrency journey
 may instead use a dedicated disposable MariaDB database. Never point a journey at a shared
 development or production database. Each journey's fixture data (including onboarding state
