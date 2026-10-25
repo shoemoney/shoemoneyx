@@ -216,8 +216,15 @@ selected account/mode, open positions and in-flight work before changing service
    Keep the compatible database/Redis services and volumes available:
 
    ```bash
-   docker compose stop desk queue schedule reverb feeder web nginx
+   docker compose stop desk queue schedule reverb feeder web nginx worker
    ```
+
+   The optional `worker` service also writes backtest results to the shared database.
+   Stop every remote farm worker and any process-manager/manual application writer
+   using that database; a stop command on this host cannot stop other hosts. Wait
+   for in-flight work to finish before maintenance and confirm every writer is
+   stopped before running migrations. See [Farm](FARM.md) for the shared worker
+   topology. Do not assume stopping the desk's queue stops the backtest farm.
 
    Confirm the services have stopped and that the backup you will use is current.
    Retain pending queue data and the established installation credentials.
@@ -244,6 +251,11 @@ selected account/mode, open positions and in-flight work before changing service
    The application services depend on a successful migration service. A completed
    `migrate` container normally exits successfully; it is not a long-running daemon.
    A running web process alone does not prove the desk, queue or scheduler is ready.
+   A bare `up -d` does not start the optional farm-worker profile. Keep local and
+   remote farm workers stopped until verification completes, then restore only the
+   intended workers with application images and configuration compatible with the
+   selected version. Upgrade each remote worker deliberately; this host's commands
+   do not update its image or process manager.
 
 5. **Verify the application before resuming entries.** Complete the checks below,
    then deliberately use the UI resume action or `desk:ctl resume` only when the

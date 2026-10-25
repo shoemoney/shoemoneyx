@@ -22,9 +22,12 @@ available but were not the basis of that fixture-backed authentication evidence.
 | `application-smoke.mjs` | Actual browser cookie/CSRF requests, actual SDK, server-side HTTP fixtures and synthetic candles | Onboarding, saved immutable versions, backtest execution and persisted SDK tool results | Trading performance, a live market feed or a paid provider round trip |
 
 **Database isolation is a setup requirement, not a universal script guarantee.**
-Use a separate checkout/profile, database, session store, cache namespace and output
-folder for each journey. The newer security/concurrency/application scripts reject
-non-loopback hosts; that host check cannot determine whether the server points at
+For concurrent journeys, isolate the complete runtime: separate checkouts/profiles,
+ports, databases, session stores, cache namespaces, queues/workers, browser state and
+output folders. Different ports or `E2E_BASE` values alone do not isolate state.
+Sequential reuse requires stopping the server and all writers, then fully resetting
+the owned fixture state and stores as described below. The newer security/concurrency/
+application scripts reject non-loopback hosts; that host check cannot determine whether the server points at
 a shared database. Never aim any journey or reset command at a shared development
 or production database.
 
@@ -112,8 +115,11 @@ two layers (the "backtest #<n>" pattern, and the thousands/decimal noise-strippe
 match inside "$1,000" or "1.0.0" can't slip through unnoticed. $25,000 starting cash (not the
 tool's own $1,000 default) is what clears this plugin's whole-contract floor so the engine
 actually opens a position — see the file's own header comment for the exact math. This journey
-needs `OPENROUTER_MODEL` pinned server-side (see the recipe below) because free-tier model
-roulette otherwise produces a model that won't reliably call both tools in one turn.
+requires an operator-selected exact `OPENROUTER_MODEL` set server-side (see the recipe
+below), capable of calling both `strategy_json` and `run_backtest` in one turn. No
+particular model's current availability or reliability is established here. Record
+the exact model and outcome of an authorized provider run; fixture-backed evidence
+does not establish that provider/model capability.
 
 Checks: `root redirects to onboarding on a fresh desk` · `master-password step advanced to
 openrouter step` · `openrouter step accepted the key (server validated it against OpenRouter)` ·
@@ -249,49 +255,79 @@ using the [manual-install guidance](UPGRADING.md). Never regenerate an existing
 operator installation's key to run a journey.
 
 These journeys use live OpenRouter calls and may incur provider charges; run them only with
-authorization for those calls. Run each journey against its own throwaway sqlite desk — **never
-a shared database.** Four
-scripts default to ports 8010–8013; `support-chat-deepseek.mjs` also defaults to 8010, colliding
-with `login-and-ai.mjs`. To run all five concurrently, set `E2E_BASE` explicitly for one of them
-(e.g., `http://127.0.0.1:8110` for `support-chat-deepseek`), or reuse one desk sequentially and
-reset between journeys (below).
+authorization for those calls. Concurrent journeys each need their own complete disposable
+runtime, including a separate checkout/environment, database, session and cache stores,
+queue/workers, browser state, port and output folder. Four scripts default to ports 8010–8013;
+`support-chat-deepseek.mjs` also defaults to 8010, colliding with `login-and-ai.mjs`.
+Set distinct `E2E_BASE` values and matching server ports **as well as** isolating those resources.
+Sequential reuse is possible only while the desk is stopped/quiescent and after the complete
+reset described below. Never run these journeys against a shared database.
 
 ```bash
 # 1. Supply an authorized OpenRouter key to this shell without printing it.
 # These journeys make live provider calls; support-chat-deepseek may incur paid charges.
-# 2. Isolated sqlite desk (repeat per journey with its own $S / port, or reset between journeys — see below)
-S=$(mktemp -d "${TMPDIR:-/tmp}/shoemoneyx-e2e.XXXXXX")
-: > "$S/e2e.sqlite"
+# 2. Isolated SQLite desk (repeat in a separate checkout/runtime per concurrent journey)
+S=$(mktemp -d "${TMPDIR:-/tmp}/shoemoneyx-e2e.XXXXXX") || exit 1
+: > "$S/e2e.sqlite" || exit 1
+export SMX_E2E_ROOT="$S" SMX_E2E_EXPECTED_DB="$S/e2e.sqlite"
 export APP_URL=http://127.0.0.1:8010 DB_CONNECTION=sqlite DB_DATABASE="$S/e2e.sqlite" DB_URL= \
        SESSION_DRIVER=file CACHE_STORE=file QUEUE_CONNECTION=sync BROADCAST_CONNECTION=log
-# journey 3 (agent-apply-and-backtest.mjs) needs a model pinned that reliably calls both tools
-# in one turn — export this before `php artisan serve`, not in the test's own env:
-export OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free   # only needed for journey 3
+# Journey 3 needs an exact operator-selected model that can call strategy_json and
+# run_backtest in one turn. Set its ID before starting the server; this is no model proof.
+# export OPENROUTER_MODEL='<operator-selected exact model ID>'
 
-# Confirm these resolve to this throwaway SQLite file before any schema/reset write.
-php artisan tinker --execute="dump(config('database.default'), config('database.connections.sqlite.database'));"
+# 3. Assert the resolved connection and real file ownership, then migrate in the SAME
+# bootstrapped Laravel process. Paths enter through dedicated environment variables;
+# the quoted heredoc prevents shell interpolation into PHP code.
+# Abort on cached/wrong connections, SQLite URIs, :memory: or any other file.
+php <<'PHP' || exit 1
+<?php
+try {
+  require getcwd() . "/vendor/autoload.php";
+  $app = require getcwd() . "/bootstrap/app.php";
+  $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  if (config("database.default") !== "sqlite") {
+    throw new \RuntimeException("Expected the disposable SQLite connection");
+  }
+  $db = \Illuminate\Support\Facades\DB::connection();
+  $rootPath = getenv("SMX_E2E_ROOT");
+  $expectedPath = getenv("SMX_E2E_EXPECTED_DB");
+  $actualPath = $db->getDatabaseName();
+  $root = is_string($rootPath) && $rootPath !== "" ? realpath($rootPath) : false;
+  $expected = is_string($expectedPath) && $expectedPath !== "" ? realpath($expectedPath) : false;
+  $actual = is_string($actualPath) && str_starts_with($actualPath, "/") ? realpath($actualPath) : false;
+  if ($db->getDriverName() !== "sqlite" || $root === false || $expected === false
+      || $actual === false || $expected !== $root . "/e2e.sqlite"
+      || $actual !== $expected || ! is_file($expected)) {
+    throw new \RuntimeException("Refusing a database outside the owned disposable e2e.sqlite");
+  }
+  exit(\Illuminate\Support\Facades\Artisan::call("migrate", ["--force" => true]));
+} catch (\Throwable $e) {
+  fwrite(STDERR, $e->getMessage() . PHP_EOL);
+  exit(1);
+}
+PHP
 
-# 2. Schema + market data (BTC-USD 1H for backtests, 1m for the fill-marker fixture's candle)
-php artisan migrate --force
+# Market preparation uses that same isolated checkout/environment; do not change its config.
 php artisan market:sync-products
 php artisan market:backfill BTC-USD --timeframe=1H --days=11
 php artisan market:backfill BTC-USD --timeframe=1m --days=9
 
-# 3. Frontend build + server
+# 4. Frontend build + server
 npm run build
 php artisan serve --host=127.0.0.1 --port=8010 &
 
-# 4. Playwright — a global install is fine, point PLAYWRIGHT_PATH at it
+# 5. Playwright — a global install is fine, point PLAYWRIGHT_PATH at it
 export PLAYWRIGHT_PATH=/path/to/node_modules/playwright
 # (first time only) npm i -D playwright && npx playwright install chromium
 
-# 5. Run a journey
+# 6. Run a journey
 E2E_BASE=http://127.0.0.1:8010 E2E_OUT="$S/out" OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
   node tests/e2e/login-and-ai.mjs
 ```
 
-Repeat step 5 for `strategy-v2-lifecycle.mjs`, `agent-apply-and-backtest.mjs` (needs
-`OPENROUTER_MODEL` set on the server as above), `chart-and-positions.mjs` (needs `php artisan`
+Repeat step 6, with a fresh runtime or complete between-journey reset, for
+`strategy-v2-lifecycle.mjs`, `agent-apply-and-backtest.mjs` (needs `OPENROUTER_MODEL` set on the server as above), `chart-and-positions.mjs` (needs `php artisan`
 on `$PATH` in the same shell, since it shells out to `php artisan tinker` against
 `E2E_BASE`'s own repo checkout to seed its fixture), and `support-chat-deepseek.mjs` (tests the
 assist chat's model picker; needs a live `OPENROUTER_API_KEY` and makes real paid calls with the
@@ -300,23 +336,55 @@ desk with no backtest or marketplace-AMI bootstrap).
 
 ### Between-journey reset
 
-Every journey onboards its own fresh desk from scratch (it asserts on the onboarding wizard
-itself), so **reset the desk's state between journeys** rather than reusing a completed one:
+Every provider journey asserts a fresh onboarding wizard. Before sequentially reusing an
+owned disposable checkout, stop its server, queue workers, scheduler, feeder and any other
+writers; wait for outstanding requests/jobs to finish. Recreate the owned disposable SQLite
+file, repeat the guarded migration and market preparation above, clear only that checkout's
+isolated session/cache/queue stores, and use fresh browser state and an output folder for the
+next run. Restart the server only after preparation completes. If any resource is shared or
+its cleanup is uncertain, prepare a new isolated runtime instead. Never truncate a live file or
+reuse a completed operator desk.
+
+The following is **only a limited onboarding/auth/settings reset** for an already quiescent,
+owned disposable fixture. It is not the complete reset needed before another journey: saved
+strategies, backtests, positions, fills, queued work, browser state and other fixture state can
+remain. The connection/file assertion runs inside the same bootstrapped Laravel process as the truncations;
+a separate earlier diagnostic dump would not protect against changed or cached configuration.
 
 ```bash
-php artisan tinker --execute="
+php <<'PHP' || exit 1
+<?php
+try {
+  require getcwd() . "/vendor/autoload.php";
+  $app = require getcwd() . "/bootstrap/app.php";
+  $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  if (config("database.default") !== "sqlite") {
+    throw new \RuntimeException("Expected the disposable SQLite connection");
+  }
+  $db = \Illuminate\Support\Facades\DB::connection();
+  $rootPath = getenv("SMX_E2E_ROOT");
+  $expectedPath = getenv("SMX_E2E_EXPECTED_DB");
+  $actualPath = $db->getDatabaseName();
+  $root = is_string($rootPath) && $rootPath !== "" ? realpath($rootPath) : false;
+  $expected = is_string($expectedPath) && $expectedPath !== "" ? realpath($expectedPath) : false;
+  $actual = is_string($actualPath) && str_starts_with($actualPath, "/") ? realpath($actualPath) : false;
+  if ($db->getDriverName() !== "sqlite" || $root === false || $expected === false
+      || $actual === false || $expected !== $root . "/e2e.sqlite"
+      || $actual !== $expected || ! is_file($expected)) {
+    throw new \RuntimeException("Refusing a database outside the owned disposable e2e.sqlite");
+  }
   \App\Models\Setting::truncate();
   \App\Models\AiConnection::truncate();
   \App\Models\ExchangeCredential::truncate();
-"
-php artisan cache:clear
+} catch (\Throwable $e) {
+  fwrite(STDERR, $e->getMessage() . PHP_EOL);
+  exit(1);
+}
+PHP
 ```
 
-Confirm the resolved database is still the owned disposable SQLite file before
-these truncation commands. Clearing a completed operator desk is not a test reset.
-
-Candle data (from `market:sync-products` / `market:backfill`) is left in place across resets —
-only the onboarding/auth/settings state needs to go back to zero for the wizard to run again.
+This limited reset retains candles and all other tables. It also does not clear sessions or
+cache; those stores must be isolated and reset as appropriate for the intended fixture.
 
 ### Rule
 

@@ -62,6 +62,13 @@ IMDS and supplies it to that helper as `MASTER_PASSWORD`, the one-time first-log
 key. The helper generates a random 24-character `MASTER_PASSWORD` only when its
 override is unset or empty; that fallback is not the normal AMI bootstrap key.
 
+**The instance ID is an identifier, not a strong bootstrap secret.** Anyone who learns it
+and can reach the claim endpoint may set the first owner password. Restrict claim access to
+the intended owner (for example, limit inbound HTTPS to the owner's trusted source address)
+until that owner has chosen a password. The setup-only restriction and single-use lifecycle
+do not make the instance ID secret. The normal AMI flow does not ship a separate random
+bootstrap secret delivered through an authenticated channel.
+
 ## Build
 
 `ops/image/release.sh` is the one entry point a human runs to cut a desk-image release. It wraps
@@ -147,9 +154,9 @@ actual status and delivery metadata before claiming Marketplace availability.
 
 ## Boot test
 
-`ops/image/test-boot.sh` is the source of truth for "does this image actually work." `release.sh`
-runs it automatically as stage 3, and it launches a real `t3.small` from the AMI, in the default
-VPC, behind a temporary security group (22 from the script's configured SSH CIDR, 443 and 80 from anywhere; 80 is only there so Let's Encrypt can reach
+`ops/image/test-boot.sh` is the scripted acceptance gate for the public-IP flow.
+`release.sh` runs it automatically as stage 3. The current script launches a real
+`t3.small` from the AMI, in the default VPC, behind a temporary security group (22 from the script's configured SSH CIDR, 443 and 80 from anywhere; 80 is only there so Let's Encrypt can reach
 the HTTP-01 challenge), and asserts:
 
 1. HTTPS answers within 10 minutes; normal TLS verification of `/login` succeeds, the issuer is
@@ -171,6 +178,13 @@ the HTTP-01 challenge), and asserts:
 7. the clock is synchronized (`timedatectl` reports `NTPSynchronized=yes` and `chronyc tracking`
    names `169.254.169.123`): Coinbase JWTs expire after 120 s and ACME validation needs a sane
    clock, and the firewall only lets NTP reach Amazon Time Sync, which chrony is pointed at
+
+The script does not configure a `DOMAIN` tag and always targets `PUBLIC_IP`, including its
+certificate SAN and authenticated requests. A domain-only certificate can therefore fail this
+IP-only test even when valid for the configured domain. `DOMAIN` mode needs additional
+acceptance against the actual hostname: DNS, normal certificate chain/hostname verification,
+the matching first-login marker, and bootstrap/owner authentication lifecycle at that hostname.
+The existing boot test is not proof of those domain-specific checks.
 
 Then it terminates the instance and deletes the temporary security group, success or failure.
 
@@ -369,8 +383,12 @@ renewal; `sudo /opt/shoemoneyx-acme.sh close-port` removes a leftover rule.
 No SSH needed for a normal launch: the first-login key is the **EC2 instance ID**
 (`i-…`, shown in the AWS console). Open `https://<ip>/`, the login page says "First login uses your
 instance ID once; you'll be asked to choose your own password", paste the ID, and you land on the
-set-password screen (new password plus confirmation, 12+ characters). The ID opens nothing else,
-neither in the browser nor as an `X-Desk-Token`, and stops working the moment you set your password.
+set-password screen (new password plus confirmation, 12+ characters). Before owner setup,
+the ID permits reading onboarding state and claiming the owner password, including through
+`X-Desk-Token`; other protected functions remain blocked. It stops authenticating once the
+owner password is set. Restrict claim access until then: knowledge of the ID plus endpoint
+access is enough to attempt that first claim, and its single-use behavior does not make it a
+strong secret. Use the configured hostname when `DOMAIN` is set.
 
 After onboarding, open **Settings**, then **Master password** to change it. Enter the current
 password, a new password of at least 12 characters and no more than 72 UTF-8 bytes, and matching
@@ -418,9 +436,28 @@ contains the newly merged fixes.
 Follow [UPGRADING.md](UPGRADING.md) for backups, retained `APP_KEY` and volumes,
 migrations, stopped writers and post-upgrade checks. On an AMI, the compose checkout
 lives at `/opt/shoemoneyx` and first boot persists `SHOEMONEYX_VERSION` in `.env`.
-Choose a version that has actually been published for **both** container images;
-edit that setting deliberately and verify `docker compose config --images` before
-pulling or restarting the stack.
+Select a release published for **both** container images and obtain the immutable
+`@sha256:` app and nginx digests recorded in its acceptance evidence. Verify the intended
+platform manifests and those exact digests before pulling or restarting. `docker compose
+config --images` lists resolved image references only; it does not verify registry content
+or prove that a mutable tag still names the tested images.
+
+The checked-in Compose file uses one shared `SHOEMONEYX_VERSION` as a **tag** for both
+repositories; it cannot express two independent digests. Create and retain a persistent
+Compose override that sets each service's full `image:` reference as follows:
+
+| Services in the checked-in Compose file | Required override `image:` |
+| --- | --- |
+| `worker`, `feeder`, `migrate`, `web`, `desk`, `queue`, `schedule`, `reverb` | `ghcr.io/shoemoney/shoemoneyx@sha256:<accepted-app-digest>` |
+| `nginx` | `ghcr.io/shoemoney/shoemoneyx-nginx@sha256:<accepted-nginx-digest>` |
+
+Cover **all** app roles, including migration and feeder services, even if a profile is not
+currently active. Keep the base file plus that same override selected for every Compose
+inspection, pull, migration, stop/start and later maintenance command; dropping the override
+reverts to the shared tag selection. Review the merged configuration, compare its references
+to the accepted release digests, and verify pulled/running image identity against those
+digests for the intended platform. Do not build replacement content during this registry
+upgrade. Retain the override with the installation's configuration for future operations.
 
 `docker compose pull` retrieves the selected registry images. It does not build the
 current Git checkout and cannot install an unreleased source fix by itself. For a
@@ -466,9 +503,13 @@ Two layers, because they cover different failures:
    `--single-transaction`, so it does not lock the desk. The dump holds positions, intents and the
    encrypted exchange keys, so treat it like the DB. It guards against a bad migration or a dropped
    table; it lives on the same EBS volume, so it does **not** survive losing the volume.
+   Before restoring, halt entries, let in-flight work finish, and stop every remote
+   farm worker and manual/process-manager writer sharing this database. This host's
+   Compose command cannot stop other hosts. Use the same retained image overrides
+   and a schema-compatible application version throughout; see [Upgrading](UPGRADING.md).
    Restore (MariaDB's root password is random, so load as the app user):
    ```bash
-   cd /opt/shoemoneyx && docker compose stop web desk queue schedule reverb feeder backup \
+   cd /opt/shoemoneyx && docker compose stop web desk queue schedule reverb feeder backup worker \
      && docker compose run --rm --no-deps -T \
        --entrypoint sh backup -c 'gzip -t /backups/shoemoneyx-XXXX.sql.gz && zcat /backups/shoemoneyx-XXXX.sql.gz | MYSQL_PWD="$DB_PASSWORD" mariadb -h mariadb -u shoemoneyx shoemoneyx' \
      && docker compose up -d \
@@ -476,6 +517,8 @@ Two layers, because they cover different failures:
    ```
    The password never appears on a host command line: the container already has `DB_PASSWORD` from
    compose, and the dumps themselves are written `0600` (umask 077) by the unprivileged backup user.
+   Keep optional local and remote farm workers stopped until the restored application
+   and data are verified, then restore only the intended compatible workers.
 2. **EBS snapshots (off the instance).** Tag the **instance** (the policy below targets `INSTANCE`, so
    tagging only its volumes would match nothing) and let Data Lifecycle Manager snapshot its attached
    volumes daily, keeping 7:
