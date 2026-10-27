@@ -82,7 +82,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-shoemoneyx}
 
   mariadb:
-    image: mariadb:13@sha256:0e4bb0f339feba125d1154fbacd36c16ec8518f52e44e1f82ecec7d6771caf39
+    image: mariadb:13@sha256:4844586367ef1b639ae699953e00a6a18f460f700e52df00401e1101a6ef2450
     restart: unless-stopped
     logging: *logging
     mem_limit: ${MEM_MARIADB:-384m}
@@ -143,7 +143,7 @@ services:
     # Nightly gzip'd mariadb-dump into the `backups` volume, newest 7 kept (docker/backup.sh).
     # Same disk as the live DB: guards against a bad migration / dropped table, NOT volume loss —
     # pair with EBS snapshots (docs/HOSTED_IMAGE.md#backups-and-snapshots).
-    image: mariadb:13@sha256:0e4bb0f339feba125d1154fbacd36c16ec8518f52e44e1f82ecec7d6771caf39
+    image: mariadb:13@sha256:4844586367ef1b639ae699953e00a6a18f460f700e52df00401e1101a6ef2450
     restart: unless-stopped
     logging: *logging
     mem_limit: ${MEM_BACKUP:-96m}
