@@ -109,7 +109,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:8-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+    image: redis:8-alpine@sha256:47b08295737773de3b711fb86f13ae802f5074e96a9a2d29f5f80164ac08c046
     command: ["redis-server", "--maxmemory", "${REDIS_MAXMEMORY:-96mb}", "--maxmemory-policy", "noeviction"]
     restart: unless-stopped
     logging: *logging
