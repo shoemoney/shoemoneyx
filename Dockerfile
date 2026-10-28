@@ -3,7 +3,7 @@
 # fronts the `web` role's php-fpm over HTTPS. Multi-arch:
 #   docker buildx build --platform linux/arm64,linux/amd64 --target app   -t ghcr.io/shoemoney/shoemoneyx:latest       --push .
 #   docker buildx build --platform linux/arm64,linux/amd64 --target nginx -t ghcr.io/shoemoney/shoemoneyx-nginx:latest --push .
-FROM php:8.5-fpm-bookworm@sha256:d3db5340c7ecfb1e3a26af5d3d9de8b4e160cdd75692a830b5cb74b0b85db2cf AS base
+FROM php:8.5-fpm-bookworm@sha256:75dc898a8861a777f14c57b2afbb811a848735701593cbc354e4194807a88f3e AS base
 RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99qemu \
     && apt-get update && apt-get install -y --no-install-recommends git unzip libzip-dev libsodium-dev libicu-dev libgmp-dev \
     && docker-php-ext-install -j1 pdo_mysql bcmath sodium intl zip pcntl gmp \
