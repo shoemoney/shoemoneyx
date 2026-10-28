@@ -21,12 +21,12 @@ FROM base AS deps
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --no-scripts --no-autoloader --prefer-dist
 
-FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS feeder-deps
+FROM node:26-bookworm-slim@sha256:88e480776c6149ff1d098cd304f44bf18057fb5d284a3329b78162d29821e28c AS feeder-deps
 WORKDIR /feeder
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
-FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS frontend-build
+FROM node:26-bookworm-slim@sha256:88e480776c6149ff1d098cd304f44bf18057fb5d284a3329b78162d29821e28c AS frontend-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -47,7 +47,7 @@ COPY . .
 RUN composer dump-autoload --optimize --no-dev && php artisan package:discover --ansi || true
 COPY --from=frontend-build /app/public/build ./public/build
 # node for the feeder role
-COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:26-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=feeder-deps /feeder/node_modules ./node_modules
 COPY docker/fpm-pool.conf /usr/local/etc/php-fpm.d/zz-shoemoneyx.conf
 COPY docker/entrypoint.sh /entrypoint.sh
