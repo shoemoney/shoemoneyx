@@ -6,9 +6,9 @@
 # Run PYTHON=python3.12 bash ops/image/test-certbot-requirements.sh before rebuilding.
 # certbot must stay >= 5.4 for IP-address certificates. Keep typing_extensions:
 # pyOpenSSL needs it on Python < 3.13 even if a newer interpreter omits it.
-acme==5.8.0 \
-    --hash=sha256:44c4edb53acdd3fa8402cb29c78a6d1bd2005d777a4d2fcd12663bbc3c147b34 \
-    --hash=sha256:637501767248156545d85c23b806381ac346c5eac759f8e35052af85b7bb3933
+acme==5.9.0 \
+    --hash=sha256:a646011d6c7c843d89c91a901a2bf450752621f6431f19851bec1222c94446bd \
+    --hash=sha256:bbfd9cf42797b5378a05833c0fd917de9418b69e03cbdb39abb7e85e5532fe75
 certbot==5.8.0 \
     --hash=sha256:a4a2c7b0459bb626b3791ef07b6df26bbb222d2324783ba3e60f76c0933eec87 \
     --hash=sha256:c06793e6a0169b07ee09e11e6a017c7d5a77310055d693fffd66c53363ab87ff
