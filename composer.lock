@@ -488,7 +488,8 @@
                     "type": "github"
                 }
             ],
-            "time": "2024-08-07T11:06:28+00:00"
+            "time": "2024-08-07T11:06:28+00:00",
+            "published-time": "2024-08-07T11:08:05+00:00"
         },
         {
             "name": "clue/redis-react",
@@ -556,7 +557,8 @@
                     "type": "github"
                 }
             ],
-            "time": "2025-01-03T16:18:33+00:00"
+            "time": "2025-01-03T16:18:33+00:00",
+            "published-time": "2025-01-03T16:19:18+00:00"
         },
         {
             "name": "dflydev/dot-access-data",
@@ -981,7 +983,8 @@
                 "issues": "https://github.com/igorw/evenement/issues",
                 "source": "https://github.com/igorw/evenement/tree/v3.0.2"
             },
-            "time": "2023-08-08T05:53:35+00:00"
+            "time": "2023-08-08T05:53:35+00:00",
+            "published-time": "2023-08-08T08:34:49+00:00"
         },
         {
             "name": "fig/http-message-util",
@@ -1963,21 +1966,21 @@
         },
         {
             "name": "laravel/reverb",
-            "version": "v1.12.0",
+            "version": "v1.13.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/laravel/reverb.git",
-                "reference": "e233471f53641a447d3b7a2150446d47a0e8c043"
+                "reference": "94ccfe195094a0685b75c15d7eea62124f0d9dbc"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/laravel/reverb/zipball/e233471f53641a447d3b7a2150446d47a0e8c043",
-                "reference": "e233471f53641a447d3b7a2150446d47a0e8c043",
+                "url": "https://api.github.com/repos/laravel/reverb/zipball/94ccfe195094a0685b75c15d7eea62124f0d9dbc",
+                "reference": "94ccfe195094a0685b75c15d7eea62124f0d9dbc",
                 "shasum": ""
             },
             "require": {
                 "clue/redis-react": "^2.6",
-                "guzzlehttp/psr7": "^2.6",
+                "guzzlehttp/psr7": "^2.6|^3.0",
                 "illuminate/console": "^10.47|^11.0|^12.0|^13.0",
                 "illuminate/contracts": "^10.47|^11.0|^12.0|^13.0",
                 "illuminate/http": "^10.47|^11.0|^12.0|^13.0",
@@ -1986,16 +1989,17 @@
                 "php": "^8.2",
                 "pusher/pusher-php-server": "^7.2",
                 "ratchet/rfc6455": "^0.4",
+                "react/promise": "^3.2",
                 "react/promise-timer": "^1.10",
                 "react/socket": "^1.14",
                 "symfony/console": "^6.0|^7.0|^8.0",
                 "symfony/http-foundation": "^6.3|^7.0|^8.0"
             },
             "require-dev": {
-                "jasonmccreary/double": "~0.10",
+                "jasonmccreary/double": "^1.0",
                 "orchestra/testbench": "^8.36|^9.15|^10.8|^11.0",
                 "pestphp/pest": "^2.0|^3.0|^4.0",
-                "phpstan/phpstan": "^1.10",
+                "phpstan/phpstan": "2.2.16",
                 "ratchet/pawl": "^0.4.1",
                 "react/async": "^4.2",
                 "react/http": "^1.9"
@@ -2036,9 +2040,10 @@
                 "websocket"
             ],
             "support": {
-                "source": "https://github.com/laravel/reverb/tree/v1.12.0"
+                "source": "https://github.com/laravel/reverb/tree/v1.13.0"
             },
-            "time": "2026-09-22T14:25:47+00:00"
+            "time": "2026-10-19T14:22:03+00:00",
+            "published-time": "2026-11-10T16:09:45+00:00"
         },
         {
             "name": "laravel/serializable-closure",
@@ -4327,7 +4332,8 @@
                 "issues": "https://github.com/ratchetphp/RFC6455/issues",
                 "source": "https://github.com/ratchetphp/RFC6455/tree/v0.4.1"
             },
-            "time": "2026-06-06T14:34:23+00:00"
+            "time": "2026-06-06T14:34:23+00:00",
+            "published-time": "2026-06-06T14:46:21+00:00"
         },
         {
             "name": "react/async",
@@ -4474,7 +4480,8 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2022-11-30T15:59:55+00:00"
+            "time": "2022-11-30T15:59:55+00:00",
+            "published-time": "2022-11-30T16:03:35+00:00"
         },
         {
             "name": "react/dns",
@@ -4550,7 +4557,8 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2025-11-18T19:34:28+00:00"
+            "time": "2025-11-18T19:34:28+00:00",
+            "published-time": "2025-11-18T19:35:06+00:00"
         },
         {
             "name": "react/event-loop",
@@ -4622,7 +4630,8 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2025-11-17T20:46:25+00:00"
+            "time": "2025-11-17T20:46:25+00:00",
+            "published-time": "2025-11-17T20:47:32+00:00"
         },
         {
             "name": "react/http",
@@ -4786,7 +4795,8 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2025-08-19T18:57:03+00:00"
+            "time": "2025-08-19T18:57:03+00:00",
+            "published-time": "2025-08-19T19:13:36+00:00"
         },
         {
             "name": "react/promise-timer",
@@ -4865,7 +4875,8 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2024-06-04T14:27:45+00:00"
+            "time": "2024-06-04T14:27:45+00:00",
+            "published-time": "2024-06-04T14:29:41+00:00"
         },
         {
             "name": "react/socket",
@@ -4945,7 +4956,8 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2025-11-19T20:47:34+00:00"
+            "time": "2025-11-19T20:47:34+00:00",
+            "published-time": "2025-11-19T20:48:23+00:00"
         },
         {
             "name": "react/stream",
@@ -5023,7 +5035,8 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2024-06-11T12:45:25+00:00"
+            "time": "2024-06-11T12:45:25+00:00",
+            "published-time": "2024-06-11T12:48:34+00:00"
         },
         {
             "name": "shoemoney/langchain-php",
