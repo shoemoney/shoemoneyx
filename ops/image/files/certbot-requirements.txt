@@ -289,9 +289,9 @@ charset-normalizer==3.5.2 \
     --hash=sha256:fcff63213e8e6e47770541a4607175404f47cbb3ebea7b6058cc82d524a0e424 \
     --hash=sha256:fd1fbe0f116b6e55da77aca2c6ddcddcfac2186cbf78bdebf40fc156efca389d \
     --hash=sha256:fe9753dfee015c570d73df76f899f18444d41388bffcde097deba51c4fadbb9f
-ConfigArgParse==1.10.0 \
-    --hash=sha256:111cee60a789acac1ca6d3d0a4317a9c147a766214b41cbcf4d3079cb2f97e86 \
-    --hash=sha256:6c03a8cc3526af60c13d7fb31dea35f25b79d16d1e4ef33cbc16a037bfe7ceca
+ConfigArgParse==1.10.1 \
+    --hash=sha256:148ffe1ba93304bbcb4a832f513e6d51c08d214215f1e943954f6d01f2394621 \
+    --hash=sha256:8ee7c4429e6402b881c9a85569eb9484db2f63260718b45c67c59625284371c8
 configobj==5.0.9 \
     --hash=sha256:03c881bbf23aa07bccf1b837005975993c4ab4427ba57f959afdd9d1a2386848 \
     --hash=sha256:1ba10c5b6ee16229c79a05047aeda2b55eb4e80d7c7d8ecf17ec1ca600c79882
