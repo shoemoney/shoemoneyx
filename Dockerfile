@@ -55,7 +55,7 @@ RUN chmod +x /entrypoint.sh && mkdir -p storage/logs storage/framework/{cache,se
 ENV ROLE=worker WORKERS=0 REDIS_CLIENT=phpredis DESK_IN_CONTAINER=1
 ENTRYPOINT ["/entrypoint.sh"]
 
-FROM nginx:1.31-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7 AS nginx
+FROM nginx:1.31-alpine@sha256:7fc0fb4af7bf006aeb31aea88069976060f8f0a0a86b667126742cc17f4e31ae AS nginx
 # No TLS key at build time: a key baked into this public image would be shared by every install.
 # docker/nginx-tls-init.sh mints a per-install pair on first start into the tls-data volume.
 RUN apk add --no-cache openssl
